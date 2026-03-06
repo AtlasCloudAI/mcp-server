@@ -18,6 +18,7 @@ import { registerModelTools } from "./tools/models.js";
 import { registerImageTools } from "./tools/image.js";
 import { registerVideoTools } from "./tools/video.js";
 import { registerLLMTools } from "./tools/llm.js";
+import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 
 const server = new McpServer({
   name: "atlascloud-mcp-server",
@@ -30,6 +31,7 @@ registerModelTools(server);
 registerImageTools(server);
 registerVideoTools(server);
 registerLLMTools(server);
+registerQuickGenerateTools(server);
 
 // Start stdio transport
 async function main(): Promise<void> {

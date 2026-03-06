@@ -14,10 +14,12 @@ export function registerImageTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-You should first use atlas_get_model_info to understand what parameters a specific image model accepts.
+IMPORTANT: The "model" parameter requires an exact model ID (e.g., "seedream/seedream-v5.0-lite-text-to-image"). If you don't know the exact model ID, you MUST first call atlas_list_models with type="Image" to find it. Do NOT guess model IDs.
+
+You should also use atlas_get_model_info to understand what parameters a specific image model accepts before calling this tool.
 
 Args:
-  - model (string, required): The image model ID (e.g., "seedream/seedream-v5.0-lite-text-to-image")
+  - model (string, required): The exact image model ID. Use atlas_list_models to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. Each model has different parameters defined in its schema. Common params include "prompt", "image_size", "num_inference_steps", etc. Use atlas_get_model_info to see the full parameter list for your chosen model.
 
 Returns:

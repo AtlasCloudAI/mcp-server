@@ -14,10 +14,12 @@ export function registerVideoTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-IMPORTANT: Use atlas_get_model_info first to see the full parameter list and schema for your chosen video model before calling this tool.
+IMPORTANT: The "model" parameter requires an exact model ID (e.g., "kling-video/kling-v3.0-standard-text-to-video"). If you don't know the exact model ID, you MUST first call atlas_list_models with type="Video" to find it. Do NOT guess model IDs.
+
+You should also use atlas_get_model_info to see the full parameter list and schema for your chosen video model before calling this tool.
 
 Args:
-  - model (string, required): The video model ID (e.g., "kling-video/kling-v3.0-standard-text-to-video")
+  - model (string, required): The exact video model ID. Use atlas_list_models to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. Parameters vary by model - use atlas_get_model_info to see available params. Common ones include:
     - "prompt" (string): Text description of the video
     - "image_url" (string): Source image for image-to-video models

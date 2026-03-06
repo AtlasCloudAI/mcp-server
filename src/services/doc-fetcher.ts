@@ -20,14 +20,29 @@ export async function getModels(): Promise<Model[]> {
   return models;
 }
 
-// Find a model by model ID (e.g., "openai/gpt-5.2")
+// Normalize string for fuzzy matching: remove separators, collapse spaces
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[-_./]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Check if all query words appear in the target string
+function fuzzyMatch(target: string, queryWords: string[]): boolean {
+  const normalizedTarget = normalize(target);
+  return queryWords.every((w) => normalizedTarget.includes(w));
+}
+
+// Find a model by model ID (e.g., "openai/gpt-5.2"), supports exact and normalized match
 export async function findModel(modelId: string): Promise<Model | undefined> {
   const models = await getModels();
+  const normalizedInput = normalize(modelId);
+
   return models.find(
     (m) =>
       m.model === modelId ||
       m.model.toLowerCase() === modelId.toLowerCase() ||
-      m.displayName.toLowerCase() === modelId.toLowerCase()
+      m.displayName.toLowerCase() === modelId.toLowerCase() ||
+      normalize(m.model) === normalizedInput ||
+      normalize(m.displayName) === normalizedInput
   );
 }
 
@@ -55,18 +70,23 @@ export async function getModelReadme(model: Model): Promise<string | null> {
   }
 }
 
-// Search models by keyword
+// Search models by keyword with fuzzy matching
 export async function searchModels(query: string): Promise<Model[]> {
   const models = await getModels();
-  const q = query.toLowerCase();
-  return models.filter(
-    (m) =>
-      m.model.toLowerCase().includes(q) ||
-      m.displayName.toLowerCase().includes(q) ||
-      m.profile?.toLowerCase().includes(q) ||
-      m.type?.toLowerCase().includes(q) ||
-      m.organization?.toLowerCase().includes(q) ||
-      m.tags?.some((t) => t.toLowerCase().includes(q)) ||
-      m.categories?.some((c) => c.toLowerCase().includes(q))
-  );
+  const queryWords = normalize(query).split(" ").filter(Boolean);
+
+  if (queryWords.length === 0) return [];
+
+  return models.filter((m) => {
+    const fields = [
+      m.model,
+      m.displayName,
+      m.profile || "",
+      m.type || "",
+      m.organization || "",
+      ...(m.tags || []),
+      ...(m.categories || []),
+    ];
+    return fields.some((f) => fuzzyMatch(f, queryWords));
+  });
 }

@@ -100,18 +100,14 @@ export function registerQuickGenerateTools(server: McpServer): void {
     "atlas_quick_generate",
     {
       title: "Quick Generate Image/Video",
-      description: `One-step image or video generation - automatically finds the model, fetches its schema, builds parameters, and submits the task.
+      description: `One-step image or video generation - automatically finds the model by keyword, fetches its schema, builds parameters, and submits the task.
 
-Just provide a model keyword and a prompt. The tool handles everything:
-1. Searches for the matching model by keyword
-2. Fetches the model's parameter schema
-3. Builds the request with smart defaults
-4. Submits the generation and returns immediately with a prediction ID
+IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image or atlas_generate_video with the exact model ID instead.
 
-After getting the prediction ID, use atlas_get_prediction to check the result.
+The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
 Args:
-  - model_keyword (string, required): A keyword or partial name to find the model (e.g., "nano banana", "seedream", "kling v3", "vidu")
+  - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance")
   - type (string, required): Generation type: "Image" or "Video"
   - prompt (string, required): Text description of what to generate
   - image_url (string, optional): Source image URL for image-to-video or image editing models

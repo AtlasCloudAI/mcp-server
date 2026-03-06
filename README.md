@@ -1,6 +1,6 @@
 # Atlas Cloud MCP Server
 
-English | [中文](./README.zh-CN.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Español](./README.es.md) | [Français](./README.fr.md)
+English | [中文](./docs/README.zh-CN.md) | [日本語](./docs/README.ja.md) | [한국어](./docs/README.ko.md) | [Español](./docs/README.es.md) | [Français](./docs/README.fr.md)
 
 MCP (Model Context Protocol) server for [Atlas Cloud](https://www.atlascloud.ai) — an AI API aggregation platform providing access to image generation, video generation, and LLM models.
 
@@ -18,7 +18,7 @@ MCP (Model Context Protocol) server for [Atlas Cloud](https://www.atlascloud.ai)
 ### Prerequisites
 
 - Node.js >= 18
-- Atlas Cloud API Key (get one at [console.atlascloud.ai](https://console.atlascloud.ai))
+- Atlas Cloud API Key (get one at [atlascloud.ai](https://www.atlascloud.ai))
 
 ### Configure in Cursor / Claude Desktop
 

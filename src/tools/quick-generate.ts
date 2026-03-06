@@ -1,27 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { searchModels, findModel, getModelSchema } from "../services/doc-fetcher.js";
-import { chatApi } from "../services/api-client.js";
+import { searchModels, findModel } from "../services/doc-fetcher.js";
+import { chatApi, fetchExternal } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
-import { POLL_INTERVAL_MS, POLL_MAX_ATTEMPTS } from "../constants.js";
 import type { Model, PredictionResponse } from "../types.js";
-
-// Poll for prediction result
-async function pollPrediction(predictionId: string): Promise<PredictionResponse> {
-  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
-    const result = await chatApi<PredictionResponse>(
-      `/model/prediction/${predictionId}`
-    );
-    const status = result.data?.status;
-    if (status === "completed" || status === "succeeded" || status === "failed") {
-      return result;
-    }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-  throw new Error(
-    "Generation timed out. Use atlas_get_prediction to check status later."
-  );
-}
 
 // Resolve model from fuzzy keyword
 async function resolveModel(
@@ -118,13 +100,15 @@ export function registerQuickGenerateTools(server: McpServer): void {
     "atlas_quick_generate",
     {
       title: "Quick Generate Image/Video",
-      description: `One-step image or video generation - automatically finds the model, fetches its schema, builds parameters, and generates.
+      description: `One-step image or video generation - automatically finds the model, fetches its schema, builds parameters, and submits the task.
 
 Just provide a model keyword and a prompt. The tool handles everything:
 1. Searches for the matching model by keyword
 2. Fetches the model's parameter schema
 3. Builds the request with smart defaults
-4. Submits the generation and waits for result
+4. Submits the generation and returns immediately with a prediction ID
+
+After getting the prediction ID, use atlas_get_prediction to check the result.
 
 Args:
   - model_keyword (string, required): A keyword or partial name to find the model (e.g., "nano banana", "seedream", "kling v3", "vidu")
@@ -132,10 +116,9 @@ Args:
   - prompt (string, required): Text description of what to generate
   - image_url (string, optional): Source image URL for image-to-video or image editing models
   - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"})
-  - wait_for_result (boolean, optional): Whether to wait for the result. Default: true
 
 Returns:
-  The generation result with output URL(s), or a list of candidate models if the keyword matches multiple models.
+  A prediction ID to check the result with atlas_get_prediction.
 
 Examples:
   - model_keyword="nano banana", type="Image", prompt="a cute cat in space"
@@ -166,10 +149,6 @@ Examples:
           .describe(
             "Additional model-specific parameters to override defaults"
           ),
-        wait_for_result: z
-          .boolean()
-          .default(true)
-          .describe("Whether to wait for the result. Default: true"),
       },
       annotations: {
         readOnlyHint: false,
@@ -184,7 +163,6 @@ Examples:
       prompt,
       image_url,
       extra_params,
-      wait_for_result,
     }) => {
       try {
         // Step 1: Resolve model
@@ -200,15 +178,14 @@ Examples:
         const { model: foundModel, candidates } = resolved;
 
         // Step 2: Fetch schema
-        const schema = await (async () => {
-          if (!foundModel.schema) return null;
+        let schema: Record<string, unknown> | null = null;
+        if (foundModel.schema) {
           try {
-            const { fetchExternal } = await import("../services/api-client.js");
-            return (await fetchExternal(foundModel.schema)) as Record<string, unknown>;
+            schema = (await fetchExternal(foundModel.schema)) as Record<string, unknown>;
           } catch {
-            return null;
+            // Continue without schema
           }
-        })();
+        }
 
         // Step 3: Build params
         let requestBody: Record<string, unknown>;
@@ -221,7 +198,6 @@ Examples:
             extra_params
           );
         } else {
-          // Fallback: basic params without schema
           requestBody = {
             model: foundModel.model,
             prompt,
@@ -251,7 +227,7 @@ Examples:
           };
         }
 
-        // Build info header
+        // Build response
         const lines: string[] = [];
         if (candidates && candidates.length > 1) {
           lines.push(
@@ -264,66 +240,16 @@ Examples:
           lines.push("");
         }
 
-        if (!wait_for_result) {
-          lines.push(`# ${type} Generation Started\n`);
-          lines.push(
-            `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`
-          );
-          lines.push(`- **Prediction ID**: \`${predictionId}\``);
-          lines.push(
-            `\nUse \`atlas_get_prediction\` with this ID to check the result.`
-          );
-          return {
-            content: [{ type: "text", text: lines.join("\n") }],
-          };
-        }
-
-        // Step 5: Poll for result
-        const result = await pollPrediction(predictionId);
-        const status = result.data?.status;
-
-        if (status === "failed") {
-          lines.push(`# ${type} Generation Failed\n`);
-          lines.push(
-            `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`
-          );
-          lines.push(`- **Error**: ${result.data?.error || "Unknown error"}`);
-          lines.push(
-            `\nTry adjusting your prompt or parameters. Use \`atlas_get_model_info\` with model="${foundModel.model}" to see all available parameters.`
-          );
-          return {
-            isError: true,
-            content: [{ type: "text", text: lines.join("\n") }],
-          };
-        }
-
-        const outputs = result.data?.outputs || result.data?.output;
-        const outputUrls = Array.isArray(outputs)
-          ? outputs
-          : outputs
-            ? [outputs]
-            : [];
-
-        lines.push(`# ${type} Generation Complete\n`);
+        const waitTime = type === "Image" ? "10-30 seconds" : "1-5 minutes";
+        lines.push(`${type} generation submitted successfully.\n`);
         lines.push(
           `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`
         );
-        lines.push(`- **Prediction ID**: \`${predictionId}\``);
-        lines.push(`- **Status**: ${status}\n`);
-
-        if (outputUrls.length > 0) {
-          lines.push("## Output\n");
-          outputUrls.forEach((url, i) => {
-            lines.push(`${i + 1}. ${url}`);
-          });
-        }
-
-        if (result.data?.metrics) {
-          lines.push(`\n## Metrics\n`);
-          lines.push("```json");
-          lines.push(JSON.stringify(result.data.metrics, null, 2));
-          lines.push("```");
-        }
+        lines.push(`- **Prediction ID**: \`${predictionId}\`\n`);
+        lines.push(
+          `The ${type.toLowerCase()} is being generated. Use \`atlas_get_prediction\` with this ID to check the result.`
+        );
+        lines.push(`${type} generation typically takes ${waitTime}.`);
 
         return {
           content: [{ type: "text", text: lines.join("\n") }],

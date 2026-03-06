@@ -38,7 +38,9 @@ function getApiKey(): string {
   const key = process.env.ATLASCLOUD_API_KEY;
   if (!key) {
     throw new ApiRequestError(
-      "ATLASCLOUD_API_KEY environment variable is not set. Please configure it in your MCP settings."
+      "ATLASCLOUD_API_KEY is not set. Please add it to your MCP configuration:\n\n" +
+      '{\n  "mcpServers": {\n    "atlascloud": {\n      "command": "npx",\n      "args": ["-y", "atlascloud-mcp"],\n      "env": {\n        "ATLASCLOUD_API_KEY": "your-api-key-here"\n      }\n    }\n  }\n}\n\n' +
+      "Get your API key at: https://www.atlascloud.ai"
     );
   }
   return key;
@@ -114,9 +116,12 @@ async function request<T>(
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
   }
 
+  // POST requests should not retry - they may create billable tasks (image/video generation)
+  const effectiveMaxRetries = method === "POST" ? 0 : maxRetries;
+
   let lastError: unknown;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
     if (attempt > 0) {
       await backoff(attempt - 1);
     }

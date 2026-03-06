@@ -124,7 +124,13 @@ Examples:
       title: "Get Prediction Result",
       description: `Check the status and result of an image/video generation task.
 
-Use this after starting a generation with wait_for_result=false, or to re-check a previous generation.
+Use this after submitting a generation request to check if the result is ready.
+
+If the status is still "processing" or "starting", wait a moment and try again.
+
+When the result is ready (status is "completed" or "succeeded"), the output URLs will be returned. You should then:
+1. Show the output URLs to the user
+2. Ask the user if they want to download the file to their local machine (you can use curl or wget to download it)
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -169,6 +175,15 @@ Examples:
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
+          lines.push(
+            `\nYou can ask me to download these files to your local machine, or open the URLs directly in your browser.`
+          );
+        }
+
+        if (result.data?.status && !["completed", "succeeded", "failed"].includes(result.data.status)) {
+          lines.push(
+            `\nThe task is still in progress. Please wait a moment and use \`atlas_get_prediction\` again to check.`
+          );
         }
 
         if (result.data?.metrics) {

@@ -10,8 +10,8 @@ export const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 export const CHARACTER_LIMIT = 25000;
 
 // Polling configuration
-export const POLL_INTERVAL_MS = 2000;
-export const POLL_MAX_ATTEMPTS = 150; // Max poll attempts (~5 minutes)
+export const POLL_INTERVAL_MS = 3000;
+export const POLL_MAX_ATTEMPTS = 200; // Max poll attempts (~10 minutes)
 
 // Request timeout
 export const REQUEST_TIMEOUT_MS = 30000;

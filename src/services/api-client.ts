@@ -1,14 +1,58 @@
-import { CONSOLE_API_BASE, CHAT_API_BASE, LLM_API_BASE, REQUEST_TIMEOUT_MS } from "../constants.js";
+import {
+  CONSOLE_API_BASE,
+  CHAT_API_BASE,
+  LLM_API_BASE,
+  REQUEST_TIMEOUT_MS,
+  MAX_RETRIES,
+  RETRY_BASE_DELAY_MS,
+} from "../constants.js";
+
+// Custom error class that preserves HTTP status code
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 function getApiKey(): string {
   const key = process.env.ATLASCLOUD_API_KEY;
   if (!key) {
-    throw new Error("ATLASCLOUD_API_KEY environment variable is not set. Please configure it in your MCP settings.");
+    throw new ApiRequestError(
+      "ATLASCLOUD_API_KEY environment variable is not set. Please configure it in your MCP settings."
+    );
   }
   return key;
 }
 
-// Generic HTTP request method
+// Check if an error is retryable
+function isRetryable(error: unknown): boolean {
+  if (error instanceof ApiRequestError) {
+    const code = error.statusCode;
+    // Retry on network errors (no status), 429 (rate limit), 5xx (server errors)
+    if (!code) return true;
+    if (code === 429) return true;
+    if (code >= 500) return true;
+    return false;
+  }
+  // Retry on timeout / network errors
+  if (error instanceof Error) {
+    if (error.name === "AbortError") return true;
+    if (error.message.includes("fetch")) return true;
+  }
+  return false;
+}
+
+// Sleep with exponential backoff
+function backoff(attempt: number): Promise<void> {
+  const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+// Generic HTTP request method with retry
 async function request<T>(
   baseUrl: string,
   endpoint: string,
@@ -19,6 +63,7 @@ async function request<T>(
     headers?: Record<string, string>;
     timeout?: number;
     requireAuth?: boolean;
+    maxRetries?: number;
   } = {}
 ): Promise<T> {
   const {
@@ -28,6 +73,7 @@ async function request<T>(
     headers = {},
     timeout = REQUEST_TIMEOUT_MS,
     requireAuth = true,
+    maxRetries = MAX_RETRIES,
   } = options;
 
   let url = `${baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
@@ -52,37 +98,73 @@ async function request<T>(
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  let lastError: unknown;
 
-  try {
-    const response = await fetch(url, {
-      method,
-      headers: finalHeaders,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      await backoff(attempt - 1);
+    }
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      let errorMsg = `API request failed: ${response.status} ${response.statusText}`;
-      try {
-        const errorData = JSON.parse(errorText);
-        errorMsg = errorData.msg || errorData.message || errorData.error || errorMsg;
-      } catch {
-        // Use default error message
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: finalHeaders,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        let errorMsg = `API request failed: ${response.status} ${response.statusText}`;
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMsg =
+            errorData.msg || errorData.message || errorData.error || errorMsg;
+        } catch {
+          // Use default error message
+        }
+
+        const apiError = new ApiRequestError(errorMsg, response.status);
+
+        // Don't retry non-retryable errors
+        if (!isRetryable(apiError)) {
+          throw apiError;
+        }
+
+        lastError = apiError;
+        continue;
       }
-      throw new Error(errorMsg);
-    }
 
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return (await response.json()) as T;
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        return (await response.json()) as T;
+      }
+      return (await response.text()) as unknown as T;
+    } catch (error) {
+      clearTimeout(timer);
+
+      // Non-retryable errors throw immediately
+      if (error instanceof ApiRequestError && !isRetryable(error)) {
+        throw error;
+      }
+
+      lastError = error;
+
+      // If it's retryable and we have retries left, continue
+      if (isRetryable(error) && attempt < maxRetries) {
+        continue;
+      }
+
+      throw lastError;
+    } finally {
+      clearTimeout(timer);
     }
-    return (await response.text()) as unknown as T;
-  } finally {
-    clearTimeout(timer);
   }
+
+  throw lastError;
 }
 
 // Console API (model list, etc.)
@@ -90,7 +172,10 @@ export function consoleApi<T>(
   endpoint: string,
   options?: Parameters<typeof request>[2]
 ): Promise<T> {
-  return request<T>(CONSOLE_API_BASE, endpoint, { ...options, requireAuth: false });
+  return request<T>(CONSOLE_API_BASE, endpoint, {
+    ...options,
+    requireAuth: false,
+  });
 }
 
 // Chat API (image/video generation)
@@ -109,22 +194,43 @@ export function llmApi<T>(
   return request<T>(LLM_API_BASE, endpoint, options);
 }
 
-// Fetch external resources (schema, readme, etc.)
+// Fetch external resources (schema, readme, etc.) with retry
 export async function fetchExternal(url: string): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let lastError: unknown;
 
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch resource: ${response.status} ${url}`);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await backoff(attempt - 1);
     }
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return await response.json();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        const error = new ApiRequestError(
+          `Failed to fetch resource: ${response.status} ${url}`,
+          response.status
+        );
+        if (!isRetryable(error)) throw error;
+        lastError = error;
+        continue;
+      }
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        return await response.json();
+      }
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryable(error) || attempt >= MAX_RETRIES) {
+        throw error;
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
   }
+
+  throw lastError;
 }

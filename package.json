@@ -1,11 +1,11 @@
 {
-  "name": "atlascloud-mcp-server",
+  "name": "atlascloud-mcp",
   "version": "1.0.0",
   "description": "MCP server for Atlas Cloud - AI API aggregation platform for image/video generation and LLM",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "atlascloud-mcp-server": "dist/index.js"
+    "atlascloud-mcp": "dist/index.js"
   },
   "scripts": {
     "start": "node dist/index.js",

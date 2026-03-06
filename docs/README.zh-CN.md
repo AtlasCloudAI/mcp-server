@@ -29,7 +29,7 @@
   "mcpServers": {
     "atlascloud": {
       "command": "npx",
-      "args": ["-y", "atlascloud-mcp-server"],
+      "args": ["-y", "atlascloud-mcp"],
       "env": {
         "ATLASCLOUD_API_KEY": "your-api-key-here"
       }
@@ -41,7 +41,7 @@
 ### 在 Claude Code 中配置
 
 ```bash
-claude mcp add atlascloud -- npx -y atlascloud-mcp-server
+claude mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
 然后在 shell 中设置环境变量 `ATLASCLOUD_API_KEY`。

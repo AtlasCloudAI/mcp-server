@@ -21,7 +21,7 @@ import { registerLLMTools } from "./tools/llm.js";
 import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 
 const server = new McpServer({
-  name: "atlascloud-mcp-server",
+  name: "atlascloud-mcp",
   version: "1.0.0",
 });
 

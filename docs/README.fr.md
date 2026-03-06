@@ -29,7 +29,7 @@ Ajoutez à votre configuration MCP :
   "mcpServers": {
     "atlascloud": {
       "command": "npx",
-      "args": ["-y", "atlascloud-mcp-server"],
+      "args": ["-y", "atlascloud-mcp"],
       "env": {
         "ATLASCLOUD_API_KEY": "your-api-key-here"
       }

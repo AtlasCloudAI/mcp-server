@@ -29,7 +29,7 @@ Add to your MCP configuration:
   "mcpServers": {
     "atlascloud": {
       "command": "npx",
-      "args": ["-y", "atlascloud-mcp-server"],
+      "args": ["-y", "atlascloud-mcp"],
       "env": {
         "ATLASCLOUD_API_KEY": "your-api-key-here"
       }
@@ -41,7 +41,7 @@ Add to your MCP configuration:
 ### Configure in Claude Code
 
 ```bash
-claude mcp add atlascloud -- npx -y atlascloud-mcp-server
+claude mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
 Then set the environment variable `ATLASCLOUD_API_KEY` in your shell.

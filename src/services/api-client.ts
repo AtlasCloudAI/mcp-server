@@ -1,3 +1,4 @@
+import { ProxyAgent, type Dispatcher } from "undici";
 import {
   CONSOLE_API_BASE,
   CHAT_API_BASE,
@@ -6,6 +7,21 @@ import {
   MAX_RETRIES,
   RETRY_BASE_DELAY_MS,
 } from "../constants.js";
+
+// 自动读取代理环境变量，让 Node.js fetch 支持代理
+function getProxyDispatcher(): Dispatcher | undefined {
+  const proxyUrl =
+    process.env.https_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTP_PROXY;
+  if (proxyUrl) {
+    return new ProxyAgent(proxyUrl);
+  }
+  return undefined;
+}
+
+const proxyDispatcher = getProxyDispatcher();
 
 // Custom error class that preserves HTTP status code
 export class ApiRequestError extends Error {
@@ -114,7 +130,8 @@ async function request<T>(
         headers: finalHeaders,
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
-      });
+        ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+      } as any);
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
@@ -207,7 +224,10 @@ export async function fetchExternal(url: string): Promise<unknown> {
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, {
+        signal: controller.signal,
+        ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+      } as any);
       if (!response.ok) {
         const error = new ApiRequestError(
           `Failed to fetch resource: ${response.status} ${url}`,

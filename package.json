@@ -1,6 +1,6 @@
 {
   "name": "atlascloud-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server for Atlas Cloud - AI API aggregation platform for image/video generation and LLM",
   "type": "module",
   "main": "dist/index.js",
@@ -28,6 +28,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",
+    "undici": "^7.22.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

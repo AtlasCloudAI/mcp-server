@@ -10,7 +10,8 @@ Serveur MCP (Model Context Protocol) pour [Atlas Cloud](https://www.atlascloud.a
 - **Découverte de modèles** — Parcourez plus de 80 modèles IA avec prix et capacités
 - **Génération d'images** — Générez des images avec Seedream, Qwen-Image, Z-Image, etc.
 - **Génération de vidéos** — Générez des vidéos avec Kling, Vidu, Seedance, Wan, etc.
-- **Chat LLM** — Discutez avec des modèles LLM (format compatible OpenAI) : GPT, DeepSeek, Qwen, GLM, etc.
+- **Chat LLM** — Discutez avec des modèles LLM (format compatible OpenAI) : DeepSeek, Qwen, GLM, MiniMax, etc.
+- **Téléchargement de médias** — Téléchargez des images/fichiers locaux pour les utiliser avec les modèles d'édition d'image et image-vers-vidéo
 - **Schéma dynamique** — Récupère automatiquement le schéma de paramètres de chaque modèle
 
 ## Démarrage rapide
@@ -47,8 +48,12 @@ Ajoutez à votre configuration MCP :
 | `atlas_get_model_info` | Obtenir les détails d'un modèle (schéma API, paramètres, exemples) |
 | `atlas_generate_image` | Générer des images |
 | `atlas_generate_video` | Générer des vidéos |
+| `atlas_quick_generate` | Génération en une étape — recherche auto par mot-clé, construit les paramètres et soumet |
+| `atlas_upload_media` | Télécharger des fichiers locaux pour obtenir une URL (pour modèles d'édition/image-vers-vidéo) |
 | `atlas_chat` | Chat avec LLM (compatible OpenAI) |
 | `atlas_get_prediction` | Vérifier le statut et le résultat des tâches de génération |
+
+> **Note** : Les fichiers téléchargés sont uniquement destinés à un usage temporaire avec les tâches de génération Atlas Cloud. Les fichiers peuvent être nettoyés périodiquement. Ne pas utiliser comme hébergement permanent — tout abus peut entraîner la suspension de la clé API.
 
 ## Développement
 

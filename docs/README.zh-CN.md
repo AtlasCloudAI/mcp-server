@@ -10,7 +10,8 @@
 - **模型发现** — 浏览 80+ 可用 AI 模型，包含价格和能力信息
 - **图片生成** — 使用 Seedream、Qwen-Image、Z-Image 等模型生成图片
 - **视频生成** — 使用 Kling、Vidu、Seedance、Wan 等模型生成视频
-- **LLM 对话** — 与 GPT、DeepSeek、Qwen、GLM 等大语言模型对话（兼容 OpenAI 格式）
+- **LLM 对话** — 与 DeepSeek、Qwen、GLM、MiniMax 等大语言模型对话（兼容 OpenAI 格式）
+- **媒体上传** — 上传本地图片/媒体文件，用于图片编辑和图生视频等场景
 - **动态 Schema** — 自动获取每个模型的参数定义，确保 API 调用准确
 
 ## 快速开始
@@ -55,6 +56,8 @@ claude mcp add atlascloud -- npx -y atlascloud-mcp
 | `atlas_get_model_info` | 获取模型详情，包括 API Schema、参数说明和使用示例 |
 | `atlas_generate_image` | 使用任意支持的图片模型生成图片 |
 | `atlas_generate_video` | 使用任意支持的视频模型生成视频 |
+| `atlas_quick_generate` | 一步生成 — 自动按关键词搜索模型、构建参数并提交任务 |
+| `atlas_upload_media` | 上传本地文件获取 URL，用于图片编辑/图生视频等模型 |
 | `atlas_chat` | 与大语言模型对话（兼容 OpenAI 格式） |
 | `atlas_get_prediction` | 查询图片/视频生成任务的状态和结果 |
 
@@ -77,9 +80,20 @@ AI 助手会：
 
 > "用 Kling v3 创建一段火箭发射的视频"
 
+### 上传本地图片进行编辑或生成视频
+
+> "帮我把这张图 /Users/me/photos/cat.jpg 加个帽子"
+
+AI 助手会：
+1. 用 `atlas_upload_media` 上传本地文件获取 URL
+2. 查找图片编辑模型
+3. 用 `atlas_generate_image` 配合上传的 URL 进行编辑
+
+> **注意**：上传的文件仅供 Atlas Cloud 生成任务临时使用，文件可能会被定期清理。请勿将此功能用作长期文件存储，滥用可能导致 API Key 被封禁。
+
 ### LLM 对话
 
-> "让 DeepSeek V3.2 解释量子计算"
+> "让 Qwen 解释量子计算"
 
 ## 开发
 

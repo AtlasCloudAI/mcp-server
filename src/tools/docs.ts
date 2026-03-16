@@ -24,7 +24,7 @@ Examples:
   - "video generation" -> finds all video generation models
   - "deepseek" -> finds all DeepSeek models
   - "image edit" -> finds image editing models
-  - "gpt" -> finds all GPT models`,
+  - "qwen" -> finds all Qwen models`,
       inputSchema: {
         query: z
           .string()

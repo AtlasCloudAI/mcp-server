@@ -1,14 +1,17 @@
+import { readFile } from "fs/promises";
+import { basename } from "path";
 import { ProxyAgent, type Dispatcher } from "undici";
 import {
-  CONSOLE_API_BASE,
-  CHAT_API_BASE,
+  API_BASE,
   LLM_API_BASE,
   REQUEST_TIMEOUT_MS,
+  UPLOAD_TIMEOUT_MS,
   MAX_RETRIES,
   RETRY_BASE_DELAY_MS,
 } from "../constants.js";
+import type { UploadResponse } from "../types.js";
 
-// 自动读取代理环境变量，让 Node.js fetch 支持代理
+// Auto-detect proxy env vars for Node.js fetch
 function getProxyDispatcher(): Dispatcher | undefined {
   const proxyUrl =
     process.env.https_proxy ||
@@ -189,31 +192,63 @@ async function request<T>(
   throw lastError;
 }
 
-// Console API (model list, etc.)
-export function consoleApi<T>(
+// Unified API (api.atlascloud.ai/api/v1)
+export function api<T>(
   endpoint: string,
   options?: Parameters<typeof request>[2]
 ): Promise<T> {
-  return request<T>(CONSOLE_API_BASE, endpoint, {
-    ...options,
-    requireAuth: false,
-  });
+  return request<T>(API_BASE, endpoint, options);
 }
 
-// Chat API (image/video generation)
-export function chatApi<T>(
-  endpoint: string,
-  options?: Parameters<typeof request>[2]
-): Promise<T> {
-  return request<T>(CHAT_API_BASE, endpoint, options);
-}
-
-// LLM API (chat completions)
+// LLM API (api.atlascloud.ai/v1)
 export function llmApi<T>(
   endpoint: string,
   options?: Parameters<typeof request>[2]
 ): Promise<T> {
   return request<T>(LLM_API_BASE, endpoint, options);
+}
+
+// Upload a local file to Atlas Cloud, returns a download URL
+export async function uploadMedia(filePath: string): Promise<UploadResponse> {
+  const apiKey = getApiKey();
+  const fileBuffer = await readFile(filePath);
+  const fileName = basename(filePath);
+
+  const formData = new FormData();
+  formData.append("file", new Blob([fileBuffer]), fileName);
+
+  const url = `${API_BASE}/model/uploadMedia`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: formData,
+      signal: controller.signal,
+      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+    } as any);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      let errorMsg = `Upload failed: ${response.status} ${response.statusText}`;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMsg = errorData.msg || errorData.message || errorMsg;
+      } catch {
+        // Use default error message
+      }
+      throw new ApiRequestError(errorMsg, response.status);
+    }
+
+    return (await response.json()) as UploadResponse;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Fetch external resources (schema, readme, etc.) with retry

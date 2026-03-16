@@ -10,7 +10,8 @@ MCP (Model Context Protocol) server for [Atlas Cloud](https://www.atlascloud.ai)
 - **Model Discovery** — List and explore 80+ available AI models with pricing and capabilities
 - **Image Generation** — Generate images using models like Seedream, Qwen-Image, Z-Image, etc.
 - **Video Generation** — Generate videos using models like Kling, Vidu, Seedance, Wan, etc.
-- **LLM Chat** — Chat with LLM models (OpenAI-compatible) including GPT, DeepSeek, Qwen, GLM, etc.
+- **LLM Chat** — Chat with LLM models (OpenAI-compatible) including DeepSeek, Qwen, GLM, MiniMax, etc.
+- **Media Upload** — Upload local images/media for use with image-editing and image-to-video models
 - **Dynamic Schema** — Automatically fetches each model's parameter schema for accurate API usage
 
 ## Quick Start
@@ -55,6 +56,8 @@ Then set the environment variable `ATLASCLOUD_API_KEY` in your shell.
 | `atlas_get_model_info` | Get detailed model info including API schema, parameters, and usage examples |
 | `atlas_generate_image` | Generate images with any supported image model |
 | `atlas_generate_video` | Generate videos with any supported video model |
+| `atlas_quick_generate` | One-step generation — auto-finds model by keyword, builds params, and submits |
+| `atlas_upload_media` | Upload local files to get a URL for use with image-edit / image-to-video models |
 | `atlas_chat` | Chat with LLM models (OpenAI-compatible format) |
 | `atlas_get_prediction` | Check status and result of image/video generation tasks |
 
@@ -84,11 +87,22 @@ The assistant will:
 2. Get its schema to understand required parameters
 3. Use `atlas_generate_video` with appropriate parameters
 
+### Upload a local image for editing or video generation
+
+> "Edit this image /Users/me/photos/cat.jpg to add a hat"
+
+The assistant will:
+1. Use `atlas_upload_media` to upload the local file and get a URL
+2. Find an image-editing model
+3. Use `atlas_generate_image` with the uploaded URL
+
+> **Note**: Uploaded files are for temporary use with Atlas Cloud generation tasks only. Files may be cleaned up periodically. Do not use this as permanent file hosting — abuse may result in API key suspension.
+
 ### Chat with an LLM
 
-> "Ask DeepSeek V3.2 to explain quantum computing"
+> "Ask Qwen to explain quantum computing"
 
-The assistant will use `atlas_chat` with the DeepSeek model.
+The assistant will use `atlas_chat` with the Qwen model.
 
 ## Development
 

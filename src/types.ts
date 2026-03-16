@@ -67,6 +67,18 @@ export interface PredictionResponse {
   };
 }
 
+// Upload media response
+export interface UploadResponse {
+  code: number;
+  message: string;
+  data: {
+    type: string;
+    download_url: string;
+    filename: string;
+    size: number;
+  };
+}
+
 // LLM chat message
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

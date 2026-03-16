@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchModels, findModel } from "../services/doc-fetcher.js";
-import { chatApi, fetchExternal } from "../services/api-client.js";
+import { api, fetchExternal } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
 import type { Model, PredictionResponse } from "../types.js";
 
@@ -205,7 +205,7 @@ Examples:
         // Step 4: Submit generation
         const endpoint =
           type === "Image" ? "/model/generateImage" : "/model/generateVideo";
-        const response = await chatApi<PredictionResponse>(endpoint, {
+        const response = await api<PredictionResponse>(endpoint, {
           method: "POST",
           body: requestBody,
         });

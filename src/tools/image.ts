@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { findModel } from "../services/doc-fetcher.js";
-import { chatApi } from "../services/api-client.js";
+import { api } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
 import type { PredictionResponse } from "../types.js";
 
@@ -72,7 +72,7 @@ Examples:
 
         // Submit generation request
         const body = { model: found.model, ...params };
-        const response = await chatApi<PredictionResponse>(
+        const response = await api<PredictionResponse>(
           "/model/generateImage",
           { method: "POST", body }
         );

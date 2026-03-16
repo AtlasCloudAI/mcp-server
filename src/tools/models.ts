@@ -61,7 +61,7 @@ Examples:
 This tool fetches the model's OpenAPI schema and generates comprehensive API documentation with cURL examples.
 
 Args:
-  - model (string): The model ID (e.g., "openai/gpt-5.2", "kling-video/kling-v3.0-standard-text-to-video")
+  - model (string): The model ID (e.g., "deepseek-ai/deepseek-v3.2", "kling-video/kling-v3.0-standard-text-to-video")
 
 Returns:
   Markdown-formatted model details including:
@@ -73,13 +73,13 @@ Returns:
   - Playground link
 
 Examples:
-  - model="openai/gpt-5.2" -> GPT-5.2 model details and API docs
+  - model="deepseek-ai/deepseek-v3.2" -> DeepSeek V3.2 model details and API docs
   - model="kling-video/kling-v3.0-standard-text-to-video" -> Kling video model API docs`,
       inputSchema: {
         model: z
           .string()
           .min(1)
-          .describe('Model ID, e.g., "openai/gpt-5.2" or "kling-video/kling-v3.0-standard-text-to-video"'),
+          .describe('Model ID, e.g., "deepseek-ai/deepseek-v3.2" or "kling-video/kling-v3.0-standard-text-to-video"'),
       },
       annotations: {
         readOnlyHint: true,

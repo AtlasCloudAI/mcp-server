@@ -1,7 +1,9 @@
 // Atlas Cloud API base URLs
-export const CONSOLE_API_BASE = "https://console.atlascloud.ai/api/v1";
-export const CHAT_API_BASE = "https://api.atlascloud.ai/api/v1";
+export const API_BASE = "https://api.atlascloud.ai/api/v1";
 export const LLM_API_BASE = "https://api.atlascloud.ai/v1";
+
+// Upload timeout (60s for larger files)
+export const UPLOAD_TIMEOUT_MS = 60000;
 
 // Billing page URL
 export const BILLING_URL = "https://www.atlascloud.ai/console/billing";

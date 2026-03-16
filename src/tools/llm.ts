@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { llmApi, chatApi } from "../services/api-client.js";
+import { llmApi, api } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
 import type { ChatCompletionResponse, PredictionResponse } from "../types.js";
 
@@ -13,7 +13,7 @@ export function registerLLMTools(server: McpServer): void {
       description: `Send a chat completion request to an LLM model via Atlas Cloud API (OpenAI-compatible format).
 
 Args:
-  - model (string, required): The LLM model ID (e.g., "openai/gpt-5.2", "deepseek/deepseek-v3.2")
+  - model (string, required): The LLM model ID (e.g., "deepseek-ai/deepseek-v3.2", "qwen/qwen3-32b")
   - messages (array, required): Array of message objects with "role" and "content" fields.
     Roles: "system", "user", "assistant"
   - temperature (number, optional): Sampling temperature, 0-2. Default: 1
@@ -24,8 +24,8 @@ Returns:
   The LLM response including the generated message, token usage, and finish reason.
 
 Examples:
-  - model="openai/gpt-5.2", messages=[{"role": "user", "content": "Hello"}]
-  - model="deepseek/deepseek-v3.2", messages=[{"role": "system", "content": "You are a helpful assistant"}, {"role": "user", "content": "Explain quantum computing"}], temperature=0.7`,
+  - model="deepseek-ai/deepseek-v3.2", messages=[{"role": "user", "content": "Hello"}]
+  - model="qwen/qwen3-32b", messages=[{"role": "system", "content": "You are a helpful assistant"}, {"role": "user", "content": "Explain quantum computing"}], temperature=0.7`,
       inputSchema: {
         model: z.string().min(1).describe("LLM model ID"),
         messages: z
@@ -155,7 +155,7 @@ Examples:
     },
     async ({ prediction_id }) => {
       try {
-        const result = await chatApi<PredictionResponse>(
+        const result = await api<PredictionResponse>(
           `/model/prediction/${prediction_id}`
         );
 

@@ -1,4 +1,4 @@
-import { consoleApi, fetchExternal } from "./api-client.js";
+import { api, fetchExternal } from "./api-client.js";
 import type { Model, ModelsResponse } from "../types.js";
 
 // In-memory cache for models list
@@ -13,7 +13,7 @@ export async function getModels(): Promise<Model[]> {
     return modelsCache;
   }
 
-  const response = await consoleApi<ModelsResponse>("/models");
+  const response = await api<ModelsResponse>("/models", { requireAuth: false });
   const models = (response.data || []).filter((m) => m.display_console !== false);
   modelsCache = models;
   modelsCacheTime = now;
@@ -31,7 +31,7 @@ function fuzzyMatch(target: string, queryWords: string[]): boolean {
   return queryWords.every((w) => normalizedTarget.includes(w));
 }
 
-// Find a model by model ID (e.g., "openai/gpt-5.2"), supports exact and normalized match
+// Find a model by model ID (e.g., "deepseek-ai/deepseek-v3.2"), supports exact and normalized match
 export async function findModel(modelId: string): Promise<Model | undefined> {
   const models = await getModels();
   const normalizedInput = normalize(modelId);

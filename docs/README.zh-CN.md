@@ -39,9 +39,9 @@
 - Node.js >= 18
 - Atlas Cloud API Key — [免费获取](https://www.atlascloud.ai/console/api-keys)
 
-### Cursor / Claude Desktop
+### IDE 和编辑器（JSON 配置）
 
-在 MCP 配置中添加：
+在你的 MCP 配置文件中添加以下内容，适用于所有支持 MCP 的 IDE 和编辑器：
 
 ```json
 {
@@ -57,13 +57,49 @@
 }
 ```
 
-### Claude Code
+| 客户端 | 配置位置 |
+|--------|---------|
+| [Cursor](https://cursor.com) | Settings → MCP → Add Server |
+| [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
+| [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` 或 Settings → MCP |
+| [Trae](https://trae.ai) | Settings → MCP → Add Server |
+| [Zed](https://zed.dev) | Settings → MCP |
+| [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
+| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
+| [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
+| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
+
+### VS Code 扩展
+
+以下 VS Code 扩展同样支持 MCP，使用相同的 JSON 配置格式：
+
+| 扩展 | 安装方式 |
+|------|---------|
+| [Cline](https://github.com/cline/cline) | MCP Marketplace → Add Server |
+| [Roo Code](https://github.com/RooCodeInc/Roo-Code) | Settings → MCP → Add Server |
+| [Continue](https://continue.dev) | `config.yaml` → MCP |
+
+### 命令行工具
 
 ```bash
+# Claude Code
 claude mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Gemini CLI
+gemini mcp add atlascloud -- npx -y atlascloud-mcp
+
+# OpenAI Codex CLI
+codex mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Goose CLI
+goose mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
-然后在 shell 中设置环境变量 `ATLASCLOUD_API_KEY`。
+> 使用命令行工具时，请确保在 shell 中设置 `ATLASCLOUD_API_KEY` 环境变量。
+
+### Skills 版本（Claude Code）
+
+如果你更喜欢使用 Skills 而非 MCP，我们也提供了 [Atlas Cloud Skills](https://github.com/AtlasCloudAI/atlas-cloud-skills) 包，适用于 Claude Code 及其他支持 Skills 的 AI 代理。
 
 ## 可用工具
 

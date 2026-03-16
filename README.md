@@ -39,9 +39,9 @@
 - Node.js >= 18
 - Atlas Cloud API Key — [Get one free at atlascloud.ai](https://www.atlascloud.ai/console/api-keys)
 
-### Cursor / Claude Desktop
+### IDEs & Editors (JSON Config)
 
-Add to your MCP configuration:
+Add to your MCP configuration file — works with all MCP-compatible IDEs and editors:
 
 ```json
 {
@@ -57,13 +57,49 @@ Add to your MCP configuration:
 }
 ```
 
-### Claude Code
+| Client | Config File Location |
+|--------|---------------------|
+| [Cursor](https://cursor.com) | Settings → MCP → Add Server |
+| [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
+| [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` or Settings → MCP |
+| [Trae](https://trae.ai) | Settings → MCP → Add Server |
+| [Zed](https://zed.dev) | Settings → MCP |
+| [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
+| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
+| [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
+| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
+
+### VS Code Extensions
+
+These VS Code extensions also support MCP with the same JSON config format:
+
+| Extension | Install |
+|-----------|---------|
+| [Cline](https://github.com/cline/cline) | MCP Marketplace → Add Server |
+| [Roo Code](https://github.com/RooCodeInc/Roo-Code) | Settings → MCP → Add Server |
+| [Continue](https://continue.dev) | `config.yaml` → MCP |
+
+### CLI Tools
 
 ```bash
+# Claude Code
 claude mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Gemini CLI
+gemini mcp add atlascloud -- npx -y atlascloud-mcp
+
+# OpenAI Codex CLI
+codex mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Goose CLI
+goose mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
-Then set the environment variable `ATLASCLOUD_API_KEY` in your shell.
+> For CLI tools, make sure to set the `ATLASCLOUD_API_KEY` environment variable in your shell.
+
+### Skills Version (Claude Code)
+
+If you prefer using Skills instead of MCP, we also offer an [Atlas Cloud Skills](https://github.com/AtlasCloudAI/atlas-cloud-skills) package for Claude Code and other skill-compatible agents.
 
 ## Available Tools
 
@@ -85,7 +121,7 @@ Then set the environment variable `ATLASCLOUD_API_KEY` in your shell.
 
 > "Search Atlas Cloud for video generation models"
 
-The AI assistant will use `atlas_search_docs` or `atlas_list_models` to find relevant models.
+Your AI assistant will use `atlas_search_docs` or `atlas_list_models` to find relevant models.
 
 ### Generate an image
 

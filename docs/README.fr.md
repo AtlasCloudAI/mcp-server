@@ -38,9 +38,9 @@
 - Node.js >= 18
 - Clé API Atlas Cloud — [Obtenir gratuitement](https://www.atlascloud.ai/console/api-keys)
 
-### Cursor / Claude Desktop
+### IDEs et éditeurs (configuration JSON)
 
-Ajoutez à votre configuration MCP :
+Ajoutez ce qui suit à votre fichier de configuration MCP — fonctionne avec tous les IDEs et éditeurs compatibles MCP :
 
 ```json
 {
@@ -56,11 +56,49 @@ Ajoutez à votre configuration MCP :
 }
 ```
 
-### Claude Code
+| Client | Emplacement de configuration |
+|--------|------------------------------|
+| [Cursor](https://cursor.com) | Settings → MCP → Add Server |
+| [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
+| [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` ou Settings → MCP |
+| [Trae](https://trae.ai) | Settings → MCP → Add Server |
+| [Zed](https://zed.dev) | Settings → MCP |
+| [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
+| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
+| [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
+| [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
+
+### Extensions VS Code
+
+Ces extensions VS Code prennent également en charge MCP avec le même format de configuration JSON :
+
+| Extension | Installation |
+|-----------|-------------|
+| [Cline](https://github.com/cline/cline) | MCP Marketplace → Add Server |
+| [Roo Code](https://github.com/RooCodeInc/Roo-Code) | Settings → MCP → Add Server |
+| [Continue](https://continue.dev) | `config.yaml` → MCP |
+
+### Outils CLI
 
 ```bash
+# Claude Code
 claude mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Gemini CLI
+gemini mcp add atlascloud -- npx -y atlascloud-mcp
+
+# OpenAI Codex CLI
+codex mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Goose CLI
+goose mcp add atlascloud -- npx -y atlascloud-mcp
 ```
+
+> Pour les outils CLI, assurez-vous de définir la variable d'environnement `ATLASCLOUD_API_KEY` dans votre shell.
+
+### Version Skills (Claude Code)
+
+Si vous préférez utiliser Skills plutôt que MCP, nous proposons également le package [Atlas Cloud Skills](https://github.com/AtlasCloudAI/atlas-cloud-skills) pour Claude Code et autres agents compatibles Skills.
 
 ## Outils disponibles
 

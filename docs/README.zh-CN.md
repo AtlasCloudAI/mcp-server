@@ -1,17 +1,35 @@
-# Atlas Cloud MCP Server
+<p align="center">
+  <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="80" />
+</p>
 
-[Atlas Cloud](https://www.atlascloud.ai) 的 MCP（模型上下文协议）服务器 —— 一站式 AI API 聚合平台，提供图片生成、视频生成和大语言模型服务。
+<h1 align="center">Atlas Cloud MCP Server</h1>
 
-[English](../README.md) | 中文 | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Español](./README.es.md) | [Français](./README.fr.md)
+<p align="center">
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/v/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/dm/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm downloads" /></a>
+  <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/license/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="license" /></a>
+  <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/stars/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="github stars" /></a>
+</p>
+
+<p align="center">
+  <a href="../README.md">English</a> | 中文 | <a href="./README.ja.md">日本語</a> | <a href="./README.ko.md">한국어</a> | <a href="./README.es.md">Español</a> | <a href="./README.fr.md">Français</a>
+</p>
+
+<p align="center">
+  <a href="https://www.atlascloud.ai">Atlas Cloud</a> 的 MCP（模型上下文协议）服务器 —— 一站式 AI API 聚合平台，提供图片生成、视频生成和大语言模型服务。
+</p>
+
+---
 
 ## 功能特性
 
-- **文档搜索** — 在 IDE 中直接搜索 Atlas Cloud 文档、模型和 API 参考
-- **模型发现** — 浏览 80+ 可用 AI 模型，包含价格和能力信息
-- **图片生成** — 使用 Seedream、Qwen-Image、Z-Image 等模型生成图片
-- **视频生成** — 使用 Kling、Vidu、Seedance、Wan 等模型生成视频
+- **模型发现** — 浏览 200+ 可用 AI 模型，包含价格和能力信息
+- **图片生成** — 使用 Seedream、Qwen-Image、Flux、Imagen 等模型生成图片
+- **视频生成** — 使用 Kling、Vidu、Seedance、Wan、Hailuo、Veo 等模型生成视频
 - **LLM 对话** — 与 DeepSeek、Qwen、GLM、MiniMax 等大语言模型对话（兼容 OpenAI 格式）
 - **媒体上传** — 上传本地图片/媒体文件，用于图片编辑和图生视频等场景
+- **快速生成** — 一步到位，自动搜索模型并构建参数
+- **文档搜索** — 在 IDE 中直接搜索 Atlas Cloud 文档、模型和 API 参考
 - **动态 Schema** — 自动获取每个模型的参数定义，确保 API 调用准确
 
 ## 快速开始
@@ -19,9 +37,9 @@
 ### 前提条件
 
 - Node.js >= 18
-- Atlas Cloud API Key（在 [atlascloud.ai](https://www.atlascloud.ai) 获取）
+- Atlas Cloud API Key — [免费获取](https://www.atlascloud.ai/console/api-keys)
 
-### 在 Cursor / Claude Desktop 中配置
+### Cursor / Claude Desktop
 
 在 MCP 配置中添加：
 
@@ -39,7 +57,7 @@
 }
 ```
 
-### 在 Claude Code 中配置
+### Claude Code
 
 ```bash
 claude mcp add atlascloud -- npx -y atlascloud-mcp

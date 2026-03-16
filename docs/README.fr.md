@@ -1,17 +1,34 @@
-# Atlas Cloud MCP Server
+<p align="center">
+  <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="80" />
+</p>
 
-Serveur MCP (Model Context Protocol) pour [Atlas Cloud](https://www.atlascloud.ai) — plateforme d'agrégation d'APIs IA offrant la génération d'images, la génération de vidéos et des modèles LLM.
+<h1 align="center">Atlas Cloud MCP Server</h1>
 
-[English](../README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Español](./README.es.md) | Français
+<p align="center">
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/v/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/dm/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm downloads" /></a>
+  <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/license/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="license" /></a>
+</p>
+
+<p align="center">
+  <a href="../README.md">English</a> | <a href="./README.zh-CN.md">中文</a> | <a href="./README.ja.md">日本語</a> | <a href="./README.ko.md">한국어</a> | <a href="./README.es.md">Español</a> | Français
+</p>
+
+<p align="center">
+  Serveur MCP (Model Context Protocol) pour <a href="https://www.atlascloud.ai">Atlas Cloud</a> — plateforme d'agrégation d'APIs IA offrant la génération d'images, la génération de vidéos et des modèles LLM.
+</p>
+
+---
 
 ## Fonctionnalités
 
-- **Recherche de documentation** — Recherchez la documentation, les modèles et les références API d'Atlas Cloud directement depuis votre IDE
-- **Découverte de modèles** — Parcourez plus de 80 modèles IA avec prix et capacités
-- **Génération d'images** — Générez des images avec Seedream, Qwen-Image, Z-Image, etc.
-- **Génération de vidéos** — Générez des vidéos avec Kling, Vidu, Seedance, Wan, etc.
+- **Découverte de modèles** — Parcourez plus de 200 modèles IA avec prix et capacités
+- **Génération d'images** — Générez des images avec Seedream, Qwen-Image, Flux, Imagen, etc.
+- **Génération de vidéos** — Générez des vidéos avec Kling, Vidu, Seedance, Wan, Hailuo, Veo, etc.
 - **Chat LLM** — Discutez avec des modèles LLM (format compatible OpenAI) : DeepSeek, Qwen, GLM, MiniMax, etc.
 - **Téléchargement de médias** — Téléchargez des images/fichiers locaux pour les utiliser avec les modèles d'édition d'image et image-vers-vidéo
+- **Génération rapide** — Génération en une étape avec recherche automatique de modèles et construction de paramètres
+- **Recherche de documentation** — Recherchez la documentation, les modèles et les références API d'Atlas Cloud directement depuis votre IDE
 - **Schéma dynamique** — Récupère automatiquement le schéma de paramètres de chaque modèle
 
 ## Démarrage rapide
@@ -19,9 +36,9 @@ Serveur MCP (Model Context Protocol) pour [Atlas Cloud](https://www.atlascloud.a
 ### Prérequis
 
 - Node.js >= 18
-- Clé API Atlas Cloud (obtenir sur [atlascloud.ai](https://www.atlascloud.ai))
+- Clé API Atlas Cloud — [Obtenir gratuitement](https://www.atlascloud.ai/console/api-keys)
 
-### Configuration dans Cursor / Claude Desktop
+### Cursor / Claude Desktop
 
 Ajoutez à votre configuration MCP :
 
@@ -37,6 +54,12 @@ Ajoutez à votre configuration MCP :
     }
   }
 }
+```
+
+### Claude Code
+
+```bash
+claude mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
 ## Outils disponibles

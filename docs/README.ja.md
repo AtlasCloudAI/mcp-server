@@ -1,17 +1,34 @@
-# Atlas Cloud MCP Server
+<p align="center">
+  <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="80" />
+</p>
 
-[Atlas Cloud](https://www.atlascloud.ai) の MCP（Model Context Protocol）サーバー — 画像生成、動画生成、LLM を提供する AI API 統合プラットフォーム。
+<h1 align="center">Atlas Cloud MCP Server</h1>
 
-[English](../README.md) | [中文](./README.zh-CN.md) | 日本語 | [한국어](./README.ko.md) | [Español](./README.es.md) | [Français](./README.fr.md)
+<p align="center">
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/v/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/dm/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm downloads" /></a>
+  <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/license/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="license" /></a>
+</p>
+
+<p align="center">
+  <a href="../README.md">English</a> | <a href="./README.zh-CN.md">中文</a> | 日本語 | <a href="./README.ko.md">한국어</a> | <a href="./README.es.md">Español</a> | <a href="./README.fr.md">Français</a>
+</p>
+
+<p align="center">
+  <a href="https://www.atlascloud.ai">Atlas Cloud</a> の MCP（Model Context Protocol）サーバー — 画像生成、動画生成、LLM を提供する AI API 統合プラットフォーム。
+</p>
+
+---
 
 ## 機能
 
-- **ドキュメント検索** — IDE から Atlas Cloud のドキュメント、モデル、API リファレンスを直接検索
-- **モデル探索** — 80以上の AI モデルを価格や機能と共に一覧表示
-- **画像生成** — Seedream、Qwen-Image、Z-Image などのモデルで画像を生成
-- **動画生成** — Kling、Vidu、Seedance、Wan などのモデルで動画を生成
+- **モデル探索** — 200以上の AI モデルを価格や機能と共に一覧表示
+- **画像生成** — Seedream、Qwen-Image、Flux、Imagen などのモデルで画像を生成
+- **動画生成** — Kling、Vidu、Seedance、Wan、Hailuo、Veo などのモデルで動画を生成
 - **LLM チャット** — DeepSeek、Qwen、GLM、MiniMax などの LLM と対話（OpenAI 互換形式）
 - **メディアアップロード** — ローカル画像/メディアファイルをアップロードし、画像編集や画像から動画生成に使用
+- **クイック生成** — ワンステップでモデル検索からパラメータ構築まで自動実行
+- **ドキュメント検索** — IDE から Atlas Cloud のドキュメント、モデル、API リファレンスを直接検索
 - **動的スキーマ** — 各モデルのパラメータスキーマを自動取得
 
 ## クイックスタート
@@ -19,9 +36,9 @@
 ### 前提条件
 
 - Node.js >= 18
-- Atlas Cloud API Key（[atlascloud.ai](https://www.atlascloud.ai) で取得）
+- Atlas Cloud API Key — [無料で取得](https://www.atlascloud.ai/console/api-keys)
 
-### Cursor / Claude Desktop での設定
+### Cursor / Claude Desktop
 
 MCP 設定に以下を追加：
 
@@ -37,6 +54,12 @@ MCP 設定に以下を追加：
     }
   }
 }
+```
+
+### Claude Code
+
+```bash
+claude mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
 ## 利用可能なツール

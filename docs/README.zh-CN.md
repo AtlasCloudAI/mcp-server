@@ -23,7 +23,7 @@
 
 ## 功能特性
 
-- **模型发现** — 浏览 200+ 可用 AI 模型，包含价格和能力信息
+- **模型发现** — 浏览 300+ 可用 AI 模型，包含价格和能力信息
 - **图片生成** — 使用 Seedream、Qwen-Image、Flux、Imagen 等模型生成图片
 - **视频生成** — 使用 Kling、Vidu、Seedance、Wan、Hailuo、Veo 等模型生成视频
 - **LLM 对话** — 与 DeepSeek、Qwen、GLM、MiniMax 等大语言模型对话（兼容 OpenAI 格式）

@@ -22,7 +22,7 @@
 
 ## 기능
 
-- **모델 탐색** — 200개 이상의 AI 모델을 가격 및 기능과 함께 목록 표시
+- **모델 탐색** — 300개 이상의 AI 모델을 가격 및 기능과 함께 목록 표시
 - **이미지 생성** — Seedream, Qwen-Image, Flux, Imagen 등의 모델로 이미지 생성
 - **비디오 생성** — Kling, Vidu, Seedance, Wan, Hailuo, Veo 등의 모델로 비디오 생성
 - **LLM 채팅** — DeepSeek, Qwen, GLM, MiniMax 등 LLM과 대화 (OpenAI 호환 형식)

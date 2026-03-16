@@ -23,7 +23,7 @@
 
 ## Features
 
-- **Model Discovery** — List and explore 200+ available AI models with pricing and capabilities
+- **Model Discovery** — List and explore 300+ available AI models with pricing and capabilities
 - **Image Generation** — Generate images using models like Seedream, Qwen-Image, Flux, Imagen, etc.
 - **Video Generation** — Generate videos using models like Kling, Vidu, Seedance, Wan, Hailuo, Veo, etc.
 - **LLM Chat** — Chat with LLM models (OpenAI-compatible) including DeepSeek, Qwen, GLM, MiniMax, etc.

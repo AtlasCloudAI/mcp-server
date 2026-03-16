@@ -22,7 +22,7 @@
 
 ## 機能
 
-- **モデル探索** — 200以上の AI モデルを価格や機能と共に一覧表示
+- **モデル探索** — 300以上の AI モデルを価格や機能と共に一覧表示
 - **画像生成** — Seedream、Qwen-Image、Flux、Imagen などのモデルで画像を生成
 - **動画生成** — Kling、Vidu、Seedance、Wan、Hailuo、Veo などのモデルで動画を生成
 - **LLM チャット** — DeepSeek、Qwen、GLM、MiniMax などの LLM と対話（OpenAI 互換形式）

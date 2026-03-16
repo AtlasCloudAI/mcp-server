@@ -22,7 +22,7 @@
 
 ## Fonctionnalités
 
-- **Découverte de modèles** — Parcourez plus de 200 modèles IA avec prix et capacités
+- **Découverte de modèles** — Parcourez plus de 300 modèles IA avec prix et capacités
 - **Génération d'images** — Générez des images avec Seedream, Qwen-Image, Flux, Imagen, etc.
 - **Génération de vidéos** — Générez des vidéos avec Kling, Vidu, Seedance, Wan, Hailuo, Veo, etc.
 - **Chat LLM** — Discutez avec des modèles LLM (format compatible OpenAI) : DeepSeek, Qwen, GLM, MiniMax, etc.

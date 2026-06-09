@@ -16,21 +16,36 @@
 </p>
 
 <p align="center">
-  MCP (Model Context Protocol) server for <a href="https://www.atlascloud.ai">Atlas Cloud</a> — an AI API aggregation platform providing access to image generation, video generation, and LLM models.
+  Use <a href="https://www.atlascloud.ai">Atlas Cloud</a>'s 300+ image / video / LLM models in Claude Code, Codex, Gemini CLI, Cursor, Cline and more. Generate images, videos & chat via standard MCP tools.
+</p>
+
+<p align="center">
+  <a href="https://www.atlascloud.ai/console/api-keys?utm_source=github&utm_campaign=mcp-server"><b>→ Get your free Atlas Cloud API key</b></a> · 300+ models · OpenAI-compatible
 </p>
 
 ---
 
-## Features
+## Supported Models
 
-- **Model Discovery** — List and explore 300+ available AI models with pricing and capabilities
-- **Image Generation** — Generate images using models like Seedream, Qwen-Image, Flux, Imagen, etc.
-- **Video Generation** — Generate videos using models like Kling, Vidu, Seedance, Wan, Hailuo, Veo, etc.
-- **LLM Chat** — Chat with LLM models (OpenAI-compatible) including DeepSeek, Qwen, GLM, MiniMax, etc.
-- **Media Upload** — Upload local images/media for use with image-editing and image-to-video models
-- **Quick Generate** — One-step generation with automatic model search and parameter building
-- **Documentation Search** — Search Atlas Cloud docs, models, and API references directly from your IDE
-- **Dynamic Schema** — Automatically fetches each model's parameter schema for accurate API usage
+- 🎬 **Video** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
+- 🎨 **Image** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
+- 💬 **LLM** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
+- 🔊 **Audio** — Grok TTS
+
+- 📚 **Explore more** — [300+ models »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+
+## What You Can Do
+
+Ask your AI assistant in plain language — it discovers the right model, builds the parameters, and submits the job:
+
+- 🎨 **"Make a hero image for this blog post"** — text-to-image across Nano Banana Pro, GPT Image 2, Flux 2, Seedream, Imagen…
+- 🎬 **"Turn this product photo into a 5-second ad"** — image-to-video with Kling 3, Seedance 2, Veo 3.1, Sora 2…
+- 🎞️ **"Storyboard this script into 6 shots"** — chain LLM → image → video inside one conversation
+- ✏️ **"Edit this image — add a hat"** — upload a local file, then run an image-editing model
+- 💸 **"Which video model is cheapest for a 10s clip?"** — discover models with live pricing & capabilities
+- 💬 **"Summarize this PDF with DeepSeek"** — OpenAI-compatible LLM chat with Claude, GPT, DeepSeek, Qwen, GLM…
+
+Under the hood: model discovery, dynamic per-model parameter schemas, media upload, one-step quick-generate, and documentation search — all exposed as standard MCP tools (see [Available Tools](#available-tools)).
 
 ## Quick Start
 
@@ -39,9 +54,29 @@
 - Node.js >= 18
 - Atlas Cloud API Key — [Get one free at atlascloud.ai](https://www.atlascloud.ai/console/api-keys)
 
-### IDEs & Editors (JSON Config)
+### CLI agents (one-line install)
 
-Add to your MCP configuration file — works with all MCP-compatible IDEs and editors:
+The fastest path — these AI coding agents add the server with a single command:
+
+```bash
+# Claude Code
+claude mcp add atlascloud -- npx -y atlascloud-mcp
+
+# OpenAI Codex CLI
+codex mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Gemini CLI
+gemini mcp add atlascloud -- npx -y atlascloud-mcp
+
+# Goose CLI
+goose mcp add atlascloud -- npx -y atlascloud-mcp
+```
+
+> Set the `ATLASCLOUD_API_KEY` environment variable in your shell first.
+
+### IDEs, editors & extensions (JSON config)
+
+Add this to your client's MCP configuration — works with every MCP-compatible client:
 
 ```json
 {
@@ -57,49 +92,22 @@ Add to your MCP configuration file — works with all MCP-compatible IDEs and ed
 }
 ```
 
-| Client | Config File Location |
-|--------|---------------------|
+| Client | Where to add it |
+|--------|-----------------|
 | [Cursor](https://cursor.com) | Settings → MCP → Add Server |
+| [Cline](https://github.com/cline/cline) | MCP Marketplace → Add Server |
+| [Continue](https://continue.dev) | `config.yaml` → MCP |
 | [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
 | [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` or Settings → MCP |
 | [Trae](https://trae.ai) | Settings → MCP → Add Server |
-| [Zed](https://zed.dev) | Settings → MCP |
 | [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
-| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
 | [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
 | [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
-
-### VS Code Extensions
-
-These VS Code extensions also support MCP with the same JSON config format:
-
-| Extension | Install |
-|-----------|---------|
-| [Cline](https://github.com/cline/cline) | MCP Marketplace → Add Server |
 | [Roo Code](https://github.com/RooCodeInc/Roo-Code) | Settings → MCP → Add Server |
-| [Continue](https://continue.dev) | `config.yaml` → MCP |
 
-### CLI Tools
+### Prefer Skills?
 
-```bash
-# Claude Code
-claude mcp add atlascloud -- npx -y atlascloud-mcp
-
-# Gemini CLI
-gemini mcp add atlascloud -- npx -y atlascloud-mcp
-
-# OpenAI Codex CLI
-codex mcp add atlascloud -- npx -y atlascloud-mcp
-
-# Goose CLI
-goose mcp add atlascloud -- npx -y atlascloud-mcp
-```
-
-> For CLI tools, make sure to set the `ATLASCLOUD_API_KEY` environment variable in your shell.
-
-### Skills Version (Claude Code)
-
-If you prefer using Skills instead of MCP, we also offer an [Atlas Cloud Skills](https://github.com/AtlasCloudAI/atlas-cloud-skills) package for Claude Code and other skill-compatible agents.
+If you'd rather use Skills than MCP, we also ship an [Atlas Cloud Skills](https://github.com/AtlasCloudAI/atlas-cloud-skills) package for Claude Code and other skill-compatible agents.
 
 ## Available Tools
 
@@ -170,6 +178,15 @@ npm run build
 # Run in development mode
 npm run dev
 ```
+
+## More Atlas Cloud Tools
+
+- 🧰 **Want to use it from the terminal?** → Install [atlascloud-cli](https://github.com/AtlasCloudAI/cli)
+- 🎬 **Want it as a Claude Code / Codex / Gemini CLI Skill?** → Install [atlas-cloud-skills](https://github.com/AtlasCloudAI/atlas-cloud-skills)
+- 🎨 **ComfyUI nodes** → [atlascloud_comfyui](https://github.com/AtlasCloudAI/atlascloud_comfyui)
+- 🔁 **n8n nodes** → [n8n-nodes-atlascloud](https://github.com/AtlasCloudAI/n8n-nodes-atlascloud)
+- 💬 **Join our Discord** → [discord.gg/MWmMr4q9es](https://discord.gg/MWmMr4q9es)
+- 🌐 **Website** → [atlascloud.ai](https://www.atlascloud.ai?utm_source=github&utm_campaign=mcp-server)
 
 ## License
 

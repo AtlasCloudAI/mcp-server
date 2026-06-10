@@ -61,11 +61,7 @@ Añade lo siguiente a tu archivo de configuración MCP — funciona con todos lo
 | [Cursor](https://cursor.com) | Settings → MCP → Add Server |
 | [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
 | [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` o Settings → MCP |
-| [Trae](https://trae.ai) | Settings → MCP → Add Server |
-| [Zed](https://zed.dev) | Settings → MCP |
-| [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
-| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
-| [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
+| [Trae](https://trae.ai) | Settings → MCP → Add Server || [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP || [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
 | [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
 
 ### Extensiones de VS Code

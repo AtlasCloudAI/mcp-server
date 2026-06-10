@@ -61,11 +61,7 @@ MCP 설정 파일에 다음을 추가하세요 — MCP를 지원하는 모든 ID
 | [Cursor](https://cursor.com) | Settings → MCP → Add Server |
 | [Windsurf](https://codeium.com/windsurf) | Settings → MCP → Add Server |
 | [VS Code (Copilot)](https://code.visualstudio.com) | `.vscode/mcp.json` 또는 Settings → MCP |
-| [Trae](https://trae.ai) | Settings → MCP → Add Server |
-| [Zed](https://zed.dev) | Settings → MCP |
-| [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP |
-| [Claude Desktop](https://claude.ai/download) | `claude_desktop_config.json` |
-| [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
+| [Trae](https://trae.ai) | Settings → MCP → Add Server || [JetBrains IDEs](https://www.jetbrains.com) | Settings → Tools → AI Assistant → MCP || [ChatGPT Desktop](https://openai.com/chatgpt/desktop) | Settings → MCP |
 | [Amazon Q Developer](https://aws.amazon.com/q/developer/) | MCP Configuration |
 
 ### VS Code 확장 프로그램

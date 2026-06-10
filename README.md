@@ -9,6 +9,7 @@
   <a href="https://www.npmjs.com/package/atlascloud-mcp"><img src="https://img.shields.io/npm/dm/atlascloud-mcp.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="npm downloads" /></a>
   <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/license/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="license" /></a>
   <a href="https://github.com/AtlasCloudAI/mcp-server"><img src="https://img.shields.io/github/stars/AtlasCloudAI/mcp-server?style=flat&colorA=18181B&colorB=28CF8D" alt="github stars" /></a>
+  <a href="https://github.com/AtlasCloudAI/mcp-server/pulls"><img src="https://img.shields.io/badge/PRs-welcome-28CF8D.svg?style=flat&colorA=18181B&colorB=28CF8D" alt="PRs Welcome" /></a>
 </p>
 
 <p align="center">
@@ -16,7 +17,7 @@
 </p>
 
 <p align="center">
-  Use <a href="https://www.atlascloud.ai">Atlas Cloud</a>'s 300+ image / video / LLM models in Claude Code, Codex, Gemini CLI, Cursor, Cline and more. Generate images, videos & chat via standard MCP tools.
+  Use <a href="https://www.atlascloud.ai?utm_source=github&utm_campaign=mcp-server">Atlas Cloud</a>'s 300+ image / video / LLM models in Claude Code, Codex, Gemini CLI, Cursor, Cline and more. Generate images, videos & chat via standard MCP tools.
 </p>
 
 <p align="center">
@@ -33,6 +34,16 @@
 - 🔊 **Audio** — Grok TTS
 
 - 📚 **Explore more** — [300+ models »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+
+## Contents
+
+- [What You Can Do](#what-you-can-do)
+- [Quick Start](#quick-start)
+- [Available Tools](#available-tools)
+- [Usage Examples](#usage-examples)
+- [Development](#development)
+- [More Atlas Cloud Tools](#more-atlas-cloud-tools)
+- [License](#license)
 
 ## What You Can Do
 
@@ -52,7 +63,9 @@ Under the hood: model discovery, dynamic per-model parameter schemas, media uplo
 ### Prerequisites
 
 - Node.js >= 18
-- Atlas Cloud API Key — [Get one free at atlascloud.ai](https://www.atlascloud.ai/console/api-keys)
+- Atlas Cloud API Key — [Get one free at atlascloud.ai](https://www.atlascloud.ai/console/api-keys?utm_source=github&utm_campaign=mcp-server)
+
+See [`.env.example`](./.env.example) for the environment variable to set.
 
 ### CLI agents (one-line install)
 
@@ -181,8 +194,9 @@ npm run dev
 
 ## More Atlas Cloud Tools
 
-- 🧰 **Want to use it from the terminal?** → Install [atlascloud-cli](https://github.com/AtlasCloudAI/cli)
-- 🎬 **Want it as a Claude Code / Codex / Gemini CLI Skill?** → Install [atlas-cloud-skills](https://github.com/AtlasCloudAI/atlas-cloud-skills)
+- 🧰 **Want to use it from the terminal?** → [atlascloud-cli](https://github.com/AtlasCloudAI/cli)
+- 🤖 **Want to use it in Claude Code / Cursor?** → [Atlas Cloud MCP Server](https://github.com/AtlasCloudAI/mcp-server)
+- 🎬 **Want it as a Claude Code / Codex / Gemini CLI Skill?** → [atlas-cloud-skills](https://github.com/AtlasCloudAI/atlas-cloud-skills)
 - 🎨 **ComfyUI nodes** → [atlascloud_comfyui](https://github.com/AtlasCloudAI/atlascloud_comfyui)
 - 🔁 **n8n nodes** → [n8n-nodes-atlascloud](https://github.com/AtlasCloudAI/n8n-nodes-atlascloud)
 - 💬 **Join our Discord** → [discord.gg/MWmMr4q9es](https://discord.gg/MWmMr4q9es)

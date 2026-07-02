@@ -1,9 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { findModel } from "../services/doc-fetcher.js";
-import { api } from "../services/api-client.js";
+import { submitGeneration } from "../services/generation.js";
 import { handleError } from "../utils/error-handler.js";
-import type { PredictionResponse } from "../types.js";
 
 export function registerVideoTools(server: McpServer): void {
   server.registerTool(
@@ -13,6 +11,8 @@ export function registerVideoTools(server: McpServer): void {
       description: `Generate a video using Atlas Cloud API.
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
+
+Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
 IMPORTANT: The "model" parameter requires an exact model ID (e.g., "kling-video/kling-v3.0-standard-text-to-video"). If you don't know the exact model ID, you MUST first call atlas_list_models with type="Video" to find it. Do NOT guess model IDs.
 
@@ -49,48 +49,16 @@ Examples:
     },
     async ({ model, params }) => {
       try {
-        // Verify model exists and is a Video type
-        const found = await findModel(model);
-        if (!found) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Model "${model}" not found. Use atlas_list_models with type="Video" to see available video models.`,
-              },
-            ],
-          };
-        }
-        if (found.type !== "Video") {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Model "${model}" is a ${found.type} model, not a Video model. Use atlas_list_models with type="Video" to find video models.`,
-              },
-            ],
-          };
-        }
+        const result = await submitGeneration(model, params, {
+          expectedType: "Video",
+          endpoint: "/model/generateVideo",
+          typeLabel: "video",
+        });
 
-        // Submit generation request
-        const body = { model: found.model, ...params };
-        const response = await api<PredictionResponse>(
-          "/model/generateVideo",
-          { method: "POST", body }
-        );
-
-        const predictionId = response.data?.id;
-        if (!predictionId) {
+        if (!result.ok) {
           return {
             isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Failed to start video generation. Response: ${JSON.stringify(response)}`,
-              },
-            ],
+            content: [{ type: "text", text: result.message }],
           };
         }
 
@@ -100,8 +68,8 @@ Examples:
               type: "text",
               text:
                 `Video generation submitted successfully.\n\n` +
-                `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
-                `- **Prediction ID**: \`${predictionId}\`\n\n` +
+                `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
+                `- **Prediction ID**: \`${result.predictionId}\`\n\n` +
                 `The video is being generated. Use \`atlas_get_prediction\` with this ID to check the result.\n` +
                 `Video generation typically takes 1-5 minutes.`,
             },

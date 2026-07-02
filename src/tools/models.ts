@@ -14,21 +14,24 @@ export function registerModelTools(server: McpServer): void {
       description: `List all available models on Atlas Cloud, optionally filtered by type.
 
 Args:
-  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video"
+  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio"
 
 Returns:
   Markdown-formatted list of models grouped by type, including model ID, description, provider, and pricing.
 
+Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Text-to-speech / TTS models are Audio-type models (filter with type="Audio").
+
 Examples:
   - No params -> list all models
-  - type="Image" -> list only image generation models
+  - type="Image" -> list only image generation models (includes 3D)
   - type="Video" -> list only video generation models
-  - type="Text" -> list only LLM/text models`,
+  - type="Text" -> list only LLM/text models
+  - type="Audio" -> list only audio / text-to-speech models`,
       inputSchema: {
         type: z
-          .enum(["Text", "Image", "Video"])
+          .enum(["Text", "Image", "Video", "Audio"])
           .optional()
-          .describe("Filter by model type: Text, Image, or Video"),
+          .describe("Filter by model type: Text, Image, Video, or Audio"),
       },
       annotations: {
         readOnlyHint: true,

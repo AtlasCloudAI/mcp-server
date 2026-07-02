@@ -79,6 +79,56 @@ export interface UploadResponse {
   };
 }
 
+// A monetary amount as returned by billing endpoints
+export interface MoneyValue {
+  value: string;
+  currency: string;
+}
+
+// GET /public/v1/balance
+export interface BalanceResponse {
+  object: string;
+  scope: string;
+  account?: {
+    id: string;
+    name: string;
+    type: string;
+  };
+  available?: MoneyValue;
+  cash?: MoneyValue;
+  bonus?: MoneyValue;
+  subscription_bonus?: MoneyValue;
+  frozen?: MoneyValue;
+  credit_grant?: {
+    status?: string;
+    granted?: MoneyValue;
+    used?: MoneyValue;
+    remaining_overdraft?: MoneyValue;
+    overdrawn?: MoneyValue;
+  };
+  request_id?: string;
+}
+
+// A single daily bucket shared by usage and cost list responses
+export interface DailyBucket {
+  object: string;
+  date: string;
+  start_at?: string;
+  end_at?: string;
+  partial?: boolean;
+  results?: Array<Record<string, unknown>>;
+}
+
+// GET /public/v1/model-usage and /public/v1/model-costs
+export interface UsageListResponse {
+  object: string;
+  scope: string;
+  data: DailyBucket[];
+  has_more?: boolean;
+  next_page?: string | null;
+  request_id?: string;
+}
+
 // LLM chat message
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

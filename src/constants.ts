@@ -1,6 +1,8 @@
 // Atlas Cloud API base URLs
 export const API_BASE = "https://api.atlascloud.ai/api/v1";
 export const LLM_API_BASE = "https://api.atlascloud.ai/v1";
+// Public billing/usage endpoints (balance, usage, costs) use a separate base path
+export const PUBLIC_API_BASE = "https://api.atlascloud.ai/public/v1";
 
 // Upload timeout (60s for larger files)
 export const UPLOAD_TIMEOUT_MS = 60000;

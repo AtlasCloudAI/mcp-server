@@ -1,7 +1,7 @@
 {
   "name": "atlascloud-mcp",
-  "version": "1.3.0",
-  "description": "MCP server for AI image / video generation & LLM chat. Use Sora 2, Veo 3, Kling 3, Seedance 2, Flux 2, Nano Banana Pro in Claude Code, Cursor, Codex, Gemini CLI.",
+  "version": "1.4.0",
+  "description": "MCP server for AI image / video / 3D / audio (TTS) generation & LLM chat. Use Sora 2, Veo 3, Kling 3, Seedance 2, Flux 2, Nano Banana Pro, Hunyuan 3D, Seed Audio in Claude Code, Cursor, Codex, Gemini CLI.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -36,9 +36,16 @@
     "gpt-image-2",
     "ai-video-generation",
     "text-to-image",
+    "text-to-speech",
+    "tts",
+    "seed-audio",
+    "hunyuan-3d",
+    "image-to-3d",
     "llm",
     "image-generation",
-    "video-generation"
+    "video-generation",
+    "audio-generation",
+    "3d-generation"
   ],
   "license": "MIT",
   "dependencies": {

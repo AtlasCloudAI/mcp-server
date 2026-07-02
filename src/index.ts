@@ -17,13 +17,15 @@ import { registerDocsTools } from "./tools/docs.js";
 import { registerModelTools } from "./tools/models.js";
 import { registerImageTools } from "./tools/image.js";
 import { registerVideoTools } from "./tools/video.js";
+import { registerAudioTools } from "./tools/audio.js";
 import { registerLLMTools } from "./tools/llm.js";
 import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 import { registerUploadTools } from "./tools/upload.js";
+import { registerAccountTools } from "./tools/account.js";
 
 const server = new McpServer({
   name: "atlascloud-mcp",
-  version: "1.0.0",
+  version: "1.4.0",
 });
 
 // Register all tools
@@ -31,9 +33,11 @@ registerDocsTools(server);
 registerModelTools(server);
 registerImageTools(server);
 registerVideoTools(server);
+registerAudioTools(server);
 registerLLMTools(server);
 registerQuickGenerateTools(server);
 registerUploadTools(server);
+registerAccountTools(server);
 
 // Start stdio transport
 async function main(): Promise<void> {

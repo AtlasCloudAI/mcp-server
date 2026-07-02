@@ -4,6 +4,7 @@ import { ProxyAgent, type Dispatcher } from "undici";
 import {
   API_BASE,
   LLM_API_BASE,
+  PUBLIC_API_BASE,
   REQUEST_TIMEOUT_MS,
   UPLOAD_TIMEOUT_MS,
   MAX_RETRIES,
@@ -206,6 +207,14 @@ export function llmApi<T>(
   options?: Parameters<typeof request>[2]
 ): Promise<T> {
   return request<T>(LLM_API_BASE, endpoint, options);
+}
+
+// Public billing/usage API (api.atlascloud.ai/public/v1): balance, usage, costs
+export function publicApi<T>(
+  endpoint: string,
+  options?: Parameters<typeof request>[2]
+): Promise<T> {
+  return request<T>(PUBLIC_API_BASE, endpoint, options);
 }
 
 // Upload a local file to Atlas Cloud, returns a download URL

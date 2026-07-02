@@ -3,12 +3,25 @@ import { z } from "zod";
 import { searchModels, findModel } from "../services/doc-fetcher.js";
 import { api, fetchExternal } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
+import {
+  validateModelParams,
+  formatValidationError,
+} from "../utils/schema-validator.js";
 import type { Model, PredictionResponse } from "../types.js";
+
+type GenType = "Image" | "Video" | "Audio";
+
+// Map a generation type to its submit endpoint
+const ENDPOINTS: Record<GenType, string> = {
+  Image: "/model/generateImage",
+  Video: "/model/generateVideo",
+  Audio: "/model/generateAudio",
+};
 
 // Resolve model from fuzzy keyword
 async function resolveModel(
   keyword: string,
-  type: "Image" | "Video"
+  type: GenType
 ): Promise<{ model: Model; candidates?: Model[] } | { error: string }> {
   // Try exact match first
   const exact = await findModel(keyword);
@@ -99,19 +112,21 @@ export function registerQuickGenerateTools(server: McpServer): void {
   server.registerTool(
     "atlas_quick_generate",
     {
-      title: "Quick Generate Image/Video",
-      description: `One-step image or video generation - automatically finds the model by keyword, fetches its schema, builds parameters, and submits the task.
+      title: "Quick Generate Image/Video/Audio",
+      description: `One-step image, video, or audio (TTS) generation - automatically finds the model by keyword, fetches its schema, builds parameters, and submits the task.
 
-IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image or atlas_generate_video with the exact model ID instead.
+Parameters are validated against the model's schema BEFORE submitting. If extra_params contains fields the model does not accept (or wrong values), the tool returns a precise error and does NOT spend credits.
+
+IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image / atlas_generate_video / atlas_generate_audio with the exact model ID instead. Do NOT invent extra_params - only pass parameters you know the model accepts (check atlas_get_model_info).
 
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
 Args:
-  - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance")
-  - type (string, required): Generation type: "Image" or "Video"
-  - prompt (string, required): Text description of what to generate
-  - image_url (string, optional): Source image URL for image-to-video or image editing models
-  - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"})
+  - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance", "Seed Audio")
+  - type (string, required): Generation type: "Image", "Video", or "Audio"
+  - prompt (string, required): Text description of what to generate (for Audio, this is the text to synthesize)
+  - image_url (string, optional): Source image URL for image-to-video, image editing, or image-to-3D models
+  - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction.
@@ -120,17 +135,18 @@ Examples:
   - model_keyword="nano banana", type="Image", prompt="a cute cat in space"
   - model_keyword="seedream v5", type="Image", prompt="sunset over mountains"
   - model_keyword="kling v3", type="Video", prompt="a rocket launching", extra_params={"duration": 5}
-  - model_keyword="seedance", type="Video", prompt="camera panning right", image_url="https://example.com/photo.jpg"`,
+  - model_keyword="seedance", type="Video", prompt="camera panning right", image_url="https://example.com/photo.jpg"
+  - model_keyword="seed audio", type="Audio", prompt="Welcome to Atlas Cloud."`,
       inputSchema: {
         model_keyword: z
           .string()
           .min(1)
           .describe(
-            'Keyword to find the model (e.g., "nano banana", "seedream", "kling v3")'
+            'Keyword to find the model (e.g., "nano banana", "seedream", "kling v3", "seed audio")'
           ),
         type: z
-          .enum(["Image", "Video"])
-          .describe("Generation type: Image or Video"),
+          .enum(["Image", "Video", "Audio"])
+          .describe("Generation type: Image, Video, or Audio"),
         prompt: z
           .string()
           .min(1)
@@ -138,12 +154,12 @@ Examples:
         image_url: z
           .string()
           .optional()
-          .describe("Source image URL for image-to-video or image editing models"),
+          .describe("Source image URL for image-to-video, image editing, or image-to-3D models"),
         extra_params: z
           .record(z.unknown())
           .optional()
           .describe(
-            "Additional model-specific parameters to override defaults"
+            "Additional model-specific parameters to override defaults. Only include parameters the model's schema accepts."
           ),
       },
       annotations: {
@@ -202,9 +218,30 @@ Examples:
           };
         }
 
+        // Step 3b: Validate the built params against the schema before submitting,
+        // so invented/invalid extra_params fail fast without spending credits.
+        if (schema) {
+          const { model: _model, ...paramsToValidate } = requestBody;
+          const validation = validateModelParams(
+            schema,
+            foundModel.model,
+            paramsToValidate
+          );
+          if (!validation.ok) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: formatValidationError(foundModel.model, validation),
+                },
+              ],
+            };
+          }
+        }
+
         // Step 4: Submit generation
-        const endpoint =
-          type === "Image" ? "/model/generateImage" : "/model/generateVideo";
+        const endpoint = ENDPOINTS[type];
         const response = await api<PredictionResponse>(endpoint, {
           method: "POST",
           body: requestBody,
@@ -236,7 +273,12 @@ Examples:
           lines.push("");
         }
 
-        const waitTime = type === "Image" ? "10-30 seconds" : "1-5 minutes";
+        const waitTime =
+          type === "Image"
+            ? "10-30 seconds"
+            : type === "Audio"
+              ? "10-60 seconds"
+              : "1-5 minutes";
         lines.push(`${type} generation submitted successfully.\n`);
         lines.push(
           `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`

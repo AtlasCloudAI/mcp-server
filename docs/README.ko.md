@@ -30,13 +30,13 @@
 
 <!-- ATLAS-MODELS:START lang=ko campaign=mcp-server -->
 <!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
-- 🎬 **비디오** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎬 **비디오** (170) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
 - 🎨 **이미지** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
 - 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
 - 💬 **LLM** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
 - 🔊 **오디오 (TTS · 음악 · STT)** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **더 살펴보기** — [전체 350개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 361개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 ## 목차

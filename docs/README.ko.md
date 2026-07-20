@@ -28,13 +28,16 @@
 
 ## 지원 모델
 
-- 🎬 **비디오** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
-- 🎨 **이미지** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
-- 🧊 **3D** — Hunyuan 3D 이미지→3D / 텍스트→3D
-- 💬 **LLM** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
-- 🔊 **오디오 (TTS)** — Seed Audio · xAI/Grok TTS · ElevenLabs
+<!-- ATLAS-MODELS:START lang=ko campaign=mcp-server -->
+<!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
+- 🎬 **비디오** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎨 **이미지** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
+- 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
+- 💬 **LLM** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
+- 🔊 **오디오 (TTS · 음악 · STT)** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **더 살펴보기** — [300개 이상의 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 350개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+<!-- ATLAS-MODELS:END -->
 
 ## 목차
 
@@ -134,7 +137,8 @@ MCP보다 Skills를 사용하고 싶다면, Claude Code 및 기타 Skills 지원
 | `atlas_get_model_info` | API 스키마, 파라미터, 사용 예제를 포함한 모델 상세 정보 조회 |
 | `atlas_generate_image` | 지원되는 모든 Image 모델로 이미지 및 3D 모델 생성 (이미지→3D / 텍스트→3D) |
 | `atlas_generate_video` | 지원되는 모든 비디오 모델로 비디오 생성 |
-| `atlas_generate_audio` | 지원되는 모든 오디오 모델로 오디오 / 음성 생성 (TTS) |
+| `atlas_generate_audio` | 오디오 생성 — 음성(TTS) 및 음악/노래(Suno, MiniMax Music) |
+| `atlas_transcribe_audio` | 음성을 텍스트로 변환(ASR) — 회의·인터뷰·음성 메모 전사 |
 | `atlas_quick_generate` | 원스텝 이미지/비디오/오디오 생성 — 키워드로 모델을 자동으로 찾고, 파라미터를 구성하여 제출 |
 | `atlas_upload_media` | 로컬 파일을 업로드하여 이미지 편집 / 이미지→비디오 모델에 사용할 URL 획득 |
 | `atlas_chat` | LLM 모델과 채팅 (OpenAI 호환 형식) |

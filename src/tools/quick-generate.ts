@@ -53,6 +53,7 @@ function buildParams(
   modelId: string,
   prompt: string,
   imageUrl?: string,
+  audioUrl?: string,
   extraParams?: Record<string, unknown>
 ): Record<string, unknown> {
   const s = schema as Record<string, any>;
@@ -91,6 +92,23 @@ function buildParams(
     }
   }
 
+  // Set audio URL if provided (lipsync / talking-avatar / speech-to-text models)
+  if (audioUrl) {
+    const audioField = Object.keys(properties).find(
+      (k) =>
+        k === "audio_url" ||
+        k === "audio" ||
+        k === "input_audio" ||
+        k === "reference_audio" ||
+        k === "voice_url" ||
+        properties[k]?.description?.toLowerCase().includes("audio url") ||
+        properties[k]?.description?.toLowerCase().includes("input audio")
+    );
+    if (audioField) {
+      params[audioField] = audioUrl;
+    }
+  }
+
   // Fill required fields with defaults if not already set
   for (const key of required) {
     if (params[key] !== undefined) continue;
@@ -113,7 +131,9 @@ export function registerQuickGenerateTools(server: McpServer): void {
     "atlas_quick_generate",
     {
       title: "Quick Generate Image/Video/Audio",
-      description: `One-step image, video, or audio (TTS) generation - automatically finds the model by keyword, fetches its schema, builds parameters, and submits the task.
+      description: `One-step image, video, or audio generation - automatically finds the model by keyword, fetches its schema, builds parameters, and submits the task.
+
+Covers all generation tasks: text-to-image, image editing, 3D (image/text-to-3D), text/image-to-video, lipsync & talking-avatar (video + audio_url), TTS, and music generation.
 
 Parameters are validated against the model's schema BEFORE submitting. If extra_params contains fields the model does not accept (or wrong values), the tool returns a precise error and does NOT spend credits.
 
@@ -122,10 +142,11 @@ IMPORTANT: If this tool fails to find a model, call atlas_list_models first to g
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
 Args:
-  - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance", "Seed Audio")
+  - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance", "Seed Audio", "Suno", "Omni Human")
   - type (string, required): Generation type: "Image", "Video", or "Audio"
-  - prompt (string, required): Text description of what to generate (for Audio, this is the text to synthesize)
-  - image_url (string, optional): Source image URL for image-to-video, image editing, or image-to-3D models
+  - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description)
+  - image_url (string, optional): Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models
+  - audio_url (string, optional): Source audio URL for lipsync / talking-avatar video models (the speech the character should say) or speech-to-text models
   - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
 
 Returns:
@@ -136,7 +157,9 @@ Examples:
   - model_keyword="seedream v5", type="Image", prompt="sunset over mountains"
   - model_keyword="kling v3", type="Video", prompt="a rocket launching", extra_params={"duration": 5}
   - model_keyword="seedance", type="Video", prompt="camera panning right", image_url="https://example.com/photo.jpg"
-  - model_keyword="seed audio", type="Audio", prompt="Welcome to Atlas Cloud."`,
+  - model_keyword="seed audio", type="Audio", prompt="Welcome to Atlas Cloud."
+  - model_keyword="suno", type="Audio", prompt="upbeat synthwave song about coding at night"
+  - model_keyword="omni human", type="Video", prompt="the person speaks to camera", image_url="https://example.com/portrait.jpg", audio_url="https://example.com/speech.mp3"`,
       inputSchema: {
         model_keyword: z
           .string()
@@ -154,7 +177,11 @@ Examples:
         image_url: z
           .string()
           .optional()
-          .describe("Source image URL for image-to-video, image editing, or image-to-3D models"),
+          .describe("Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models"),
+        audio_url: z
+          .string()
+          .optional()
+          .describe("Source audio URL for lipsync / talking-avatar video models or speech-to-text models"),
         extra_params: z
           .record(z.unknown())
           .optional()
@@ -174,6 +201,7 @@ Examples:
       type,
       prompt,
       image_url,
+      audio_url,
       extra_params,
     }) => {
       try {
@@ -207,6 +235,7 @@ Examples:
             foundModel.model,
             prompt,
             image_url,
+            audio_url,
             extra_params
           );
         } else {
@@ -214,6 +243,7 @@ Examples:
             model: foundModel.model,
             prompt,
             ...(image_url ? { image_url } : {}),
+            ...(audio_url ? { audio_url } : {}),
             ...(extra_params || {}),
           };
         }

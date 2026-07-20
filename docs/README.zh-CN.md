@@ -28,13 +28,16 @@
 
 ## 支持的模型
 
-- 🎬 **视频** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
-- 🎨 **图片** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
-- 🧊 **3D** — Hunyuan 3D 图生 3D / 文生 3D
-- 💬 **大语言模型** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
-- 🔊 **音频（TTS）** — Seed Audio · xAI/Grok TTS · ElevenLabs
+<!-- ATLAS-MODELS:START lang=zh-CN campaign=mcp-server -->
+<!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
+- 🎬 **视频** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎨 **图片** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
+- 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
+- 💬 **大语言模型** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
+- 🔊 **音频（TTS · 音乐 · 语音识别）** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **探索更多** — [300+ 模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **探索更多** — [全部 350 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+<!-- ATLAS-MODELS:END -->
 
 ## 目录
 
@@ -54,6 +57,8 @@
 - 🎬 **“把这张产品照片做成一段 5 秒的广告”** — 用 Kling 3、Seedance 2、Veo 3.1、Sora 2 等模型进行图生视频……
 - 🧊 **“用这张照片做一个 3D 模型”** — 用 Hunyuan 3D 进行图生 3D / 文生 3D（输出 GLB/OBJ/USDZ）
 - 🔊 **“把这段脚本朗读出来”** — 用 Seed Audio、ElevenLabs、xAI TTS 进行文本转语音
+- 🎵 **“给我的应用写首主题曲”** — 用 Suno、MiniMax Music 生成音乐
+- 📝 **“把这段会议录音转成文字”** — 用 Seed ASR、xAI STT 语音识别
 - 🎞️ **“把这段脚本分镜成 6 个镜头”** — 在一次对话中串联 大语言模型 → 图片 → 视频
 - ✏️ **“编辑这张图 —— 加一顶帽子”** — 上传本地文件，然后运行图片编辑模型
 - 💸 **“还剩多少额度，这个月花了多少？”** — 查询余额、用量和费用明细
@@ -134,7 +139,8 @@ goose mcp add atlascloud -- npx -y atlascloud-mcp
 | `atlas_get_model_info` | 获取模型详情，包括 API Schema、参数说明和使用示例 |
 | `atlas_generate_image` | 使用任意支持的图片模型生成图片和 3D 模型（图生 3D / 文生 3D） |
 | `atlas_generate_video` | 使用任意支持的视频模型生成视频 |
-| `atlas_generate_audio` | 使用任意支持的音频模型生成音频 / 语音（TTS） |
+| `atlas_generate_audio` | 生成音频 — 语音（TTS）与音乐/歌曲（Suno、MiniMax Music） |
+| `atlas_transcribe_audio` | 语音转文字（ASR）— 会议、访谈、语音笔记转写 |
 | `atlas_quick_generate` | 一步生成图片/视频/音频 —— 按关键词自动查找模型、构建参数并提交 |
 | `atlas_upload_media` | 上传本地文件获取 URL，用于图片编辑 / 图生视频等模型 |
 | `atlas_chat` | 与大语言模型对话（兼容 OpenAI 格式） |
@@ -188,6 +194,18 @@ AI 助手会：
 1. 用 `atlas_list_models` 配合 `type="Audio"` 查找 TTS 模型
 2. 用 `atlas_generate_audio` 合成指定文本
 3. 用 `atlas_get_prediction` 获取生成的音频 URL
+
+### 生成音乐
+
+> “用 Suno 给我的产品 demo 做一段 30 秒的欢快合成器音乐”
+
+音乐模型（Suno Chirp、MiniMax Music）属于 Audio 类型模型，助手会用 `atlas_generate_audio` 传入歌曲描述（可选歌词），再通过 `atlas_get_prediction` 获取音频 URL。
+
+### 转写音频（语音转文字）
+
+> “转写这段访谈录音：https://example.com/interview.mp3”
+
+助手会用 `atlas_transcribe_audio` 配合语音识别模型（如 `bytedance/seed-asr-2.0`）和 `audio_url`，再通过 `atlas_get_prediction` 获取文字稿。本地文件先用 `atlas_upload_media` 拿到 URL。
 
 ### 生成 3D 模型
 

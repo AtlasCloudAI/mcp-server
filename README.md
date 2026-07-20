@@ -28,13 +28,16 @@
 
 ## Supported Models
 
-- 🎬 **Video** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
-- 🎨 **Image** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
-- 🧊 **3D** — Hunyuan 3D image-to-3D / text-to-3D
-- 💬 **LLM** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
-- 🔊 **Audio (TTS)** — Seed Audio · xAI/Grok TTS · ElevenLabs
+<!-- ATLAS-MODELS:START lang=en campaign=mcp-server -->
+<!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
+- 🎬 **Video** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎨 **Image** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
+- 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
+- 💬 **LLM** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
+- 🔊 **Audio (TTS · Music · ASR)** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **Explore more** — [300+ models »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explore more** — [all 350 live models »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+<!-- ATLAS-MODELS:END -->
 
 ## Contents
 
@@ -54,6 +57,8 @@ Ask your AI assistant in plain language — it discovers the right model, builds
 - 🎬 **"Turn this product photo into a 5-second ad"** — image-to-video with Kling 3, Seedance 2, Veo 3.1, Sora 2…
 - 🧊 **"Make a 3D model from this photo"** — image-to-3D / text-to-3D with Hunyuan 3D (GLB/OBJ/USDZ output)
 - 🔊 **"Read this script aloud"** — text-to-speech with Seed Audio, ElevenLabs, xAI TTS
+- 🎵 **"Write a theme song for my app"** — music generation with Suno, MiniMax Music
+- 📝 **"Transcribe this meeting recording"** — speech-to-text with Seed ASR, xAI STT
 - 🎞️ **"Storyboard this script into 6 shots"** — chain LLM → image → video inside one conversation
 - ✏️ **"Edit this image — add a hat"** — upload a local file, then run an image-editing model
 - 💸 **"How much credit is left, and what did I spend this month?"** — check balance, usage, and cost breakdowns
@@ -134,7 +139,8 @@ If you'd rather use Skills than MCP, we also ship an [Atlas Cloud Skills](https:
 | `atlas_get_model_info` | Get detailed model info including API schema, parameters, and usage examples |
 | `atlas_generate_image` | Generate images and 3D models (image-to-3D / text-to-3D) with any supported Image model |
 | `atlas_generate_video` | Generate videos with any supported video model |
-| `atlas_generate_audio` | Generate audio / speech (TTS) with any supported audio model |
+| `atlas_generate_audio` | Generate audio — speech (TTS) and music/songs (Suno, MiniMax Music) — with any supported audio model |
+| `atlas_transcribe_audio` | Transcribe speech to text (ASR) — meetings, interviews, voice notes |
 | `atlas_quick_generate` | One-step image/video/audio generation — auto-finds model by keyword, builds params, and submits |
 | `atlas_upload_media` | Upload local files to get a URL for use with image-edit / image-to-video models |
 | `atlas_chat` | Chat with LLM models (OpenAI-compatible format) |
@@ -188,6 +194,18 @@ The assistant will:
 1. Use `atlas_list_models` with `type="Audio"` to find the TTS model
 2. Use `atlas_generate_audio` with the text to synthesize
 3. Use `atlas_get_prediction` to retrieve the generated audio URL
+
+### Generate music
+
+> "Make a 30-second upbeat synthwave track for my product demo with Suno"
+
+Music models (Suno Chirp, MiniMax Music) are Audio-type models, so the assistant uses `atlas_generate_audio` with a song description (and optionally lyrics), then retrieves the audio URL via `atlas_get_prediction`.
+
+### Transcribe audio (speech-to-text)
+
+> "Transcribe this interview recording: https://example.com/interview.mp3"
+
+The assistant uses `atlas_transcribe_audio` with a speech-to-text model (e.g., `bytedance/seed-asr-2.0`) and the `audio_url`, then retrieves the transcript via `atlas_get_prediction`. For local files, it first calls `atlas_upload_media` to get a URL.
 
 ### Generate a 3D model
 

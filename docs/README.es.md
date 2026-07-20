@@ -28,13 +28,16 @@
 
 ## Modelos compatibles
 
-- 🎬 **Vídeo** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
-- 🎨 **Imagen** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
-- 🧊 **3D** — Hunyuan 3D imagen-a-3D / texto-a-3D
-- 💬 **LLM** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
-- 🔊 **Audio (TTS)** — Seed Audio · xAI/Grok TTS · ElevenLabs
+<!-- ATLAS-MODELS:START lang=es campaign=mcp-server -->
+<!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
+- 🎬 **Vídeo** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎨 **Imagen** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
+- 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
+- 💬 **LLM** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
+- 🔊 **Audio (TTS · Música · ASR)** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **Explora más** — [más de 300 modelos »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explora más** — [los 350 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+<!-- ATLAS-MODELS:END -->
 
 ## Contenido
 
@@ -134,7 +137,8 @@ Si prefieres usar Skills en lugar de MCP, también ofrecemos un paquete [Atlas C
 | `atlas_get_model_info` | Obtener información detallada del modelo, incluyendo esquema de la API, parámetros y ejemplos de uso |
 | `atlas_generate_image` | Generar imágenes y modelos 3D (imagen-a-3D / texto-a-3D) con cualquier modelo de imagen compatible |
 | `atlas_generate_video` | Generar vídeos con cualquier modelo de vídeo compatible |
-| `atlas_generate_audio` | Generar audio / voz (TTS) con cualquier modelo de audio compatible |
+| `atlas_generate_audio` | Generar audio — voz (TTS) y música/canciones (Suno, MiniMax Music) |
+| `atlas_transcribe_audio` | Transcribir voz a texto (ASR) — reuniones, entrevistas, notas de voz |
 | `atlas_quick_generate` | Generación de imagen/vídeo/audio en un paso — encuentra el modelo por palabra clave, construye los parámetros y envía |
 | `atlas_upload_media` | Subir archivos locales para obtener una URL utilizable con modelos de edición de imagen / imagen-a-vídeo |
 | `atlas_chat` | Chatear con modelos LLM (formato compatible con OpenAI) |

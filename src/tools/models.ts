@@ -19,14 +19,14 @@ Args:
 Returns:
   Markdown-formatted list of models grouped by type, including model ID, description, provider, and pricing.
 
-Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Text-to-speech / TTS models are Audio-type models (filter with type="Audio").
+Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Audio-type models (filter with type="Audio") include text-to-speech / TTS, music generation (e.g., Suno, MiniMax Music), and speech-to-text / ASR (e.g., Seed ASR). Lipsync / talking-avatar models are Video-type models.
 
 Examples:
   - No params -> list all models
   - type="Image" -> list only image generation models (includes 3D)
-  - type="Video" -> list only video generation models
+  - type="Video" -> list only video generation models (includes lipsync / talking-avatar)
   - type="Text" -> list only LLM/text models
-  - type="Audio" -> list only audio / text-to-speech models`,
+  - type="Audio" -> list only audio models (TTS, music generation, speech-to-text/ASR)`,
       inputSchema: {
         type: z
           .enum(["Text", "Image", "Video", "Audio"])

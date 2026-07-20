@@ -28,13 +28,16 @@
 
 ## Modèles pris en charge
 
-- 🎬 **Vidéo** — Seedance 2.0 · Kling 3 · Sora 2 · Veo 3.1 · HappyHorse 1 · Grok Imagine 1.5 · Wan 2.7
-- 🎨 **Image** — Nano Banana 2/Pro · GPT Image 2 · Flux 2 · Seedream 5
-- 🧊 **3D** — Hunyuan 3D image-vers-3D / texte-vers-3D
-- 💬 **LLM** — Claude · GPT · DeepSeek · MiniMax · Kimi · GLM · Qwen
-- 🔊 **Audio (TTS)** — Seed Audio · xAI/Grok TTS · ElevenLabs
+<!-- ATLAS-MODELS:START lang=fr campaign=mcp-server -->
+<!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
+- 🎬 **Vidéo** (159) — Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash · Avatar Omni Human 1.5 · Kling V3.0 Turbo · Kling Video O3 4K
+- 🎨 **Image** (96) — Seedream v5.0 Pro · Nano Banana 2 Lite · MAI-Image-2.5-Flash · MAI-Image-2.5
+- 🧊 **3D** (5) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro
+- 💬 **LLM** (57) — Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5 · Doubao Seed 2.1 Turbo
+- 🔊 **Audio (TTS · Musique · ASR)** (14) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-auk
 
-- 📚 **Explorer plus** — [plus de 300 modèles »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explorer plus** — [les 350 modèles en ligne »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+<!-- ATLAS-MODELS:END -->
 
 ## Sommaire
 
@@ -134,7 +137,8 @@ Si vous préférez utiliser les Skills plutôt que MCP, nous proposons égalemen
 | `atlas_get_model_info` | Obtenir les informations détaillées d'un modèle : schéma API, paramètres et exemples d'utilisation |
 | `atlas_generate_image` | Générer des images et des modèles 3D (image-vers-3D / texte-vers-3D) avec n'importe quel modèle Image pris en charge |
 | `atlas_generate_video` | Générer des vidéos avec n'importe quel modèle vidéo pris en charge |
-| `atlas_generate_audio` | Générer de l'audio / de la parole (TTS) avec n'importe quel modèle audio pris en charge |
+| `atlas_generate_audio` | Générer de l'audio — parole (TTS) et musique/chansons (Suno, MiniMax Music) |
+| `atlas_transcribe_audio` | Transcrire la parole en texte (ASR) — réunions, interviews, notes vocales |
 | `atlas_quick_generate` | Génération d'image/vidéo/audio en une étape — trouve automatiquement le modèle par mot-clé, construit les paramètres et soumet |
 | `atlas_upload_media` | Téléverser des fichiers locaux pour obtenir une URL utilisable avec les modèles d'édition d'image / image-vers-vidéo |
 | `atlas_chat` | Discuter avec les modèles LLM (format compatible OpenAI) |

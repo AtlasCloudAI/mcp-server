@@ -33,10 +33,10 @@
 - 🎬 **비디오** (181) — MiniMax H3 · Youchuan V8.2 · Wan 2.7 Spicy · Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash
 - 🎨 **이미지** (112) — Reve 2.1 · Youchuan V8.2 · Seedream v5.0 Pro · Nano Banana 2 Lite
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
-- 💬 **LLM** (61) — Kimi K3 · Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5
-- 🔊 **오디오 (TTS · 음악 · STT)** (19) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Gemini 3.1 Flash TTS
+- 💬 **LLM** (62) — Qwen3.8 Max · Kimi K3 · Grok 4.5 · KAT Coder Pro V2.5
+- 🔊 **오디오 (TTS · 음악 · STT)** (11) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Gemini 3.1 Flash TTS
 
-- 📚 **더 살펴보기** — [전체 392개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 385개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 ## 목차

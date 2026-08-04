@@ -33,10 +33,10 @@
 - 🎬 **视频** (181) — MiniMax H3 · Youchuan V8.2 · Wan 2.7 Spicy · Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash
 - 🎨 **图片** (112) — Reve 2.1 · Youchuan V8.2 · Seedream v5.0 Pro · Nano Banana 2 Lite
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
-- 💬 **大语言模型** (61) — Kimi K3 · Grok 4.5 · KAT Coder Pro V2.5 · KAT Coder Air V2.5
-- 🔊 **音频（TTS · 音乐 · 语音识别）** (19) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Gemini 3.1 Flash TTS
+- 💬 **大语言模型** (62) — Qwen3.8 Max · Kimi K3 · Grok 4.5 · KAT Coder Pro V2.5
+- 🔊 **音频（TTS · 音乐 · 语音识别）** (11) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Gemini 3.1 Flash TTS
 
-- 📚 **探索更多** — [全部 392 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **探索更多** — [全部 385 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 ## 目录

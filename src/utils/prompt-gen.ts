@@ -2,6 +2,22 @@
  * Generate LLM-friendly model documentation from OpenAPI schema.
  * Adapted from Atlas Cloud homepage generateLLMPrompt utility.
  */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 export function generateLLMPrompt(
   schema: Record<string, unknown>,
   modelName?: string,
@@ -11,9 +27,11 @@ export function generateLLMPrompt(
   if (!schema) return "# Error\n\nSchema not available";
 
   const sections: string[] = [];
-  const s = schema as Record<string, any>;
+  const info = asRecord(schema.info);
+  const components = asRecord(schema.components);
+  const schemas = asRecord(components?.schemas);
 
-  const title = modelName || s.info?.title || "Model Documentation";
+  const title = modelName || asString(info?.title) || "Model Documentation";
   sections.push(`# ${title}\n`);
 
   if (modelDescription) {
@@ -22,8 +40,10 @@ export function generateLLMPrompt(
 
   sections.push("## Overview\n");
 
-  const serverUrl = s.servers?.[0]?.url || "https://api.atlascloud.ai";
-  const paths = s.paths || {};
+  const servers = Array.isArray(schema.servers) ? schema.servers : [];
+  const firstServer = asRecord(servers[0]);
+  const serverUrl = asString(firstServer?.url) || "https://api.atlascloud.ai";
+  const paths = asRecord(schema.paths) ?? {};
   let pathKeys = Object.keys(paths);
 
   // Fix endpoint path based on model type
@@ -52,25 +72,27 @@ export function generateLLMPrompt(
   );
 
   // Input Schema
-  const inputSchema = s.components?.schemas?.Input;
+  const inputSchema = asRecord(schemas?.Input);
   if (inputSchema) {
     sections.push("### Input Schema\n");
     sections.push("The API accepts the following input parameters:\n");
 
-    const properties = inputSchema.properties || {};
-    const required: string[] = inputSchema.required || [];
-    const orderProperties: string[] =
-      inputSchema["x-order-properties"] || Object.keys(properties);
+    const properties = asRecord(inputSchema.properties) ?? {};
+    const required = asStringArray(inputSchema.required);
+    const configuredOrder = asStringArray(inputSchema["x-order-properties"]);
+    const orderProperties = configuredOrder.length > 0
+      ? configuredOrder
+      : Object.keys(properties);
 
     for (const key of orderProperties) {
-      const prop = properties[key];
+      const prop = asRecord(properties[key]);
       if (!prop) continue;
 
       const isRequired = required.includes(key);
-      const type = prop.type || "string";
-      const description = prop.description || "";
+      const type = asString(prop.type) || "string";
+      const description = asString(prop.description) || "";
       const defaultValue = prop.default;
-      const enumValues = prop.enum;
+      const enumValues = Array.isArray(prop.enum) ? prop.enum : undefined;
 
       sections.push(
         `- **\`${key}\`** (\`${type}\`, _${isRequired ? "required" : "optional"}_):`
@@ -94,7 +116,7 @@ export function generateLLMPrompt(
     if (modelName) requiredExample.model = modelName;
     for (const key of required) {
       if (key === "model") continue;
-      const prop = properties[key];
+      const prop = asRecord(properties[key]);
       if (prop) {
         requiredExample[key] = prop.default !== undefined ? prop.default : "";
       }
@@ -109,7 +131,7 @@ export function generateLLMPrompt(
     if (modelName) fullExample.model = modelName;
     for (const key of orderProperties) {
       if (key === "model") continue;
-      const prop = properties[key];
+      const prop = asRecord(properties[key]);
       if (prop) {
         fullExample[key] = prop.default !== undefined ? prop.default : "";
       }
@@ -119,16 +141,18 @@ export function generateLLMPrompt(
   }
 
   // Output Schema
-  const outputSchema = s.components?.schemas?.PredictionResponse;
+  const outputSchema = asRecord(schemas?.PredictionResponse);
   if (outputSchema) {
     sections.push("\n### Output Schema\n");
     sections.push("The API returns the following output format:\n\n");
 
-    const properties = outputSchema.properties || {};
-    for (const [key, prop] of Object.entries(properties) as Array<[string, any]>) {
-      const type = prop.type || "string";
-      const format = prop.format ? ` (${prop.format})` : "";
-      const description = prop.description || "";
+    const properties = asRecord(outputSchema.properties) ?? {};
+    for (const [key, rawProperty] of Object.entries(properties)) {
+      const prop = asRecord(rawProperty) ?? {};
+      const type = asString(prop.type) || "string";
+      const propFormat = asString(prop.format);
+      const format = propFormat ? ` (${propFormat})` : "";
+      const description = asString(prop.description) || "";
       sections.push(`- **\`${key}\`** (\`${type}${format}\`, _optional_):`);
       if (description) sections.push(`  ${description}`);
       sections.push("");
@@ -137,12 +161,13 @@ export function generateLLMPrompt(
     sections.push("\n\n**Example Response**:\n");
     sections.push("```json");
     const exampleResponse: Record<string, unknown> = {};
-    for (const [key, prop] of Object.entries(properties) as Array<[string, any]>) {
-      if (prop.type === "string") exampleResponse[key] = "";
-      else if (prop.type === "array") exampleResponse[key] = [];
-      else if (prop.type === "object") exampleResponse[key] = {};
-      else if (prop.type === "boolean") exampleResponse[key] = false;
-      else if (prop.type === "integer" || prop.type === "number") exampleResponse[key] = 0;
+    for (const [key, rawProperty] of Object.entries(properties)) {
+      const type = asString(asRecord(rawProperty)?.type);
+      if (type === "string") exampleResponse[key] = "";
+      else if (type === "array") exampleResponse[key] = [];
+      else if (type === "object") exampleResponse[key] = {};
+      else if (type === "boolean") exampleResponse[key] = false;
+      else if (type === "integer" || type === "number") exampleResponse[key] = 0;
       else exampleResponse[key] = null;
     }
     sections.push(JSON.stringify(exampleResponse, null, 2));
@@ -166,12 +191,14 @@ export function generateLLMPrompt(
     if (modelName) fullParams.model = modelName;
 
     if (inputSchema) {
-      const properties = inputSchema.properties || {};
-      const orderProperties: string[] =
-        inputSchema["x-order-properties"] || Object.keys(properties);
+      const properties = asRecord(inputSchema.properties) ?? {};
+      const configuredOrder = asStringArray(inputSchema["x-order-properties"]);
+      const orderProperties = configuredOrder.length > 0
+        ? configuredOrder
+        : Object.keys(properties);
       for (const key of orderProperties) {
         if (key === "model") continue;
-        const prop = properties[key];
+        const prop = asRecord(properties[key]);
         if (prop?.default !== undefined) {
           fullParams[key] = prop.default;
         }

@@ -1,14 +1,29 @@
-import { findModel, getModelSchema } from "./doc-fetcher.js";
+import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
 import { api } from "./api-client.js";
 import {
   fillRequiredDefaults,
   validateModelParams,
   formatValidationError,
 } from "../utils/schema-validator.js";
-import type { Model, PredictionResponse } from "../types.js";
+import type { Model } from "../types.js";
+import {
+  predictionResponseSchema,
+  type PredictionResponse,
+} from "../response-schemas.js";
 
 export type SubmitResult =
   | { ok: true; predictionId: string; model: Model }
+  | { ok: false; message: string };
+
+export interface PreparedGeneration {
+  model: Model;
+  body: Record<string, unknown>;
+  endpoint: string;
+  typeLabel: string;
+}
+
+export type PrepareResult =
+  | { ok: true; prepared: PreparedGeneration }
   | { ok: false; message: string };
 
 interface SubmitOptions {
@@ -29,12 +44,12 @@ interface SubmitOptions {
  *
  * Returns a discriminated result; callers format their own success message.
  */
-export async function submitGeneration(
+export async function prepareGeneration(
   modelId: string,
   params: Record<string, unknown>,
   opts: SubmitOptions
-): Promise<SubmitResult> {
-  const found = await findModel(modelId);
+): Promise<PrepareResult> {
+  const found = await findModelByExactId(modelId);
   if (!found) {
     return {
       ok: false,
@@ -49,8 +64,15 @@ export async function submitGeneration(
   }
 
   // Fetch schema and validate params before hitting the billable endpoint.
-  // If the schema is unavailable, validation is skipped (does not block).
   const schema = await getModelSchema(found);
+  if (!schema) {
+    return {
+      ok: false,
+      message:
+        `The live input schema for model "${found.model}" is unavailable. ` +
+        "No billable request was submitted. Retry later or choose another model whose schema can be inspected.",
+    };
+  }
   const finalParams = fillRequiredDefaults(schema, params);
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
@@ -58,18 +80,43 @@ export async function submitGeneration(
   }
 
   const body = { model: found.model, ...finalParams };
-  const response = await api<PredictionResponse>(opts.endpoint, {
+  return {
+    ok: true,
+    prepared: {
+      model: found,
+      body,
+      endpoint: opts.endpoint,
+      typeLabel: opts.typeLabel,
+    },
+  };
+}
+
+export async function submitPreparedGeneration(
+  prepared: PreparedGeneration
+): Promise<SubmitResult> {
+  const response = await api<PredictionResponse>(prepared.endpoint, {
     method: "POST",
-    body,
+    body: prepared.body,
+    responseSchema: predictionResponseSchema,
   });
 
   const predictionId = response.data?.id;
   if (!predictionId) {
     return {
       ok: false,
-      message: `Failed to start ${opts.typeLabel} generation. Response: ${JSON.stringify(response)}`,
+      message: `The Atlas Cloud API accepted the ${prepared.typeLabel} request but did not return a prediction ID. No automatic retry was attempted.`,
     };
   }
 
-  return { ok: true, predictionId, model: found };
+  return { ok: true, predictionId, model: prepared.model };
+}
+
+export async function submitGeneration(
+  modelId: string,
+  params: Record<string, unknown>,
+  opts: SubmitOptions
+): Promise<SubmitResult> {
+  const prepared = await prepareGeneration(modelId, params, opts);
+  if (!prepared.ok) return prepared;
+  return submitPreparedGeneration(prepared.prepared);
 }

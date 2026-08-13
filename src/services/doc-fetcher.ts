@@ -1,5 +1,6 @@
 import { api, fetchExternal } from "./api-client.js";
 import type { Model, ModelsResponse } from "../types.js";
+import { modelsResponseSchema } from "../response-schemas.js";
 
 // In-memory cache for models list
 let modelsCache: Model[] | null = null;
@@ -13,11 +14,27 @@ export async function getModels(): Promise<Model[]> {
     return modelsCache;
   }
 
-  const response = await api<ModelsResponse>("/models", { requireAuth: false });
+  const response = await api<ModelsResponse>("/models", {
+    requireAuth: false,
+    responseSchema: modelsResponseSchema,
+  });
   const models = (response.data || []).filter((m) => m.display_console !== false);
   modelsCache = models;
   modelsCacheTime = now;
   return models;
+}
+
+export function exactModelById(
+  models: readonly Model[],
+  modelId: string
+): Model | undefined {
+  return models.find((model) => model.model === modelId);
+}
+
+export async function findModelByExactId(
+  modelId: string
+): Promise<Model | undefined> {
+  return exactModelById(await getModels(), modelId);
 }
 
 // Normalize string for fuzzy matching: remove separators, collapse spaces
@@ -31,7 +48,9 @@ function fuzzyMatch(target: string, queryWords: string[]): boolean {
   return queryWords.every((w) => normalizedTarget.includes(w));
 }
 
-// Find a model by model ID (e.g., "deepseek-ai/deepseek-v3.2"), supports exact and normalized match
+// Friendly lookup for read-only documentation. Billable submissions use
+// findModelByExactId instead so a display name or normalized near-match can
+// never select a model implicitly.
 export async function findModel(modelId: string): Promise<Model | undefined> {
   const models = await getModels();
   const normalizedInput = normalize(modelId);
@@ -53,7 +72,9 @@ export async function getModelSchema(
   if (!model.schema) return null;
   try {
     const schema = await fetchExternal(model.schema);
-    return schema as Record<string, unknown>;
+    return schema !== null && typeof schema === "object" && !Array.isArray(schema)
+      ? (schema as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }

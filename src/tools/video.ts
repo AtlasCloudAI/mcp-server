@@ -1,7 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { submitGeneration } from "../services/generation.js";
+import {
+  prepareGeneration,
+  submitPreparedGeneration,
+} from "../services/generation.js";
+import {
+  formatGenerationPricing,
+  issueGenerationConfirmation,
+  verifyGenerationConfirmation,
+} from "../services/generation-confirmation.js";
+import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
+import {
+  generationOutputSchema,
+  generationConfirmationStructuredContent,
+  generationConfirmationTokenSchema,
+  generationStructuredContent,
+  idempotencyKeySchema,
+} from "../tool-contracts.js";
+import { toolAnnotations } from "../tool-policy.js";
 
 export function registerVideoTools(server: McpServer): void {
   server.registerTool(
@@ -12,9 +29,11 @@ export function registerVideoTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
+Billing confirmation is mandatory and happens in two calls. The first call MUST omit confirmation_token: it validates the live schema and returns the exact resolved model, current pricing metadata, and an opaque confirmation token without submitting or spending credits. Show that quote to the user and stop. Only after a new user message explicitly confirms that exact quote may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
+
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact model ID (e.g., "kling-video/kling-v3.0-standard-text-to-video"). If you don't know the exact model ID, you MUST first call atlas_list_models with type="Video" to find it. Do NOT guess model IDs.
+IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Video". Do NOT guess model IDs.
 
 You should also use atlas_get_model_info to see the full parameter list and schema for your chosen video model before calling this tool.
 
@@ -27,12 +46,10 @@ Args:
     - "aspect_ratio" (string): e.g., "16:9", "9:16"
 
 Returns:
-  A prediction ID to check the result with atlas_get_prediction. Video generation typically takes 1-5 minutes.
-
-Examples:
-  - model="kling-video/kling-v3.0-standard-text-to-video", params={"prompt": "a rocket launching into space", "duration": 5}
-  - model="bytedance/seedance-v1.5-pro-image-to-video", params={"prompt": "camera panning right", "image_url": "https://example.com/photo.jpg"}`,
+  A prediction ID to check the result with atlas_get_prediction. Video generation typically takes 1-5 minutes.`,
       inputSchema: {
+        idempotency_key: idempotencyKeySchema,
+        confirmation_token: generationConfirmationTokenSchema,
         model: z.string().min(1).describe("Video model ID"),
         params: z
           .record(z.unknown())
@@ -40,20 +57,64 @@ Examples:
             "Model-specific parameters as JSON object. Use atlas_get_model_info to see available parameters for your chosen model."
           ),
       },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      outputSchema: generationOutputSchema,
+      annotations: toolAnnotations("atlas_generate_video"),
     },
-    async ({ model, params }) => {
+    async ({ idempotency_key, confirmation_token, model, params }) => {
       try {
-        const result = await submitGeneration(model, params, {
+        const preparation = await prepareGeneration(model, params, {
           expectedType: "Video",
           endpoint: "/model/generateVideo",
           typeLabel: "video",
         });
+        if (!preparation.ok) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: preparation.message }],
+          };
+        }
+        const { prepared } = preparation;
+        const confirmedRequest = {
+          resolved_model: prepared.model.model,
+          request_body: prepared.body,
+        };
+        if (!confirmation_token) {
+          const confirmation = issueGenerationConfirmation(
+            "atlas_generate_video",
+            idempotency_key,
+            confirmedRequest,
+            prepared.model.price
+          );
+          return {
+            structuredContent: generationConfirmationStructuredContent(
+              prepared.model,
+              "video",
+              confirmation
+            ),
+            content: [{
+              type: "text",
+              text:
+                `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
+                `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
+                `- **Current pricing**: ${formatGenerationPricing(confirmation.pricing)}\n` +
+                `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
+                `Show this exact model and pricing to the user, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with the returned confirmation_token.`,
+            }],
+          };
+        }
+        verifyGenerationConfirmation(
+          confirmation_token,
+          "atlas_generate_video",
+          idempotency_key,
+          confirmedRequest,
+          prepared.model.price
+        );
+        const result = await executeIdempotently(
+          "atlas_generate_video",
+          { idempotency_key, ...confirmedRequest },
+          idempotency_key,
+          () => submitPreparedGeneration(prepared)
+        );
 
         if (!result.ok) {
           return {
@@ -63,6 +124,11 @@ Examples:
         }
 
         return {
+          structuredContent: generationStructuredContent(
+            result.predictionId,
+            result.model,
+            "video"
+          ),
           content: [
             {
               type: "text",

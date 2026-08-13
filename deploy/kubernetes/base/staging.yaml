@@ -1,0 +1,473 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlascloud-plugin-redis
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: redis
+spec:
+  selector:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: atlascloud-plugin-redis
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: redis
+spec:
+  serviceName: atlascloud-plugin-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlascloud-openai-plugin
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlascloud-openai-plugin
+        app.kubernetes.io/component: redis
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: registry-1.docker.io/bitnami/redis@sha256:1347d526ecec0c6537e99eac09e7c3405c21664f6044ff60e78b0898da37abd2
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: ALLOW_EMPTY_PASSWORD
+              value: "no"
+            - name: REDIS_AOF_ENABLED
+              value: "yes"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: redis-password
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: redis-password
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /bitnami/redis/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: openebs-hostpath
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-mcp
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlascloud-openai-plugin
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlascloud-openai-plugin
+        app.kubernetes.io/component: mcp
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: atlas-registry-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          imagePullPolicy: IfNotPresent
+          args: ["node", "dist/http.js"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PLUGIN_RELEASE_TIER
+              value: staging
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+            - name: MCP_PUBLIC_URL
+              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+            - name: MCP_OAUTH_ISSUER
+              value: https://atlascloud-auth.dev.atlascloud.ai
+            - name: MCP_OAUTH_JWKS_URI
+              value: https://atlascloud-auth.dev.atlascloud.ai/jwks
+            - name: MCP_OAUTH_ENDPOINT_HOSTS
+              value: atlascloud-auth.dev.atlascloud.ai
+            - name: MCP_OAUTH_AUDIENCE
+              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+            - name: MCP_OAUTH_ALGORITHMS
+              value: RS256
+            - name: MCP_ALLOWED_HOSTS
+              value: atlascloud-mcp.dev.atlascloud.ai
+            - name: MCP_ALLOWED_ORIGINS
+              value: https://chatgpt.com,https://chat.openai.com,https://platform.openai.com
+            - name: MCP_TRUST_PROXY
+              value: "1"
+            - name: MCP_CREDENTIAL_MODE
+              value: subject-map
+            - name: MCP_IDEMPOTENCY_BACKEND
+              value: redis
+            - name: MCP_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: redis-url
+            - name: MCP_GENERATION_CONFIRMATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: generation-confirmation-secret
+            - name: OPENAI_APPS_CHALLENGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: openai-challenge-token
+            - name: MCP_ATLAS_SUBJECT_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: mcp-atlas-subject-keys-json
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-mcp.dev.atlascloud.ai
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-mcp.dev.atlascloud.ai
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlascloud-openai-mcp
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: mcp
+spec:
+  selector:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: mcp
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: auth
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlascloud-openai-plugin
+      app.kubernetes.io/component: auth
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlascloud-openai-plugin
+        app.kubernetes.io/component: auth
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: atlas-registry-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: auth
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          imagePullPolicy: IfNotPresent
+          args: ["node", "dist/auth.js"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PLUGIN_RELEASE_TIER
+              value: staging
+            - name: AUTH_HOST
+              value: 0.0.0.0
+            - name: AUTH_PORT
+              value: "3001"
+            - name: OIDC_ISSUER_URL
+              value: https://atlascloud-auth.dev.atlascloud.ai
+            - name: OIDC_MCP_RESOURCE
+              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+            - name: OIDC_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: redis-url
+            - name: OIDC_REDIS_PREFIX
+              value: atlascloud:openai-plugin:oidc
+            - name: AUTH_ALLOWED_HOSTS
+              value: atlascloud-auth.dev.atlascloud.ai
+            - name: AUTH_TRUST_PROXY
+              value: "1"
+            - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
+              value: "3600"
+            - name: AUTH_REFRESH_TOKEN_TTL_SECONDS
+              value: "604800"
+            - name: AUTH_REFRESH_TOKEN_REUSE_GRACE_SECONDS
+              value: "30"
+            - name: AUTH_REFRESH_TOKEN_REUSE_MAX_ATTEMPTS
+              value: "2"
+            - name: AUTH_DYNAMIC_CLIENT_TTL_SECONDS
+              value: "31536000"
+            - name: AUTH_GRANT_TTL_SECONDS
+              value: "31536000"
+            - name: AUTH_IDENTITY_MODE
+              value: local-reviewer
+            - name: OIDC_JWKS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: oidc-jwks-json
+            - name: OIDC_COOKIE_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: oidc-cookie-keys-json
+            - name: OIDC_USERS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: oidc-users-json
+          ports:
+            - name: http
+              containerPort: 3001
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-auth.dev.atlascloud.ai
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-auth.dev.atlascloud.ai
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: auth
+spec:
+  selector:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+    app.kubernetes.io/component: auth
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlascloud-openai-plugin
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-dns01
+    nginx.ingress.kubernetes.io/proxy-body-size: 256k
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+spec:
+  ingressClassName: higress
+  rules:
+    - host: atlascloud-mcp.dev.atlascloud.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atlascloud-openai-mcp
+                port:
+                  number: 80
+    - host: atlascloud-auth.dev.atlascloud.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atlascloud-openai-auth
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - atlascloud-mcp.dev.atlascloud.ai
+        - atlascloud-auth.dev.atlascloud.ai
+      secretName: atlascloud-openai-plugin-tls
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: atlascloud-plugin-redis-ingress
+  namespace: mcp-servers
+  labels:
+    app.kubernetes.io/name: atlascloud-openai-plugin
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: atlascloud-openai-plugin
+      app.kubernetes.io/component: redis
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["mcp", "auth"]
+      ports:
+        - protocol: TCP
+          port: 6379

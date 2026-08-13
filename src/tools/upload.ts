@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uploadMedia } from "../services/api-client.js";
+import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
+import { idempotencyKeySchema } from "../tool-contracts.js";
+import { toolAnnotations } from "../tool-policy.js";
 
 export function registerUploadTools(server: McpServer): void {
   server.registerTool(
@@ -29,23 +32,36 @@ Returns:
 Examples:
   - file_path="/Users/me/photos/cat.jpg" -> uploads and returns a URL like "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/media/xxx.jpg"`,
       inputSchema: {
+        idempotency_key: idempotencyKeySchema,
         file_path: z
           .string()
           .min(1)
           .describe("Absolute path to the local file to upload"),
       },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
+      outputSchema: {
+        url: z.string().url(),
+        filename: z.string(),
+        size_bytes: z.number().int().nonnegative(),
+        media_type: z.string(),
       },
+      annotations: toolAnnotations("atlas_upload_media"),
     },
-    async ({ file_path }) => {
+    async ({ idempotency_key, file_path }) => {
       try {
-        const result = await uploadMedia(file_path);
+        const result = await executeIdempotently(
+          "atlas_upload_media",
+          { idempotency_key, file_path },
+          idempotency_key,
+          () => uploadMedia(file_path)
+        );
 
         return {
+          structuredContent: {
+            url: result.data.download_url,
+            filename: result.data.filename,
+            size_bytes: result.data.size,
+            media_type: result.data.type,
+          },
           content: [
             {
               type: "text",

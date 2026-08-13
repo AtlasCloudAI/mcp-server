@@ -1,0 +1,13 @@
+.git
+.gitignore
+.DS_Store
+.env
+.env.*
+node_modules
+dist
+coverage
+test
+deploy
+*.log
+*.secret.yaml
+*-credentials.txt

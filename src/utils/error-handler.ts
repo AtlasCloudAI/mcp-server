@@ -1,6 +1,14 @@
 import { BILLING_URL } from "../constants.js";
 import { ApiRequestError } from "../services/api-client.js";
 
+function safeMessage(message: string): string {
+  return message
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:sk|ak|api)[-_]?[A-Za-z0-9_-]{16,}\b/gi, "[REDACTED]")
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|token)=)[^&#\s]+/gi, "$1[REDACTED]")
+    .slice(0, 500);
+}
+
 // Unified error handling with user-friendly messages
 export function handleError(error: unknown): string {
   if (error instanceof ApiRequestError) {
@@ -12,7 +20,7 @@ export function handleError(error: unknown): string {
     }
 
     if (code === 401) {
-      return "Error: Invalid or expired API key. Please check your ATLASCLOUD_API_KEY environment variable.";
+      return "Error: The Atlas Cloud credential for this authenticated account is invalid or expired. Reauthenticate or contact the plugin administrator.";
     }
     if (code === 403) {
       return "Error: Permission denied. You do not have access to this resource.";
@@ -24,7 +32,7 @@ export function handleError(error: unknown): string {
       return "Error: Resource not found. Please check your parameters.";
     }
 
-    return `Error: ${error.message}`;
+    return `Error: ${safeMessage(error.message)}`;
   }
 
   if (error instanceof Error) {
@@ -32,7 +40,7 @@ export function handleError(error: unknown): string {
       return "Error: Request timed out after retries. Please check your network connection and try again.";
     }
     if (error.message.includes("ATLASCLOUD_API_KEY")) {
-      return error.message;
+      return safeMessage(error.message);
     }
 
     // Check for balance-related messages in generic errors too
@@ -40,8 +48,8 @@ export function handleError(error: unknown): string {
       return `Error: Insufficient balance. Please top up your account at: ${BILLING_URL}`;
     }
 
-    return `Error: ${error.message}`;
+    return `Error: ${safeMessage(error.message)}`;
   }
 
-  return `Error: An unexpected error occurred - ${String(error)}`;
+  return "Error: An unexpected error occurred.";
 }

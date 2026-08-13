@@ -11,36 +11,12 @@
  * - Check generation results
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerDocsTools } from "./tools/docs.js";
-import { registerModelTools } from "./tools/models.js";
-import { registerImageTools } from "./tools/image.js";
-import { registerVideoTools } from "./tools/video.js";
-import { registerAudioTools } from "./tools/audio.js";
-import { registerLLMTools } from "./tools/llm.js";
-import { registerQuickGenerateTools } from "./tools/quick-generate.js";
-import { registerUploadTools } from "./tools/upload.js";
-import { registerAccountTools } from "./tools/account.js";
-
-const server = new McpServer({
-  name: "atlascloud-mcp",
-  version: "1.4.0",
-});
-
-// Register all tools
-registerDocsTools(server);
-registerModelTools(server);
-registerImageTools(server);
-registerVideoTools(server);
-registerAudioTools(server);
-registerLLMTools(server);
-registerQuickGenerateTools(server);
-registerUploadTools(server);
-registerAccountTools(server);
+import { createAtlasCloudServer } from "./server.js";
 
 // Start stdio transport
 async function main(): Promise<void> {
+  const server = createAtlasCloudServer("stdio");
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Atlas Cloud MCP Server running via stdio");

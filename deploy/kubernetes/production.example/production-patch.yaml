@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-mcp
+  namespace: mcp-servers
+spec:
+  template:
+    spec:
+      containers:
+        - name: mcp
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          env:
+            - name: PLUGIN_RELEASE_TIER
+              value: production
+            - name: MCP_PUBLIC_URL
+              value: https://mcp.atlascloud.ai/mcp
+            - name: MCP_OAUTH_ISSUER
+              value: https://mcp-auth.atlascloud.ai
+            - name: MCP_OAUTH_JWKS_URI
+              value: https://mcp-auth.atlascloud.ai/jwks
+            - name: MCP_OAUTH_ENDPOINT_HOSTS
+              value: mcp-auth.atlascloud.ai
+            - name: MCP_OAUTH_AUDIENCE
+              value: https://mcp.atlascloud.ai/mcp
+            - name: MCP_ALLOWED_HOSTS
+              value: mcp.atlascloud.ai
+            - name: MCP_CREDENTIAL_MODE
+              value: redis-subject-map
+            - name: MCP_CREDENTIAL_REDIS_PREFIX
+              value: atlascloud:openai-plugin:credential
+            - name: MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: credential-encryption-keys-json
+            - name: MCP_GENERATION_CONFIRMATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: generation-confirmation-secret
+            - name: MCP_ATLAS_SUBJECT_KEYS_JSON
+              $patch: delete
+          readinessProbe:
+            httpGet:
+              httpHeaders:
+                - name: Host
+                  value: mcp.atlascloud.ai
+          livenessProbe:
+            httpGet:
+              httpHeaders:
+                - name: Host
+                  value: mcp.atlascloud.ai
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          env:
+            - name: PLUGIN_RELEASE_TIER
+              value: production
+            - name: OIDC_ISSUER_URL
+              value: https://mcp-auth.atlascloud.ai
+            - name: OIDC_MCP_RESOURCE
+              value: https://mcp.atlascloud.ai/mcp
+            - name: AUTH_ALLOWED_HOSTS
+              value: mcp-auth.atlascloud.ai
+            - name: AUTH_IDENTITY_MODE
+              value: upstream-oidc
+            - name: AUTH_UPSTREAM_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-issuer-url
+            - name: AUTH_UPSTREAM_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-client-id
+            - name: AUTH_UPSTREAM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-client-secret
+            - name: AUTH_UPSTREAM_SCOPES
+              value: openid,email,profile
+            - name: AUTH_UPSTREAM_ENDPOINT_HOSTS
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-endpoint-hosts
+            - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
+              value: "600"
+            - name: AUTH_CREDENTIAL_REDIS_PREFIX
+              value: atlascloud:openai-plugin:credential
+            - name: AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: credential-encryption-keys-json
+            - name: OIDC_USERS_JSON
+              $patch: delete
+          readinessProbe:
+            httpGet:
+              httpHeaders:
+                - name: Host
+                  value: mcp-auth.atlascloud.ai
+          livenessProbe:
+            httpGet:
+              httpHeaders:
+                - name: Host
+                  value: mcp-auth.atlascloud.ai
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlascloud-openai-plugin
+  namespace: mcp-servers
+spec:
+  rules:
+    - host: mcp.atlascloud.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atlascloud-openai-mcp
+                port:
+                  number: 80
+    - host: mcp-auth.atlascloud.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atlascloud-openai-auth
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - mcp.atlascloud.ai
+        - mcp-auth.atlascloud.ai
+      secretName: atlascloud-openai-plugin-production-tls

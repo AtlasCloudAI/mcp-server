@@ -55,18 +55,6 @@ export interface ModelsResponse {
 }
 
 // Generation task response
-export interface PredictionResponse {
-  code: number;
-  data: {
-    id: string;
-    status?: string;
-    output?: string | string[];
-    outputs?: string[];
-    error?: string;
-    metrics?: Record<string, unknown>;
-  };
-}
-
 // Upload media response
 export interface UploadResponse {
   code: number;
@@ -134,6 +122,8 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
+
+export type SubmitKind = "image" | "video" | "audio" | "transcription";
 
 // LLM chat completion response
 export interface ChatCompletionResponse {

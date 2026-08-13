@@ -7,6 +7,12 @@
  * returns a precise error plus the list of allowed parameters, so the AI can
  * self-correct in one shot — preventing failures and wasted credits.
  */
+import {
+  Ajv,
+  type ErrorObject,
+  type ValidateFunction,
+} from "ajv";
+import formatsPluginModule from "ajv-formats";
 
 // A single property in an OpenAPI Input schema (only the fields we use)
 interface SchemaProperty {
@@ -18,13 +24,21 @@ interface SchemaProperty {
   maximum?: number;
   minLength?: number;
   maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
   items?: SchemaProperty;
 }
 
 interface InputSchema {
+  type?: string;
   properties?: Record<string, SchemaProperty>;
   required?: string[];
   "x-order-properties"?: string[];
+}
+
+interface ExtractedInputSchema {
+  input: InputSchema;
+  components?: unknown;
 }
 
 export interface ValidationResult {
@@ -37,12 +51,71 @@ export interface ValidationResult {
 // Pull the Input definition out of a full OpenAPI schema
 function extractInputSchema(
   schema: Record<string, unknown> | null | undefined
-): InputSchema | null {
+): ExtractedInputSchema | null {
   if (!schema) return null;
-  const s = schema as Record<string, any>;
-  const input = s.components?.schemas?.Input;
-  if (!input || typeof input !== "object" || !input.properties) return null;
-  return input as InputSchema;
+  const components = schema.components;
+  if (!components || typeof components !== "object" || Array.isArray(components)) {
+    return null;
+  }
+  const schemas = (components as Record<string, unknown>).schemas;
+  if (!schemas || typeof schemas !== "object" || Array.isArray(schemas)) {
+    return null;
+  }
+  const input = (schemas as Record<string, unknown>).Input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const inputRecord = input as Record<string, unknown>;
+  if (!inputRecord.properties || typeof inputRecord.properties !== "object") {
+    return null;
+  }
+  return { input: inputRecord as InputSchema, components };
+}
+
+const ajv = new Ajv({
+  allErrors: true,
+  strict: false,
+  coerceTypes: false,
+  useDefaults: false,
+});
+const addFormats = formatsPluginModule as unknown as (
+  target: Ajv
+) => Ajv;
+addFormats(ajv);
+const validatorCache = new WeakMap<object, ValidateFunction>();
+
+function validatorForSchema(
+  originalSchema: Record<string, unknown>,
+  input: InputSchema,
+  components: unknown
+): ValidateFunction {
+  const cached = validatorCache.get(originalSchema);
+  if (cached) return cached;
+  const validationRoot = {
+    ...input,
+    additionalProperties: false,
+    ...(components ? { components } : {}),
+  };
+  const validate = ajv.compile(validationRoot);
+  validatorCache.set(originalSchema, validate);
+  return validate;
+}
+
+function formatAjvError(error: ErrorObject): string {
+  if (error.keyword === "required") {
+    const missing = String(error.params.missingProperty ?? "unknown");
+    return `Missing required parameter \`${missing}\`.`;
+  }
+  if (error.keyword === "additionalProperties") {
+    const extra = String(error.params.additionalProperty ?? "unknown");
+    return `Unknown parameter \`${extra}\` is not accepted by this model — remove it.`;
+  }
+  const path = error.instancePath
+    ? error.instancePath
+        .split("/")
+        .filter(Boolean)
+        .map((part) => decodeURIComponent(part))
+        .join(".")
+    : "input";
+  return `Parameter \`${path}\` ${error.message ?? "is invalid"}.`;
 }
 
 // Keep only the first sentence of a description to keep error messages short
@@ -51,36 +124,6 @@ function firstSentence(desc?: string): string {
   const trimmed = desc.trim();
   const idx = trimmed.search(/[.]\s/);
   return idx > 0 ? trimmed.slice(0, idx + 1) : trimmed;
-}
-
-// Whether a JS value matches the JSON Schema declared type
-function matchesType(value: unknown, type: string): boolean {
-  switch (type) {
-    case "string":
-      return typeof value === "string";
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value);
-    case "number":
-      return typeof value === "number";
-    case "boolean":
-      return typeof value === "boolean";
-    case "array":
-      return Array.isArray(value);
-    case "object":
-      return (
-        typeof value === "object" && value !== null && !Array.isArray(value)
-      );
-    default:
-      // Unknown declared type: do not block
-      return true;
-  }
-}
-
-// Describe the actual type of a JS value, for error messages
-function jsType(value: unknown): string {
-  if (Array.isArray(value)) return "array";
-  if (value === null) return "null";
-  return typeof value;
 }
 
 /**
@@ -92,8 +135,9 @@ export function fillRequiredDefaults(
   schema: Record<string, unknown> | null | undefined,
   params: Record<string, unknown>
 ): Record<string, unknown> {
-  const input = extractInputSchema(schema);
-  if (!input) return { ...params };
+  const extracted = extractInputSchema(schema);
+  if (!extracted) return { ...params };
+  const { input } = extracted;
 
   const properties = input.properties || {};
   const required = input.required || [];
@@ -135,6 +179,11 @@ export function summarizeInputSchema(
     if (prop.minimum !== undefined || prop.maximum !== undefined) {
       bits.push(`range ${prop.minimum ?? "-inf"}..${prop.maximum ?? "+inf"}`);
     }
+    if (prop.minItems !== undefined || prop.maxItems !== undefined) {
+      bits.push(
+        `items ${prop.minItems ?? 0}..${prop.maxItems ?? "unbounded"}`
+      );
+    }
     if (prop.default !== undefined) {
       bits.push(`default ${JSON.stringify(prop.default)}`);
     }
@@ -156,94 +205,27 @@ export function validateModelParams(
   modelId: string,
   params: Record<string, unknown>
 ): ValidationResult {
-  const input = extractInputSchema(schema);
-  if (!input) {
-    // No schema to validate against: allow
-    return { ok: true, errors: [], summary: "" };
+  const extracted = extractInputSchema(schema);
+  if (!extracted) {
+    return {
+      ok: false,
+      errors: ["The model input schema is unavailable or malformed."],
+      summary: "",
+    };
   }
-
-  const properties = input.properties || {};
-  const required = input.required || [];
-  const errors: string[] = [];
-
-  // 1) Missing required fields (model is injected by the server, skip it).
-  //    Callers should run fillRequiredDefaults first so required-but-defaulted
-  //    fields are already populated; here we only flag ones with no value.
-  for (const key of required) {
-    if (key === "model") continue;
-    const v = params[key];
-    if (v === undefined || v === null) {
-      const desc = firstSentence(properties[key]?.description);
-      errors.push(
-        `Missing required parameter \`${key}\`${desc ? ` — ${desc}` : ""}`
-      );
-    }
+  const { input, components } = extracted;
+  let validate: ValidateFunction;
+  try {
+    validate = validatorForSchema(schema!, input, components);
+  } catch {
+    return {
+      ok: false,
+      errors: ["The model input schema could not be compiled for validation."],
+      summary: summarizeInputSchema(input, modelId),
+    };
   }
-
-  // 2) Validate each parameter supplied by the caller
-  for (const [key, value] of Object.entries(params)) {
-    if (key === "model") continue;
-    if (value === undefined) continue;
-
-    const prop = properties[key];
-
-    // Unknown parameter: not accepted by the schema — block it. This is the
-    // most common way the client AI "makes things up".
-    if (!prop) {
-      errors.push(
-        `Unknown parameter \`${key}\` is not accepted by this model — remove it.`
-      );
-      continue;
-    }
-
-    // null is treated as "unset" for optional fields; skip further checks
-    if (value === null) continue;
-
-    // Type check
-    if (prop.type && !matchesType(value, prop.type)) {
-      errors.push(
-        `Parameter \`${key}\` must be of type ${prop.type}, but got ${jsType(value)}.`
-      );
-      continue;
-    }
-
-    // Enum check
-    if (Array.isArray(prop.enum) && !prop.enum.includes(value as never)) {
-      errors.push(
-        `Parameter \`${key}\` must be one of: ${prop.enum
-          .map((v) => JSON.stringify(v))
-          .join(" | ")} — got ${JSON.stringify(value)}.`
-      );
-    }
-
-    // Numeric range check
-    if (typeof value === "number") {
-      if (prop.minimum !== undefined && value < prop.minimum) {
-        errors.push(
-          `Parameter \`${key}\` must be >= ${prop.minimum} (got ${value}).`
-        );
-      }
-      if (prop.maximum !== undefined && value > prop.maximum) {
-        errors.push(
-          `Parameter \`${key}\` must be <= ${prop.maximum} (got ${value}).`
-        );
-      }
-    }
-
-    // String length check
-    if (typeof value === "string") {
-      if (prop.maxLength !== undefined && value.length > prop.maxLength) {
-        errors.push(
-          `Parameter \`${key}\` exceeds maxLength ${prop.maxLength} (got ${value.length} chars).`
-        );
-      }
-      if (prop.minLength !== undefined && value.length < prop.minLength) {
-        errors.push(
-          `Parameter \`${key}\` is shorter than minLength ${prop.minLength} (got ${value.length} chars).`
-        );
-      }
-    }
-  }
+  const valid = validate({ model: modelId, ...params });
+  const errors = valid ? [] : (validate.errors ?? []).map(formatAjvError);
 
   return {
     ok: errors.length === 0,

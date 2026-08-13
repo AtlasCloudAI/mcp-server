@@ -238,6 +238,12 @@ npm run build
 npm run dev
 ```
 
+The production-grade remote OpenAI plugin profile uses Streamable HTTP, OAuth
+2.1/OIDC, Redis idempotency, and encrypted per-user Atlas credential linking.
+See [`deploy/kubernetes/README.md`](./deploy/kubernetes/README.md) for the
+staging/production boundary, required secret references, and the fail-closed
+cross-process configuration check.
+
 ## More Atlas Cloud Tools
 
 - 🧰 **Want to use it from the terminal?** → [atlascloud-cli](https://github.com/AtlasCloudAI/cli)

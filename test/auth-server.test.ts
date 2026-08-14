@@ -32,6 +32,7 @@ import type {
   CredentialLinkTicket,
   FederatedAccount,
   FederatedIdentityStore,
+  FederatedLoginCompletion,
   UpstreamAuthorizationState,
 } from "../src/auth/federated-store.js";
 import type {
@@ -137,6 +138,7 @@ function inMemoryStore(
 class MemoryFederatedStore implements FederatedIdentityStore {
   readonly accounts = new Map<string, FederatedAccount>();
   readonly authorizations = new Map<string, UpstreamAuthorizationState>();
+  readonly completions = new Map<string, FederatedLoginCompletion>();
   readonly links = new Map<string, CredentialLinkTicket>();
 
   async getAccount(subject: string): Promise<FederatedAccount | undefined> {
@@ -161,6 +163,20 @@ class MemoryFederatedStore implements FederatedIdentityStore {
   ): Promise<UpstreamAuthorizationState | undefined> {
     const value = this.authorizations.get(state);
     this.authorizations.delete(state);
+    return value ? structuredClone(value) : undefined;
+  }
+
+  async beginLoginCompletion(
+    ticket: string,
+    value: FederatedLoginCompletion
+  ): Promise<void> {
+    assert.equal(this.completions.has(ticket), false);
+    this.completions.set(ticket, structuredClone(value));
+  }
+
+  async consumeLoginCompletion(ticket: string): Promise<FederatedLoginCompletion | undefined> {
+    const value = this.completions.get(ticket);
+    this.completions.delete(ticket);
     return value ? structuredClone(value) : undefined;
   }
 
@@ -425,19 +441,59 @@ async function statusWithHost(url: string, host: string): Promise<number> {
   });
 }
 
-type CookieJar = Map<string, string>;
+type StoredCookie = {
+  name: string;
+  value: string;
+  path: string;
+  secure: boolean;
+};
 
-function rememberCookies(response: Response, jar: CookieJar): void {
+type CookieJar = StoredCookie[];
+
+function defaultCookiePath(pathname: string): string {
+  if (!pathname.startsWith("/") || pathname === "/") return "/";
+  const boundary = pathname.lastIndexOf("/");
+  return boundary <= 0 ? "/" : pathname.slice(0, boundary);
+}
+
+function cookiePathMatches(requestPath: string, cookiePath: string): boolean {
+  if (requestPath === cookiePath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/";
+}
+
+function rememberCookies(response: Response, requestUrl: URL, jar: CookieJar): void {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] };
   const values = headers.getSetCookie?.() ?? [];
   for (const value of values) {
-    const pair = value.split(";", 1)[0];
+    const [pair, ...rawAttributes] = value.split(";").map((part) => part.trim());
     const separator = pair.indexOf("=");
     if (separator < 0) continue;
     const name = pair.slice(0, separator);
     const cookieValue = pair.slice(separator + 1);
-    if (cookieValue) jar.set(name, cookieValue);
-    else jar.delete(name);
+    const attributes = rawAttributes.map((attribute) => attribute.toLowerCase());
+    const pathAttribute = rawAttributes.find((attribute) =>
+      attribute.toLowerCase().startsWith("path=")
+    );
+    const configuredPath = pathAttribute?.slice("path=".length);
+    const path = configuredPath?.startsWith("/")
+      ? configuredPath
+      : defaultCookiePath(requestUrl.pathname);
+    const secure = attributes.includes("secure");
+    const maxAgeAttribute = attributes.find((attribute) => attribute.startsWith("max-age="));
+    const maxAge = maxAgeAttribute
+      ? Number.parseInt(maxAgeAttribute.slice("max-age=".length), 10)
+      : undefined;
+    const existingIndex = jar.findIndex(
+      (candidate) => candidate.name === name && candidate.path === path
+    );
+    if (!cookieValue || (maxAge !== undefined && maxAge <= 0)) {
+      if (existingIndex >= 0) jar.splice(existingIndex, 1);
+      continue;
+    }
+    const cookie = { name, value: cookieValue, path, secure } satisfies StoredCookie;
+    if (existingIndex >= 0) jar[existingIndex] = cookie;
+    else jar.push(cookie);
   }
 }
 
@@ -446,12 +502,19 @@ async function requestWithCookies(
   input: string | URL,
   init: RequestInit = {}
 ): Promise<Response> {
+  const target = new URL(input);
   const headers = new Headers(init.headers);
-  if (jar.size > 0) {
-    headers.set("Cookie", [...jar].map(([name, value]) => `${name}=${value}`).join("; "));
+  const cookies = jar
+    .filter((cookie) =>
+      (!cookie.secure || target.protocol === "https:")
+      && cookiePathMatches(target.pathname, cookie.path)
+    )
+    .sort((left, right) => right.path.length - left.path.length);
+  if (cookies.length > 0) {
+    headers.set("Cookie", cookies.map(({ name, value }) => `${name}=${value}`).join("; "));
   }
-  const response = await fetch(input, { ...init, headers, redirect: "manual" });
-  rememberCookies(response, jar);
+  const response = await fetch(target, { ...init, headers, redirect: "manual" });
+  rememberCookies(response, target, jar);
   return response;
 }
 
@@ -798,7 +861,7 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   authorization.searchParams.set("resource", harness.config.resource.toString());
   authorization.searchParams.set("state", "test-state");
 
-  const jar: CookieJar = new Map();
+  const jar: CookieJar = [];
   let response = await requestWithCookies(jar, authorization);
   assert.equal(response.status, 303);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
@@ -964,6 +1027,79 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   assert.equal(serializedAudit.includes(clientId as string), false);
 });
 
+test("parallel browser authorization interactions keep path-scoped cookies isolated", async (t) => {
+  const harness = await fixture();
+  t.after(() => closeServer(harness.server));
+  const client = await dynamicRegister(harness.baseUrl, CODEX_CALLBACK, "native");
+  assert.equal(typeof client.client_id, "string");
+
+  const jar: CookieJar = [];
+  const begin = async (state: string): Promise<{
+    csrf: string;
+    uid: string;
+  }> => {
+    const verifier = randomBytes(32).toString("base64url");
+    const authorization = new URL(`${harness.baseUrl}/auth`);
+    authorization.searchParams.set("client_id", client.client_id as string);
+    authorization.searchParams.set("redirect_uri", CODEX_CALLBACK);
+    authorization.searchParams.set("response_type", "code");
+    authorization.searchParams.set(
+      "scope",
+      "openid email profile offline_access atlas:models:read atlas:billing:read"
+    );
+    authorization.searchParams.set(
+      "code_challenge",
+      createHash("sha256").update(verifier).digest("base64url")
+    );
+    authorization.searchParams.set("code_challenge_method", "S256");
+    authorization.searchParams.set("resource", harness.config.resource.toString());
+    authorization.searchParams.set("state", state);
+
+    let response = await requestWithCookies(jar, authorization);
+    assert.equal(response.status, 303);
+    response = await requestWithCookies(jar, location(response, harness.baseUrl));
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    return {
+      csrf: hidden(html, "csrf_token"),
+      uid: hidden(html, "interaction_uid"),
+    };
+  };
+
+  const first = await begin("parallel-first");
+  const second = await begin("parallel-second");
+  assert.notEqual(first.uid, second.uid);
+
+  const interactionCookies = jar.filter((cookie) =>
+    cookie.name.endsWith("atlascloud_interaction")
+  );
+  assert.deepEqual(
+    new Set(interactionCookies.map((cookie) => cookie.path)),
+    new Set([`/interaction/${first.uid}`, `/interaction/${second.uid}`])
+  );
+  const csrfCookies = jar.filter((cookie) => cookie.name.endsWith("atlascloud_csrf"));
+  assert.deepEqual(
+    new Set(csrfCookies.map((cookie) => cookie.path)),
+    new Set([`/interaction/${first.uid}`, `/interaction/${second.uid}`])
+  );
+
+  const firstLogin = await requestWithCookies(
+    jar,
+    `${harness.baseUrl}/interaction/${first.uid}/login`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        csrf_token: first.csrf,
+        interaction_uid: first.uid,
+        email: "reviewer@example.com",
+        password: REVIEWER_PASSWORD,
+      }),
+    }
+  );
+  assert.equal(firstLogin.status, 303);
+});
+
 test("Codex native DCR flow returns a loopback authorization code for read-only scopes", async (t) => {
   const harness = await fixture();
   t.after(() => closeServer(harness.server));
@@ -993,7 +1129,7 @@ test("Codex native DCR flow returns a loopback authorization code for read-only 
   authorization.searchParams.set("resource", harness.config.resource.toString());
   authorization.searchParams.set("state", "codex-read-only-state");
 
-  const jar: CookieJar = new Map();
+  const jar: CookieJar = [];
   let response = await requestWithCookies(jar, authorization);
   assert.equal(response.status, 303);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
@@ -1060,7 +1196,7 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   authorization.searchParams.set("resource", harness.config.resource.toString());
   authorization.searchParams.set("state", "federated-downstream-state");
 
-  const jar: CookieJar = new Map();
+  const jar: CookieJar = [];
   let response = await requestWithCookies(jar, authorization);
   assert.equal(response.status, 303);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
@@ -1183,7 +1319,7 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   assert.equal(userinfo.email, "federated@example.com");
   assert.equal(userinfo.email_verified, true);
 
-  const returningJar: CookieJar = new Map();
+  const returningJar: CookieJar = [];
   const returningVerifier = randomBytes(32).toString("base64url");
   const returningAuthorization = new URL(authorization);
   returningAuthorization.searchParams.set(
@@ -1203,10 +1339,22 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   returningCallback.searchParams.set("iss", "https://identity.example/");
   response = await requestWithCookies(returningJar, returningCallback);
   assert.equal(response.status, 303);
+  const completionUrl = location(response, harness.baseUrl);
+  assert.match(
+    completionUrl.pathname,
+    /^\/interaction\/[A-Za-z0-9_-]+\/complete$/
+  );
+  assert.equal(harness.identityStore.completions.size, 1);
+  response = await requestWithCookies(returningJar, completionUrl);
+  assert.equal(response.status, 303);
+  assert.match(location(response, harness.baseUrl).pathname, /^\/auth\/[A-Za-z0-9_-]+$/);
+  assert.equal(harness.identityStore.completions.size, 0);
+  const completionReplay = await requestWithCookies(returningJar, completionUrl);
+  assert.equal(completionReplay.status, 400);
   assert.equal(harness.validationCalls(), 2);
   assert.equal(harness.upstreamClient.exchanges, 2);
 
-  const mismatchJar: CookieJar = new Map();
+  const mismatchJar: CookieJar = [];
   const mismatchAuthorization = new URL(authorization);
   mismatchAuthorization.searchParams.set("state", "issuer-mismatch-downstream-state");
   response = await requestWithCookies(mismatchJar, mismatchAuthorization);

@@ -31,7 +31,7 @@ class FakeRedis {
   }
 }
 
-test("federated OIDC state and credential-link tickets are hashed and one-time", async () => {
+test("federated OIDC state and all browser handoff tickets are hashed and one-time", async () => {
   const fake = new FakeRedis();
   const store = new RedisFederatedIdentityStore(
     fake as unknown as RedisClientType,
@@ -39,6 +39,7 @@ test("federated OIDC state and credential-link tickets are hashed and one-time",
   );
   const state = randomBytes(32).toString("base64url");
   const ticket = randomBytes(32).toString("base64url");
+  const completionTicket = randomBytes(32).toString("base64url");
   const nonce = randomBytes(32).toString("base64url");
   const codeVerifier = randomBytes(32).toString("base64url");
 
@@ -54,6 +55,22 @@ test("federated OIDC state and credential-link tickets are hashed and one-time",
     codeVerifier,
   });
   assert.equal(await store.consumeUpstreamAuthorization(state), undefined);
+
+  await store.beginLoginCompletion(completionTicket, {
+    interactionUid: "interaction-1",
+    subject: "oidc-subject-1",
+  }, 600);
+  const completionKey = [...fake.values.keys()].find((key) =>
+    key.includes(":login-completion:")
+  );
+  assert.ok(completionKey);
+  assert.equal(completionKey.includes(completionTicket), false);
+  assert.equal(fake.ttlSeconds.get(completionKey), 600);
+  assert.deepEqual(await store.consumeLoginCompletion(completionTicket), {
+    interactionUid: "interaction-1",
+    subject: "oidc-subject-1",
+  });
+  assert.equal(await store.consumeLoginCompletion(completionTicket), undefined);
 
   await store.beginCredentialLink(ticket, {
     interactionUid: "interaction-1",

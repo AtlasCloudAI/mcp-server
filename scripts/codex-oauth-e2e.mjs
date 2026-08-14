@@ -36,30 +36,70 @@ function passed(message) {
   process.stdout.write(`PASS ${message}\n`);
 }
 
-function rememberCookies(response, jar) {
+function defaultCookiePath(pathname) {
+  if (!pathname.startsWith("/") || pathname === "/") return "/";
+  const boundary = pathname.lastIndexOf("/");
+  return boundary <= 0 ? "/" : pathname.slice(0, boundary);
+}
+
+function cookiePathMatches(requestPath, cookiePath) {
+  if (requestPath === cookiePath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/";
+}
+
+function rememberCookies(response, requestUrl, jar) {
   for (const value of response.headers.getSetCookie?.() ?? []) {
-    const pair = value.split(";", 1)[0];
+    const [pair, ...rawAttributes] = value.split(";").map((part) => part.trim());
     const separator = pair.indexOf("=");
     if (separator < 0) continue;
     const name = pair.slice(0, separator);
     const cookieValue = pair.slice(separator + 1);
-    if (cookieValue) jar.set(name, cookieValue);
-    else jar.delete(name);
+    const attributes = rawAttributes.map((attribute) => attribute.toLowerCase());
+    const pathAttribute = rawAttributes.find((attribute) =>
+      attribute.toLowerCase().startsWith("path=")
+    );
+    const configuredPath = pathAttribute?.slice("path=".length);
+    const path = configuredPath?.startsWith("/")
+      ? configuredPath
+      : defaultCookiePath(requestUrl.pathname);
+    const secure = attributes.includes("secure");
+    const maxAgeAttribute = attributes.find((attribute) => attribute.startsWith("max-age="));
+    const maxAge = maxAgeAttribute
+      ? Number.parseInt(maxAgeAttribute.slice("max-age=".length), 10)
+      : undefined;
+    const existingIndex = jar.findIndex(
+      (candidate) => candidate.name === name && candidate.path === path
+    );
+    if (!cookieValue || (maxAge !== undefined && maxAge <= 0)) {
+      if (existingIndex >= 0) jar.splice(existingIndex, 1);
+      continue;
+    }
+    const cookie = { name, value: cookieValue, path, secure };
+    if (existingIndex >= 0) jar[existingIndex] = cookie;
+    else jar.push(cookie);
   }
 }
 
 async function requestWithCookies(jar, input, init = {}) {
+  const target = new URL(input);
   const headers = new Headers(init.headers);
-  if (jar.size > 0) {
-    headers.set("Cookie", [...jar].map(([name, value]) => `${name}=${value}`).join("; "));
+  const cookies = jar
+    .filter((cookie) =>
+      (!cookie.secure || target.protocol === "https:")
+      && cookiePathMatches(target.pathname, cookie.path)
+    )
+    .sort((left, right) => right.path.length - left.path.length);
+  if (cookies.length > 0) {
+    headers.set("Cookie", cookies.map(({ name, value }) => `${name}=${value}`).join("; "));
   }
-  const response = await fetch(input, {
+  const response = await fetch(target, {
     ...init,
     headers,
     redirect: "manual",
     signal: AbortSignal.timeout(15_000),
   });
-  rememberCookies(response, jar);
+  rememberCookies(response, target, jar);
   return response;
 }
 
@@ -196,7 +236,7 @@ try {
   assert.equal(scopes.size, new Set(requestedScopes).size, "Codex authorization URL added unexpected scopes");
   passed("Codex emitted a bounded loopback callback with PKCE S256 and exact Atlas scopes");
 
-  const jar = new Map();
+  const jar = [];
   let response = await requestWithCookies(jar, authorization);
   await expectStatus(response, 303, "authorization start");
   response = await requestWithCookies(jar, assertAuthOrigin(location(response), "login redirect"));

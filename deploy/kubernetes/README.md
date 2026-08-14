@@ -100,6 +100,15 @@ addresses, paths, query strings, fragments, or URL credentials. ChatGPT and
 Codex callback types cannot be mixed in one registration. Both flows remain
 public clients with `token_endpoint_auth_method=none` and require PKCE S256.
 
+Short-lived OIDC interaction, resume, state, and CSRF cookies are deliberately
+scoped to the generated interaction path and use the `__Secure-` prefix on
+HTTPS. Do not override their path to `/` or rename them with `__Host-`: doing so
+collapses parallel browser authorization attempts into a single cookie and can
+invalidate a fresh consent page when another tab starts OAuth. The upstream
+OIDC callback returns to the scoped interaction through a separate Redis-backed
+one-time completion ticket. That ticket is HttpOnly, expires after 10 minutes,
+is stored only by SHA-256 digest, and is consumed before login completion.
+
 After an Auth image change, verify the real Codex DCR, reviewer interaction,
 loopback callback, authorization-code exchange, and Codex token storage without
 calling any billable tool:

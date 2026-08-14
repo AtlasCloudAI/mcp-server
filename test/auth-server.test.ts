@@ -928,6 +928,13 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   assert.match(recoveryHtml, /authorization link is no longer valid/i);
   assert.match(recoveryHtml, /Return to ChatGPT or Codex/);
   assert.doesNotMatch(recoveryHtml, /\{"error":"invalid_request"/);
+  assert.deepEqual(harness.auditEvents.at(-1), {
+    event: "authorization_request_error",
+    method: "POST",
+    route: "/interaction/:uid/confirm",
+    reason: "session_mismatch",
+    status: 400,
+  });
 
   const tokenResponse = await fetch(`${harness.baseUrl}/token`, {
     method: "POST",
@@ -977,6 +984,57 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   assert.equal(userinfo.sub, "reviewer-1");
   assert.equal(userinfo.email, "reviewer@example.com");
   assert.equal(userinfo.email_verified, true);
+
+  const returningClient = await dynamicRegister(harness.baseUrl);
+  const returningClientId = returningClient.client_id;
+  assert.equal(typeof returningClientId, "string");
+  const returningVerifier = randomBytes(32).toString("base64url");
+  const returningAuthorization = new URL(`${harness.baseUrl}/auth`);
+  returningAuthorization.searchParams.set("client_id", returningClientId as string);
+  returningAuthorization.searchParams.set("redirect_uri", CALLBACK);
+  returningAuthorization.searchParams.set("response_type", "code");
+  returningAuthorization.searchParams.set(
+    "scope",
+    "openid email profile offline_access atlas:models:read atlas:predictions:read atlas:billing:read"
+  );
+  returningAuthorization.searchParams.set(
+    "code_challenge",
+    createHash("sha256").update(returningVerifier).digest("base64url")
+  );
+  returningAuthorization.searchParams.set("code_challenge_method", "S256");
+  returningAuthorization.searchParams.set("resource", harness.config.resource.toString());
+  returningAuthorization.searchParams.set("state", "returning-browser-session");
+
+  response = await requestWithCookies(jar, returningAuthorization);
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, harness.baseUrl));
+  assert.equal(response.status, 200);
+  html = await response.text();
+  assert.match(html, /Authorize ChatGPT/);
+  assert.doesNotMatch(html, /Connect ChatGPT to Atlas Cloud/);
+  assert.doesNotMatch(html, /Generation calls may consume Atlas Cloud credits/);
+  const returningConsentUid = hidden(html, "interaction_uid");
+  const returningConsentCsrf = hidden(html, "csrf_token");
+  response = await requestWithCookies(
+    jar,
+    `${harness.baseUrl}/interaction/${returningConsentUid}/confirm`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        csrf_token: returningConsentCsrf,
+        interaction_uid: returningConsentUid,
+        decision: "allow",
+      }),
+    }
+  );
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, harness.baseUrl));
+  assert.equal(response.status, 303);
+  const returningCallback = location(response, harness.baseUrl);
+  assert.equal(returningCallback.origin + returningCallback.pathname, CALLBACK);
+  assert.equal(returningCallback.searchParams.get("state"), "returning-browser-session");
+  assert.ok(returningCallback.searchParams.get("code"));
 
   const invalidUserinfoResponse = await fetch(providerMetadata.userinfo_endpoint as string, {
     headers: { Authorization: `Bearer ${tokens.access_token as string}x` },

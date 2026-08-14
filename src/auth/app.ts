@@ -95,6 +95,13 @@ export type AuthorizationAuditEvent =
       grant_type: "refresh_token";
       client_hash: string;
       rotations: number;
+    }
+  | {
+      event: "authorization_request_error";
+      method: string;
+      route: string;
+      reason: AuthorizationRequestErrorReason;
+      status: number;
     };
 
 export type AuthorizationAuditLogger = (event: AuthorizationAuditEvent) => void;
@@ -105,6 +112,16 @@ type OidcGrantErrorReason =
   | "client_mismatch"
   | "sender_constraint_failed"
   | "invalid_or_missing_grant"
+  | "other";
+
+type AuthorizationRequestErrorReason =
+  | "interaction_cookie_missing"
+  | "interaction_session_missing"
+  | "authentication_session_missing"
+  | "session_mismatch"
+  | "consent_form_invalid"
+  | "csrf_invalid"
+  | "invalid_request"
   | "other";
 
 interface FederatedRuntime {
@@ -143,6 +160,37 @@ function classifyGrantError(error: errors.OIDCProviderError): OidcGrantErrorReas
     || description.includes("mutual tls")
   ) return "sender_constraint_failed";
   if (error.error === "invalid_grant") return "invalid_or_missing_grant";
+  return "other";
+}
+
+function classifyAuthorizationRequestError(error: unknown): AuthorizationRequestErrorReason {
+  const message = error instanceof Error ? error.message : "";
+  if (error instanceof errors.SessionNotFound) {
+    if (message === "interaction session id cookie not found") {
+      return "interaction_cookie_missing";
+    }
+    if (
+      message === "interaction session not found"
+      || message === "authorization request has expired"
+    ) {
+      return "interaction_session_missing";
+    }
+    if (message === "session not found") return "authentication_session_missing";
+    return "session_mismatch";
+  }
+  if (message === "invalid consent form") return "consent_form_invalid";
+  if (message === "invalid or expired interaction CSRF token") return "csrf_invalid";
+  if (error instanceof errors.InvalidRequest) return "invalid_request";
+  return "other";
+}
+
+function authorizationAuditRoute(path: string): string {
+  if (/^\/interaction\/[^/]+$/.test(path)) return "/interaction/:uid";
+  if (/^\/interaction\/[^/]+\/(?:login|link|confirm|complete)$/.test(path)) {
+    return path.replace(/^\/interaction\/[^/]+/, "/interaction/:uid");
+  }
+  if (/^\/auth\/[^/]+$/.test(path)) return "/auth/:uid";
+  if (path === "/auth" || path === "/upstream/callback") return path;
   return "other";
 }
 
@@ -961,6 +1009,13 @@ export function createAuthorizationApp(
         || request.path === "/upstream/callback"
       );
       if (isClientError && isBrowserAuthorizationRequest) {
+        writeAudit(auditLogger, {
+          event: "authorization_request_error",
+          method: request.method,
+          route: authorizationAuditRoute(request.path),
+          reason: classifyAuthorizationRequestError(error),
+          status,
+        });
         noStore(response);
         response.status(status).type("html").send(renderAuthorizationRecovery());
         return;

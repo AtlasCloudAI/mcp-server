@@ -108,6 +108,11 @@ invalidate a fresh consent page when another tab starts OAuth. The upstream
 OIDC callback returns to the scoped interaction through a separate Redis-backed
 one-time completion ticket. That ticket is HttpOnly, expires after 10 minutes,
 is stored only by SHA-256 digest, and is consumed before login completion.
+The long-lived browser session cookie is versioned as
+`__Host-atlascloud_op_v2`; `/auth` expires the legacy
+`__Host-atlascloud_op` cookie so sessions created before the cookie-isolation
+rollout cannot poison a fresh interaction. This migration requires one new
+reviewer sign-in but does not invalidate already stored Codex refresh tokens.
 
 After an Auth image change, verify the real Codex DCR, reviewer interaction,
 loopback callback, authorization-code exchange, and Codex token storage without

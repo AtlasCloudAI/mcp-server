@@ -1158,6 +1158,39 @@ test("parallel browser authorization interactions keep path-scoped cookies isola
   assert.equal(firstLogin.status, 303);
 });
 
+test("legacy browser session cookies are ignored and expired during OAuth migration", async (t) => {
+  const harness = await fixture();
+  t.after(() => closeServer(harness.server));
+  const client = await dynamicRegister(harness.baseUrl, CODEX_CALLBACK, "native");
+  assert.equal(typeof client.client_id, "string");
+  const verifier = randomBytes(32).toString("base64url");
+  const authorization = new URL(`${harness.baseUrl}/auth`);
+  authorization.searchParams.set("client_id", client.client_id as string);
+  authorization.searchParams.set("redirect_uri", CODEX_CALLBACK);
+  authorization.searchParams.set("response_type", "code");
+  authorization.searchParams.set("scope", "openid email atlas:models:read");
+  authorization.searchParams.set(
+    "code_challenge",
+    createHash("sha256").update(verifier).digest("base64url")
+  );
+  authorization.searchParams.set("code_challenge_method", "S256");
+  authorization.searchParams.set("resource", harness.config.resource.toString());
+  authorization.searchParams.set("state", "legacy-session-migration");
+
+  const jar: CookieJar = [{
+    name: "atlascloud_op",
+    value: "legacy-signed-session-value",
+    path: "/",
+    secure: false,
+  }];
+  let response = await requestWithCookies(jar, authorization);
+  assert.equal(response.status, 303);
+  assert.equal(jar.some((cookie) => cookie.name === "atlascloud_op"), false);
+  response = await requestWithCookies(jar, location(response, harness.baseUrl));
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Connect ChatGPT to Atlas Cloud/);
+});
+
 test("Codex native DCR flow returns a loopback authorization code for read-only scopes", async (t) => {
   const harness = await fixture();
   t.after(() => closeServer(harness.server));

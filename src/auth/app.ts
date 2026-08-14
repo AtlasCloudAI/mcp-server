@@ -43,6 +43,10 @@ const CSRF_COOKIE_SECURE = "__Secure-atlascloud_csrf";
 const CSRF_COOKIE_LOCAL = "atlascloud_csrf";
 const LOGIN_COMPLETION_COOKIE_SECURE = "__Secure-atlascloud_login_completion";
 const LOGIN_COMPLETION_COOKIE_LOCAL = "atlascloud_login_completion";
+const SESSION_COOKIE_SECURE = "__Host-atlascloud_op_v2";
+const SESSION_COOKIE_LOCAL = "atlascloud_op_v2";
+const LEGACY_SESSION_COOKIE_SECURE = "__Host-atlascloud_op";
+const LEGACY_SESSION_COOKIE_LOCAL = "atlascloud_op";
 const oneTimeTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/);
 const formSchema = z
   .object({
@@ -118,6 +122,7 @@ type AuthorizationRequestErrorReason =
   | "interaction_cookie_missing"
   | "interaction_session_missing"
   | "authentication_session_missing"
+  | "session_principal_changed"
   | "session_mismatch"
   | "consent_form_invalid"
   | "csrf_invalid"
@@ -176,6 +181,7 @@ function classifyAuthorizationRequestError(error: unknown): AuthorizationRequest
       return "interaction_session_missing";
     }
     if (message === "session not found") return "authentication_session_missing";
+    if (message === "session principal changed") return "session_principal_changed";
     return "session_mismatch";
   }
   if (message === "invalid consent form") return "consent_form_invalid";
@@ -228,6 +234,28 @@ function equalTokens(left: string | undefined, right: string): boolean {
 
 function csrfCookieName(config: AuthorizationServerConfig): string {
   return config.issuer.protocol === "https:" ? CSRF_COOKIE_SECURE : CSRF_COOKIE_LOCAL;
+}
+
+function sessionCookieName(config: AuthorizationServerConfig): string {
+  return config.issuer.protocol === "https:" ? SESSION_COOKIE_SECURE : SESSION_COOKIE_LOCAL;
+}
+
+function legacySessionCookieName(config: AuthorizationServerConfig): string {
+  return config.issuer.protocol === "https:"
+    ? LEGACY_SESSION_COOKIE_SECURE
+    : LEGACY_SESSION_COOKIE_LOCAL;
+}
+
+function clearLegacySessionCookie(
+  config: AuthorizationServerConfig,
+  response: Response
+): void {
+  response.clearCookie(legacySessionCookieName(config), {
+    secure: config.issuer.protocol === "https:",
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+  });
 }
 
 function interactionPath(interactionUid: string): string {
@@ -464,7 +492,6 @@ function providerConfiguration(
   store: AuthorizationStore,
   federatedStore?: FederatedIdentityStore
 ): Configuration {
-  const hostCookiePrefix = config.issuer.protocol === "https:" ? "__Host-" : "";
   // oidc-provider path-scopes interaction and resume cookies to each generated
   // authorization flow. `__Host-` would require Path=/ and collapse those
   // independent cookies into one browser-global value, so short-lived cookies
@@ -489,7 +516,7 @@ function providerConfiguration(
     clockTolerance: 30,
     cookies: {
       names: {
-        session: `${hostCookiePrefix}atlascloud_op`,
+        session: sessionCookieName(config),
         interaction: `${scopedCookiePrefix}atlascloud_interaction`,
         resume: `${scopedCookiePrefix}atlascloud_resume`,
         state: `${scopedCookiePrefix}atlascloud_state`,
@@ -694,6 +721,12 @@ export function createAuthorizationApp(
   app.set("trust proxy", config.trustProxy);
   app.use(securityHeaders(config));
   app.use(exactHost(config));
+  app.use((request, response, next) => {
+    if (request.path === "/auth" || request.path.startsWith("/auth/")) {
+      clearLegacySessionCookie(config, response);
+    }
+    next();
+  });
 
   app.get("/healthz", (_request, response) => {
     response.status(200).json({ status: "ok", service: "atlascloud-oauth" });

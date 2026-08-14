@@ -139,7 +139,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:db2675c3ce2fc7fb2c7ee39d36e60fe50a21b4ba7cf9dde942a2613088f9e1ff
           imagePullPolicy: IfNotPresent
           args: ["node", "dist/http.js"]
           securityContext:
@@ -290,7 +290,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:db2675c3ce2fc7fb2c7ee39d36e60fe50a21b4ba7cf9dde942a2613088f9e1ff
           imagePullPolicy: IfNotPresent
           args: ["node", "dist/auth.js"]
           securityContext:

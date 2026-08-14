@@ -39,8 +39,11 @@ import {
   renderUnsupportedPrompt,
 } from "./views.js";
 
-const CSRF_COOKIE_SECURE = "__Host-atlascloud_csrf";
+const CSRF_COOKIE_SECURE = "__Secure-atlascloud_csrf";
 const CSRF_COOKIE_LOCAL = "atlascloud_csrf";
+const LOGIN_COMPLETION_COOKIE_SECURE = "__Secure-atlascloud_login_completion";
+const LOGIN_COMPLETION_COOKIE_LOCAL = "atlascloud_login_completion";
+const oneTimeTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/);
 const formSchema = z
   .object({
     csrf_token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -61,7 +64,7 @@ const upstreamCallbackSchema = z
   })
   .strict();
 const credentialLinkSchema = formSchema.extend({
-  link_ticket: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
+  link_ticket: oneTimeTokenSchema,
   atlas_api_key: z.string().min(16).max(4096),
 });
 
@@ -179,13 +182,66 @@ function csrfCookieName(config: AuthorizationServerConfig): string {
   return config.issuer.protocol === "https:" ? CSRF_COOKIE_SECURE : CSRF_COOKIE_LOCAL;
 }
 
-function issueCsrfToken(config: AuthorizationServerConfig, response: Response): string {
+function interactionPath(interactionUid: string): string {
+  return `/interaction/${encodeURIComponent(interactionUid)}`;
+}
+
+function loginCompletionCookieName(config: AuthorizationServerConfig): string {
+  return config.issuer.protocol === "https:"
+    ? LOGIN_COMPLETION_COOKIE_SECURE
+    : LOGIN_COMPLETION_COOKIE_LOCAL;
+}
+
+function loginCompletionCookieOptions(
+  config: AuthorizationServerConfig,
+  interactionUid: string
+) {
+  return {
+    secure: config.issuer.protocol === "https:",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: interactionPath(interactionUid),
+  };
+}
+
+function issueLoginCompletionCookie(
+  config: AuthorizationServerConfig,
+  response: Response,
+  interactionUid: string,
+  ticket: string
+): void {
+  response.cookie(
+    loginCompletionCookieName(config),
+    ticket,
+    {
+      ...loginCompletionCookieOptions(config, interactionUid),
+      maxAge: 10 * 60 * 1000,
+    }
+  );
+}
+
+function clearLoginCompletionCookie(
+  config: AuthorizationServerConfig,
+  response: Response,
+  interactionUid: string
+): void {
+  response.clearCookie(
+    loginCompletionCookieName(config),
+    loginCompletionCookieOptions(config, interactionUid)
+  );
+}
+
+function issueCsrfToken(
+  config: AuthorizationServerConfig,
+  response: Response,
+  interactionUid: string
+): string {
   const token = randomBytes(32).toString("base64url");
   response.cookie(csrfCookieName(config), token, {
     secure: config.issuer.protocol === "https:",
     httpOnly: true,
     sameSite: "lax",
-    path: "/",
+    path: interactionPath(interactionUid),
     maxAge: 10 * 60 * 1000,
   });
   return token;
@@ -360,13 +416,12 @@ function providerConfiguration(
   store: AuthorizationStore,
   federatedStore?: FederatedIdentityStore
 ): Configuration {
-  const cookiePrefix = config.issuer.protocol === "https:" ? "__Host-" : "";
-  // oidc-provider pins the resume cookie to `path=/auth/<uid>`, but the
-  // `__Host-` prefix requires `Path=/` exactly. Browsers therefore drop the
-  // cookie and the interaction can never resume, surfacing as
-  // "authorization request has expired" right after the login form posts.
-  // `__Secure-` keeps the HTTPS-only guarantee without the Path constraint.
-  const resumeCookiePrefix = config.issuer.protocol === "https:" ? "__Secure-" : "";
+  const hostCookiePrefix = config.issuer.protocol === "https:" ? "__Host-" : "";
+  // oidc-provider path-scopes interaction and resume cookies to each generated
+  // authorization flow. `__Host-` would require Path=/ and collapse those
+  // independent cookies into one browser-global value, so short-lived cookies
+  // use `__Secure-` while the long-lived session remains `__Host-`.
+  const scopedCookiePrefix = config.issuer.protocol === "https:" ? "__Secure-" : "";
   return {
     adapter: store.adapter,
     clients: [],
@@ -386,10 +441,10 @@ function providerConfiguration(
     clockTolerance: 30,
     cookies: {
       names: {
-        session: `${cookiePrefix}atlascloud_op`,
-        interaction: `${cookiePrefix}atlascloud_interaction`,
-        resume: `${resumeCookiePrefix}atlascloud_resume`,
-        state: `${cookiePrefix}atlascloud_state`,
+        session: `${hostCookiePrefix}atlascloud_op`,
+        interaction: `${scopedCookiePrefix}atlascloud_interaction`,
+        resume: `${scopedCookiePrefix}atlascloud_resume`,
+        state: `${scopedCookiePrefix}atlascloud_state`,
       },
       keys: config.cookieKeys,
       long: {
@@ -404,7 +459,6 @@ function providerConfiguration(
         httpOnly: true,
         sameSite: "lax",
         signed: true,
-        path: "/",
       },
     },
     enabledJWA: {
@@ -656,12 +710,12 @@ export function createAuthorizationApp(
         }).toString());
         return;
       }
-      const csrfToken = issueCsrfToken(config, response);
+      const csrfToken = issueCsrfToken(config, response, interaction.uid);
       response.status(200).type("html").send(renderLogin(interaction, csrfToken));
       return;
     }
     if (interaction.prompt.name === "consent") {
-      const csrfToken = issueCsrfToken(config, response);
+      const csrfToken = issueCsrfToken(config, response, interaction.uid);
       response.status(200).type("html").send(renderConsent(interaction, csrfToken));
       return;
     }
@@ -687,7 +741,7 @@ export function createAuthorizationApp(
       const comparisonHash = user?.passwordHash ?? config.users[0].passwordHash;
       const passwordMatches = await verifyPassword(parsed.data.password, comparisonHash);
       if (!user || !passwordMatches) {
-        const csrfToken = issueCsrfToken(config, response);
+        const csrfToken = issueCsrfToken(config, response, interaction.uid);
         response.status(401).type("html").send(
           renderLogin(interaction, csrfToken, "Email or password is incorrect.")
         );
@@ -708,7 +762,7 @@ export function createAuthorizationApp(
       response.status(404).json({ error: "not_found" });
       return;
     }
-    const rawState = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/).safeParse(request.query.state);
+    const rawState = oneTimeTokenSchema.safeParse(request.query.state);
     if (!rawState.success) {
       throw new errors.InvalidRequest("invalid upstream OIDC callback state");
     }
@@ -726,8 +780,11 @@ export function createAuthorizationApp(
     ) {
       throw new errors.InvalidRequest("upstream OIDC callback issuer does not match");
     }
-    const interaction = await provider.interactionDetails(request, response);
+    const interaction = await provider.Interaction.find(pending.interactionUid);
     if (
+      !interaction ||
+      !interaction.isValid ||
+      interaction.isExpired ||
       interaction.uid !== pending.interactionUid ||
       interaction.prompt.name !== "login"
     ) {
@@ -741,7 +798,19 @@ export function createAuthorizationApp(
     await federated.federatedStore.putAccount(account);
     const existingCredential = await federated.credentialStore.get(account.sub);
     if (existingCredential) {
-      await finishFederatedLogin(provider, request, response, account.sub);
+      const completionTicket = randomBytes(32).toString("base64url");
+      await federated.federatedStore.beginLoginCompletion(
+        completionTicket,
+        { interactionUid: interaction.uid, subject: account.sub },
+        10 * 60
+      );
+      issueLoginCompletionCookie(
+        config,
+        response,
+        interaction.uid,
+        completionTicket
+      );
+      response.redirect(303, `${interactionPath(interaction.uid)}/complete`);
       return;
     }
     const ticket = randomBytes(32).toString("base64url");
@@ -750,10 +819,38 @@ export function createAuthorizationApp(
       { interactionUid: interaction.uid, subject: account.sub },
       10 * 60
     );
-    const csrfToken = issueCsrfToken(config, response);
+    const csrfToken = issueCsrfToken(config, response, interaction.uid);
     response.status(200).type("html").send(
       renderCredentialLink(interaction, csrfToken, ticket, account.email)
     );
+  });
+
+  app.get("/interaction/:uid/complete", async (request, response) => {
+    noStore(response);
+    if (!federated) {
+      throw new errors.InvalidRequest("federated login completion is disabled");
+    }
+    const interaction = await provider.interactionDetails(request, response);
+    if (interaction.uid !== request.params.uid || interaction.prompt.name !== "login") {
+      throw new errors.InvalidRequest("federated login completion does not match the active interaction");
+    }
+    const ticket = oneTimeTokenSchema.safeParse(
+      cookieValue(request, loginCompletionCookieName(config))
+    );
+    clearLoginCompletionCookie(config, response, interaction.uid);
+    if (!ticket.success) {
+      throw new errors.InvalidRequest("federated login completion ticket is missing or invalid");
+    }
+    const completion = await federated.federatedStore.consumeLoginCompletion(ticket.data);
+    if (
+      !completion ||
+      completion.interactionUid !== interaction.uid ||
+      !(await federated.federatedStore.getAccount(completion.subject)) ||
+      !(await federated.credentialStore.get(completion.subject))
+    ) {
+      throw new errors.InvalidRequest("federated login completion ticket is expired or already used");
+    }
+    await finishFederatedLogin(provider, request, response, completion.subject);
   });
 
   app.post(
@@ -786,7 +883,7 @@ export function createAuthorizationApp(
       try {
         await federated.validateAtlasCredential(parsed.data.atlas_api_key);
       } catch {
-        const csrfToken = issueCsrfToken(config, response);
+        const csrfToken = issueCsrfToken(config, response, interaction.uid);
         response.status(401).type("html").send(
           renderCredentialLink(
             interaction,

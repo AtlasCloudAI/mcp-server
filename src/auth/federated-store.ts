@@ -20,6 +20,11 @@ export interface CredentialLinkTicket {
   subject: string;
 }
 
+export interface FederatedLoginCompletion {
+  interactionUid: string;
+  subject: string;
+}
+
 export interface FederatedIdentityStore {
   getAccount(subject: string): Promise<FederatedAccount | undefined>;
   putAccount(account: FederatedAccount): Promise<void>;
@@ -29,6 +34,12 @@ export interface FederatedIdentityStore {
     ttlSeconds: number
   ): Promise<void>;
   consumeUpstreamAuthorization(state: string): Promise<UpstreamAuthorizationState | undefined>;
+  beginLoginCompletion(
+    ticket: string,
+    value: FederatedLoginCompletion,
+    ttlSeconds: number
+  ): Promise<void>;
+  consumeLoginCompletion(ticket: string): Promise<FederatedLoginCompletion | undefined>;
   beginCredentialLink(
     ticket: string,
     value: CredentialLinkTicket,
@@ -59,6 +70,7 @@ const linkTicketSchema = z
     subject: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
   })
   .strict();
+const loginCompletionSchema = linkTicketSchema;
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -89,6 +101,10 @@ export class RedisFederatedIdentityStore implements FederatedIdentityStore {
 
   private linkKey(ticket: string): string {
     return `${this.prefix}:credential-link:${digest(ticket)}`;
+  }
+
+  private loginCompletionKey(ticket: string): string {
+    return `${this.prefix}:login-completion:${digest(ticket)}`;
   }
 
   async getAccount(subject: string): Promise<FederatedAccount | undefined> {
@@ -129,6 +145,32 @@ export class RedisFederatedIdentityStore implements FederatedIdentityStore {
       await this.client.getDel(this.authorizationKey(state)),
       upstreamStateSchema,
       "upstream OIDC state"
+    );
+  }
+
+  async beginLoginCompletion(
+    ticket: string,
+    value: FederatedLoginCompletion,
+    ttlSeconds: number
+  ): Promise<void> {
+    token.parse(ticket);
+    const record = loginCompletionSchema.parse(value);
+    const result = await this.client.set(
+      this.loginCompletionKey(ticket),
+      JSON.stringify(record),
+      { EX: ttlSeconds, NX: true }
+    );
+    if (result !== "OK") throw new Error("Unable to reserve federated login completion ticket");
+  }
+
+  async consumeLoginCompletion(
+    ticket: string
+  ): Promise<FederatedLoginCompletion | undefined> {
+    token.parse(ticket);
+    return parseStored(
+      await this.client.getDel(this.loginCompletionKey(ticket)),
+      loginCompletionSchema,
+      "federated login completion ticket"
     );
   }
 

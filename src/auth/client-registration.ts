@@ -92,7 +92,7 @@ function isCodexLoopbackCallback(raw: string): boolean {
   );
 }
 
-function isSupportedCallback(raw: string): boolean {
+export function isSupportedCallback(raw: string): boolean {
   return isChatGptCallback(raw) || isCodexLoopbackCallback(raw);
 }
 

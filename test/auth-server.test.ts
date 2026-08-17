@@ -713,12 +713,22 @@ test("OAuth server exposes compliant metadata and rejects unsafe DCR", async (t)
 
   const metadataResponse = await fetch(`${harness.baseUrl}/.well-known/openid-configuration`);
   assert.equal(metadataResponse.status, 200);
+  assert.equal(metadataResponse.headers.get("content-security-policy"), null);
   const metadata = await metadataResponse.json() as Record<string, unknown>;
   assert.equal(metadata.issuer, harness.baseUrl);
   assert.equal(metadata.registration_endpoint, `${harness.baseUrl}/reg`);
   assert.deepEqual(metadata.code_challenge_methods_supported, ["S256"]);
   assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none"]);
   assert.ok((metadata.scopes_supported as string[]).includes("atlas:generation:write"));
+
+  const authScriptResponse = await fetch(`${harness.baseUrl}/assets/auth.js`);
+  assert.equal(authScriptResponse.status, 200);
+  assert.match(authScriptResponse.headers.get("content-type") ?? "", /^text\/javascript/);
+  assert.equal(authScriptResponse.headers.get("content-security-policy"), null);
+  assert.equal(authScriptResponse.headers.get("cache-control"), "no-store");
+  const authScript = await authScriptResponse.text();
+  assert.match(authScript, /form\[data-submit-once\]/);
+  assert.match(authScript, /event\.preventDefault\(\)/);
 
   const unsafe = await fetch(`${harness.baseUrl}/reg`, {
     method: "POST",
@@ -864,10 +874,20 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   const jar: CookieJar = [];
   let response = await requestWithCookies(jar, authorization);
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'"
+  );
   let html = await response.text();
   assert.match(html, /Connect ChatGPT to Atlas Cloud/);
+  assert.match(
+    html,
+    /<script src="\/assets\/auth\.js\?v=single-submit-v1" defer><\/script>/
+  );
+  assert.match(html, /data-submit-once/);
   const loginUid = hidden(html, "interaction_uid");
   const loginCsrf = hidden(html, "csrf_token");
 
@@ -882,10 +902,16 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
     }),
   });
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'"
+  );
   html = await response.text();
   assert.match(html, /Generation calls may consume Atlas Cloud credits/);
   const consentUid = hidden(html, "interaction_uid");
@@ -902,8 +928,10 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
     body: consentBody,
   });
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   const callback = location(response, harness.baseUrl);
   assert.equal(callback.origin + callback.pathname, CALLBACK);
   assert.equal(callback.searchParams.get("state"), "test-state");
@@ -924,6 +952,10 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   );
   assert.equal(staleConsent.status, 400);
   assert.match(staleConsent.headers.get("content-type") ?? "", /^text\/html/);
+  assert.equal(
+    staleConsent.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+  );
   const recoveryHtml = await staleConsent.text();
   assert.match(recoveryHtml, /authorization link is no longer valid/i);
   assert.match(recoveryHtml, /Return to ChatGPT or Codex/);
@@ -949,6 +981,7 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
     }),
   });
   await assertStatus(tokenResponse, 200);
+  assert.equal(tokenResponse.headers.get("content-security-policy"), null);
   const tokens = await tokenResponse.json() as Record<string, unknown>;
   assert.equal(typeof tokens.access_token, "string");
   assert.equal(typeof tokens.id_token, "string");
@@ -1074,6 +1107,16 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
     (event) => event.event === "oidc_refresh_success"
   );
   assert.equal(refreshSuccesses.length, 3);
+  const consentSuccesses = harness.auditEvents.filter(
+    (event) => event.event === "authorization_consent_success"
+  );
+  assert.equal(consentSuccesses.length, 2);
+  assert.ok(consentSuccesses.every((event) => event.callback_type === "chatgpt"));
+  const authorizationCodeSuccesses = harness.auditEvents.filter(
+    (event) => event.event === "oidc_authorization_code_success"
+  );
+  assert.equal(authorizationCodeSuccesses.length, 1);
+  assert.match(authorizationCodeSuccesses[0].client_hash, /^[a-f0-9]{16}$/);
   const replayEvent = harness.auditEvents.find(
     (event) => event.event === "oidc_grant_error" && event.reason === "refresh_token_replay"
   );
@@ -1225,6 +1268,10 @@ test("Codex native DCR flow returns a loopback authorization code for read-only 
   assert.equal(response.status, 303);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' http://127.0.0.1:43123; frame-ancestors 'none'; base-uri 'none'"
+  );
   let html = await response.text();
   const loginUid = hidden(html, "interaction_uid");
   const loginCsrf = hidden(html, "csrf_token");
@@ -1240,8 +1287,10 @@ test("Codex native DCR flow returns a loopback authorization code for read-only 
     }),
   });
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get("content-security-policy"), null);
   response = await requestWithCookies(jar, location(response, harness.baseUrl));
   assert.equal(response.status, 200);
   html = await response.text();
@@ -1266,6 +1315,11 @@ test("Codex native DCR flow returns a loopback authorization code for read-only 
   assert.equal(callback.origin + callback.pathname, CODEX_CALLBACK);
   assert.equal(callback.searchParams.get("state"), "codex-read-only-state");
   assert.ok(callback.searchParams.get("code"));
+  const consentSuccess = harness.auditEvents.find(
+    (event) => event.event === "authorization_consent_success"
+  );
+  assert.ok(consentSuccess);
+  assert.equal(consentSuccess.callback_type, "codex_loopback");
 });
 
 test("federated OIDC login links a validated Atlas key before issuing downstream tokens", async (t) => {

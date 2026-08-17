@@ -100,6 +100,15 @@ addresses, paths, query strings, fragments, or URL credentials. ChatGPT and
 Codex callback types cannot be mixed in one registration. Both flows remain
 public clients with `token_endpoint_auth_method=none` and require PKCE S256.
 
+Authorization HTML must set `form-action` dynamically from the already
+validated `redirect_uri`: allow only `'self'` plus that callback's exact
+origin. This is required for Chrome to follow the consent form's redirect
+chain to a Codex `http://127.0.0.1:{dynamic_port}` loopback callback. Do not
+place the page CSP on `/auth/:uid` 303 responses, token responses, discovery,
+or other non-HTML endpoints. Static recovery/error HTML uses
+`form-action 'none'`. Never log the callback URL, dynamic port, authorization
+code, or state.
+
 Short-lived OIDC interaction, resume, state, and CSRF cookies are deliberately
 scoped to the generated interaction path and use the `__Secure-` prefix on
 HTTPS. Do not override their path to `/` or rename them with `__Host-`: doing so
@@ -124,6 +133,26 @@ security find-generic-password \
   -a openai-plugin-reviewer@atlascloud.ai \
   -w | node scripts/codex-oauth-e2e.mjs
 ```
+
+The HTTP client check above validates protocol semantics but does not enforce a
+document's CSP. The release gate must also run an isolated real Chrome session
+that clicks **Allow exactly once**:
+
+```bash
+security find-generic-password \
+  -s atlascloud-openai-plugin-staging \
+  -a openai-plugin-reviewer@atlascloud.ai \
+  -w | npm run test:codex-oauth:chrome-live
+```
+
+The Chrome test is pinned to `atlascloud-staging`, requests only the read-only
+OAuth scopes, redacts URLs and OAuth values from diagnostics, and does not call
+an Atlas model or any billable tool.
+
+The authorization script response is `no-store`, and the HTML references a
+versioned query string. Increment that version whenever `AUTH_SCRIPT` changes;
+the version prevents a previously cached CDN object from keeping old submit
+behavior after a rollout.
 
 The `*.dev.atlascloud.ai` DNS wildcard makes this a real public HTTPS staging deployment, not the final production hostname. Promote only after the domain owner provisions the non-`dev` DNS records and the same checks pass there.
 

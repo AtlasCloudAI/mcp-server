@@ -13,6 +13,7 @@ label { display: block; font-size: 14px; font-weight: 600; margin: 18px 0 7px; }
 input { width: 100%; border: 1px solid #cbd3df; border-radius: 10px; padding: 12px 13px; font: inherit; }
 input:focus { outline: 3px solid rgba(79, 70, 229, .18); border-color: #4f46e5; }
 button, .button { width: 100%; border: 0; border-radius: 10px; padding: 12px 16px; margin-top: 20px; font: inherit; font-weight: 700; cursor: pointer; text-align: center; }
+button:disabled { cursor: wait; opacity: .72; }
 .primary { background: #4f46e5; color: white; }
 .secondary { background: #edf0f5; color: #27334a; }
 .error { background: #fff0f0; border: 1px solid #ffc7c7; color: #8b1f1f; padding: 11px 13px; border-radius: 10px; }
@@ -20,6 +21,38 @@ ul { padding-left: 22px; color: #344057; line-height: 1.55; }
 .notice { font-size: 13px; color: #69758a; margin-top: 22px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .actions button { margin-top: 20px; }
+[hidden] { display: none !important; }
+`;
+
+export const AUTH_SCRIPT = `
+document.querySelectorAll("form[data-submit-once]").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    if (form.dataset.submitting === "true") {
+      event.preventDefault();
+      return;
+    }
+    form.dataset.submitting = "true";
+
+    const submitter = event.submitter;
+    if (submitter instanceof HTMLButtonElement && submitter.name) {
+      const submittedValue = document.createElement("input");
+      submittedValue.type = "hidden";
+      submittedValue.name = submitter.name;
+      submittedValue.value = submitter.value;
+      form.append(submittedValue);
+      submitter.removeAttribute("name");
+    }
+
+    form.querySelectorAll("button[type='submit']").forEach((button) => {
+      button.disabled = true;
+    });
+    if (submitter instanceof HTMLButtonElement) {
+      submitter.textContent = submitter.dataset.pendingLabel || "Working…";
+    }
+    const status = form.querySelector("[data-submit-status]");
+    if (status instanceof HTMLElement) status.hidden = false;
+  });
+});
 `;
 
 function escapeHtml(value: string): string {
@@ -40,6 +73,7 @@ function layout(content: string, title: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)} · Atlas Cloud</title>
   <link rel="stylesheet" href="/assets/auth.css">
+  <script src="/assets/auth.js?v=single-submit-v1" defer></script>
 </head>
 <body>
   <main>
@@ -60,13 +94,14 @@ export function renderLogin(interaction: Interaction, csrfToken: string, error?:
     <h1>Connect ChatGPT to Atlas Cloud</h1>
     <p>Sign in with the dedicated Atlas Cloud reviewer account to continue.</p>
     ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/login">
+    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/login" data-submit-once>
       ${hiddenFields(interaction.uid, csrfToken)}
       <label for="email">Email</label>
       <input id="email" name="email" type="email" autocomplete="username" maxlength="254" required autofocus>
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
-      <button class="primary" type="submit">Continue</button>
+      <button class="primary" type="submit" data-pending-label="Signing in…">Continue</button>
+      <p class="notice" data-submit-status hidden aria-live="polite">Sign-in submitted. Please wait…</p>
     </form>
     <p class="notice">Credentials are verified by Atlas Cloud and are never shared with ChatGPT.</p>
   `, "Sign in");
@@ -83,12 +118,13 @@ export function renderCredentialLink(
     <h1>Link your Atlas Cloud API key</h1>
     <p>Your verified account <strong>${escapeHtml(email)}</strong> needs an Atlas Cloud API key before ChatGPT can use Atlas Cloud on your behalf.</p>
     ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/link">
+    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/link" data-submit-once>
       ${hiddenFields(interaction.uid, csrfToken)}
       <input type="hidden" name="link_ticket" value="${escapeHtml(ticket)}">
       <label for="atlas_api_key">Atlas Cloud API key</label>
       <input id="atlas_api_key" name="atlas_api_key" type="password" autocomplete="off" minlength="16" maxlength="4096" required autofocus>
-      <button class="primary" type="submit">Verify and link</button>
+      <button class="primary" type="submit" data-pending-label="Verifying…">Verify and link</button>
+      <p class="notice" data-submit-status hidden aria-live="polite">API key submitted. Please wait…</p>
     </form>
     <p class="notice">The key is validated with a read-only balance request, encrypted before storage, and never sent to ChatGPT.</p>
   `, "Link API key");
@@ -135,12 +171,13 @@ export function renderConsent(interaction: Interaction, csrfToken: string): stri
     <p>ChatGPT is requesting permission to use Atlas Cloud on your behalf:</p>
     <ul>${items}</ul>
     ${billingNotice}
-    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/confirm">
+    <form method="post" action="/interaction/${encodeURIComponent(interaction.uid)}/confirm" data-submit-once>
       ${hiddenFields(interaction.uid, csrfToken)}
       <div class="actions">
-        <button class="secondary" type="submit" name="decision" value="deny">Cancel</button>
-        <button class="primary" type="submit" name="decision" value="allow">Allow</button>
+        <button class="secondary" type="submit" name="decision" value="deny" data-pending-label="Cancelling…">Cancel</button>
+        <button class="primary" type="submit" name="decision" value="allow" data-pending-label="Authorizing…">Allow</button>
       </div>
+      <p class="notice" data-submit-status hidden aria-live="polite">Authorization submitted. Returning to ChatGPT or Codex…</p>
     </form>
   `, "Authorize");
 }

@@ -43,6 +43,7 @@
 
 - [What You Can Do](#what-you-can-do)
 - [Quick Start](#quick-start)
+- [Codex OAuth callback recovery](#codex-oauth-callback-recovery)
 - [Available Tools](#available-tools)
 - [Usage Examples](#usage-examples)
 - [Development](#development)
@@ -94,6 +95,23 @@ goose mcp add atlascloud -- npx -y atlascloud-mcp
 ```
 
 > Set the `ATLASCLOUD_API_KEY` environment variable in your shell first.
+
+### Codex OAuth callback recovery
+
+When a remote Atlas Cloud MCP server uses browser OAuth, the regular Codex CLI
+login currently waits for a callback for about five minutes. On macOS, use the
+guarded App Server helper below when the browser login or consent step may take
+longer:
+
+```bash
+./scripts/codex-oauth-app-server-login.sh
+```
+
+The helper is intentionally locked to `atlascloud-staging`, requests only the
+read-only model, prediction, and billing scopes, verifies the loopback listener
+before opening the browser, and waits for up to 540 seconds. See
+[`docs/CODEX_OAUTH_CALLBACK.md`](./docs/CODEX_OAUTH_CALLBACK.md) for setup,
+security boundaries, and tests.
 
 ### IDEs, editors & extensions (JSON config)
 

@@ -267,7 +267,7 @@ fi
 
 COMPLETION_WAIT_SECONDS=$((OAUTH_TIMEOUT_SECONDS + 30))
 if ! wait_for_text '"method":"mcpServer/oauthLogin/completed"' "$COMPLETION_WAIT_SECONDS"; then
-  fail "没有收到 OAuth 完成通知。当前授权页已失效，请重新运行 5_RECONNECT_ATLAS_OAUTH.command。"
+  fail "没有收到 OAuth 完成通知。当前授权页已失效，请重新运行本脚本生成新会话。"
 fi
 
 COMPLETION_RESPONSE="$(grep -F '"method":"mcpServer/oauthLogin/completed"' "$PROTOCOL_LOG" | tail -n 1)"
@@ -276,7 +276,7 @@ case "$COMPLETION_RESPONSE" in
     printf '\n%s\n' "✅ OAuth 成功：Codex 已收到 loopback 回调、完成 code exchange 并保存 token。"
     ;;
   *'"name":"atlascloud-staging"'*)
-    fail "OAuth 未完成。当前授权页已经失效，请重新运行 5_RECONNECT_ATLAS_OAUTH.command，并只点新页一次 Allow。"
+    fail "OAuth 未完成。当前授权页已经失效，请重新运行本脚本，并只点新页一次 Allow。"
     ;;
   *)
     fail "收到的 OAuth 完成通知不属于 atlascloud-staging。"

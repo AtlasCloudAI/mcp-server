@@ -25,6 +25,7 @@ import type {
 import type { UpstreamIdentityClient } from "./upstream-oidc.js";
 import {
   enforceRegisteredClientMetadata,
+  isSupportedCallback,
 } from "./client-registration.js";
 import { isExactAllowedHost } from "../http/host-validation.js";
 import { verifyPassword } from "./password.js";
@@ -32,6 +33,7 @@ import type { LinkedAtlasCredentialStore } from "../services/linked-credential-s
 import type { AtlasCredentialValidator } from "../services/credential-validation.js";
 import {
   AUTH_STYLES,
+  AUTH_SCRIPT,
   renderAuthorizationRecovery,
   renderConsent,
   renderCredentialLink,
@@ -101,6 +103,17 @@ export type AuthorizationAuditEvent =
       rotations: number;
     }
   | {
+      event: "oidc_authorization_code_success";
+      grant_type: "authorization_code";
+      client_hash: string;
+    }
+  | {
+      event: "authorization_consent_success";
+      client_hash: string;
+      callback_type: SupportedCallbackType;
+      status: 303;
+    }
+  | {
       event: "authorization_request_error";
       method: string;
       route: string;
@@ -135,6 +148,8 @@ interface FederatedRuntime {
   upstreamClient: UpstreamIdentityClient;
   validateAtlasCredential: AtlasCredentialValidator;
 }
+
+type SupportedCallbackType = "chatgpt" | "codex_loopback";
 
 function noStore(res: Response): void {
   res.setHeader("Cache-Control", "no-store");
@@ -339,7 +354,6 @@ function assertCsrf(
 
 function securityHeaders(config: AuthorizationServerConfig) {
   return (_request: Request, response: Response, next: NextFunction): void => {
-    response.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("X-Frame-Options", "DENY");
@@ -349,6 +363,36 @@ function securityHeaders(config: AuthorizationServerConfig) {
     }
     next();
   };
+}
+
+function supportedCallback(interaction: Interaction): {
+  origin: string;
+  type: SupportedCallbackType;
+} {
+  const raw = stringParam(interaction.params, "redirect_uri");
+  if (!raw || !isSupportedCallback(raw)) {
+    throw new errors.InvalidRequest("authorization redirect URI is not supported");
+  }
+  const url = new URL(raw);
+  return {
+    origin: url.origin,
+    type: url.hostname === "127.0.0.1" ? "codex_loopback" : "chatgpt",
+  };
+}
+
+function setInteractionHtmlCsp(response: Response, interaction: Interaction): void {
+  const callback = supportedCallback(interaction);
+  response.setHeader(
+    "Content-Security-Policy",
+    `default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' ${callback.origin}; frame-ancestors 'none'; base-uri 'none'`
+  );
+}
+
+function setStaticHtmlCsp(response: Response): void {
+  response.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+  );
 }
 
 function exactHost(config: AuthorizationServerConfig) {
@@ -707,7 +751,16 @@ export function createAuthorizationApp(
     });
   });
   provider.on("grant.success", (ctx) => {
-    if (grantType(ctx) !== "refresh_token") return;
+    const currentGrantType = grantType(ctx);
+    if (currentGrantType === "authorization_code") {
+      writeAudit(auditLogger, {
+        event: "oidc_authorization_code_success",
+        grant_type: "authorization_code",
+        client_hash: shortDigest(ctx.oidc.client?.clientId),
+      });
+      return;
+    }
+    if (currentGrantType !== "refresh_token") return;
     writeAudit(auditLogger, {
       event: "oidc_refresh_success",
       grant_type: "refresh_token",
@@ -744,6 +797,10 @@ export function createAuthorizationApp(
     response.setHeader("Cache-Control", "public, max-age=3600");
     response.type("text/css").send(AUTH_STYLES);
   });
+  app.get("/assets/auth.js", (_request, response) => {
+    noStore(response);
+    response.type("text/javascript").send(AUTH_SCRIPT);
+  });
 
   const registrationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
@@ -771,6 +828,7 @@ export function createAuthorizationApp(
     noStore(response);
     const interaction = await provider.interactionDetails(request, response);
     if (interaction.uid !== request.params.uid) {
+      setStaticHtmlCsp(response);
       response.status(400).type("html").send(renderUnsupportedPrompt());
       return;
     }
@@ -792,14 +850,17 @@ export function createAuthorizationApp(
         return;
       }
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
+      setInteractionHtmlCsp(response, interaction);
       response.status(200).type("html").send(renderLogin(interaction, csrfToken));
       return;
     }
     if (interaction.prompt.name === "consent") {
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
+      setInteractionHtmlCsp(response, interaction);
       response.status(200).type("html").send(renderConsent(interaction, csrfToken));
       return;
     }
+    setStaticHtmlCsp(response);
     response.status(400).type("html").send(renderUnsupportedPrompt());
   });
 
@@ -823,6 +884,7 @@ export function createAuthorizationApp(
       const passwordMatches = await verifyPassword(parsed.data.password, comparisonHash);
       if (!user || !passwordMatches) {
         const csrfToken = issueCsrfToken(config, response, interaction.uid);
+        setInteractionHtmlCsp(response, interaction);
         response.status(401).type("html").send(
           renderLogin(interaction, csrfToken, "Email or password is incorrect.")
         );
@@ -901,6 +963,7 @@ export function createAuthorizationApp(
       10 * 60
     );
     const csrfToken = issueCsrfToken(config, response, interaction.uid);
+    setInteractionHtmlCsp(response, interaction);
     response.status(200).type("html").send(
       renderCredentialLink(interaction, csrfToken, ticket, account.email)
     );
@@ -965,6 +1028,7 @@ export function createAuthorizationApp(
         await federated.validateAtlasCredential(parsed.data.atlas_api_key);
       } catch {
         const csrfToken = issueCsrfToken(config, response, interaction.uid);
+        setInteractionHtmlCsp(response, interaction);
         response.status(401).type("html").send(
           renderCredentialLink(
             interaction,
@@ -1011,6 +1075,7 @@ export function createAuthorizationApp(
         );
         return;
       }
+      const callback = supportedCallback(interaction);
       const grantId = await grantConsent(provider, interaction);
       await provider.interactionFinished(
         request,
@@ -1018,6 +1083,12 @@ export function createAuthorizationApp(
         { consent: interaction.grantId ? {} : { grantId } },
         { mergeWithLastSubmission: true }
       );
+      writeAudit(auditLogger, {
+        event: "authorization_consent_success",
+        client_hash: shortDigest(stringParam(interaction.params, "client_id")),
+        callback_type: callback.type,
+        status: 303,
+      });
     }
   );
 
@@ -1050,6 +1121,7 @@ export function createAuthorizationApp(
           status,
         });
         noStore(response);
+        setStaticHtmlCsp(response);
         response.status(status).type("html").send(renderAuthorizationRecovery());
         return;
       }

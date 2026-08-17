@@ -19,6 +19,7 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "test": "tsx --test test/**/*.test.ts",
+    "test:codex-oauth": "./scripts/test-codex-oauth-app-server-login.sh",
     "test:coverage": "tsx --test --experimental-test-coverage test/**/*.test.ts",
     "validate:production-config": "npm run build && node scripts/validate-production-config.mjs",
     "check": "npm run build && npm test && npm audit --audit-level=high"

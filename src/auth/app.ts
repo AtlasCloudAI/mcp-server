@@ -68,7 +68,9 @@ const upstreamCallbackSchema = z
     iss: z.string().url().optional(),
     session_state: z.string().min(1).max(4096).optional(),
   })
-  .strict();
+  // OIDC providers may append response metadata such as `scope`, `authuser`,
+  // `hd`, or `prompt`. Validate the fields we consume and discard the rest.
+  .strip();
 const credentialLinkSchema = formSchema.extend({
   link_ticket: oneTimeTokenSchema,
   atlas_api_key: z.string().min(16).max(4096),
@@ -909,10 +911,6 @@ export function createAuthorizationApp(
     if (!rawState.success) {
       throw new errors.InvalidRequest("invalid upstream OIDC callback state");
     }
-    const pending = await federated.federatedStore.consumeUpstreamAuthorization(rawState.data);
-    if (!pending) {
-      throw new errors.InvalidRequest("upstream OIDC callback state is expired or already used");
-    }
     const parsed = upstreamCallbackSchema.safeParse(request.query);
     if (!parsed.success) {
       throw new errors.InvalidRequest("upstream OIDC authorization did not return a valid code");
@@ -922,6 +920,10 @@ export function createAuthorizationApp(
       parsed.data.iss.replace(/\/$/, "") !== config.upstream!.issuer.toString().replace(/\/$/, "")
     ) {
       throw new errors.InvalidRequest("upstream OIDC callback issuer does not match");
+    }
+    const pending = await federated.federatedStore.consumeUpstreamAuthorization(rawState.data);
+    if (!pending) {
+      throw new errors.InvalidRequest("upstream OIDC callback state is expired or already used");
     }
     const interaction = await provider.Interaction.find(pending.interactionUid);
     if (

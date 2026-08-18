@@ -1352,10 +1352,21 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   assert.ok(upstreamState);
   assert.equal(harness.identityStore.authorizations.size, 1);
 
+  const malformedUpstreamCallback = new URL(`${harness.baseUrl}/upstream/callback`);
+  malformedUpstreamCallback.searchParams.set("state", upstreamState);
+  malformedUpstreamCallback.searchParams.set("iss", "https://identity.example");
+  response = await requestWithCookies(jar, malformedUpstreamCallback);
+  assert.equal(response.status, 400);
+  assert.equal(harness.identityStore.authorizations.size, 1);
+
   const upstreamCallback = new URL(`${harness.baseUrl}/upstream/callback`);
   upstreamCallback.searchParams.set("code", "valid-upstream-code");
   upstreamCallback.searchParams.set("state", upstreamState);
   upstreamCallback.searchParams.set("iss", "https://identity.example");
+  upstreamCallback.searchParams.set("scope", "openid email profile");
+  upstreamCallback.searchParams.set("authuser", "0");
+  upstreamCallback.searchParams.set("hd", "atlascloud.ai");
+  upstreamCallback.searchParams.set("prompt", "consent");
   response = await requestWithCookies(jar, upstreamCallback);
   assert.equal(response.status, 200);
   let html = await response.text();
@@ -1513,5 +1524,6 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   mismatchCallback.searchParams.set("iss", "https://evil.example");
   response = await requestWithCookies(mismatchJar, mismatchCallback);
   assert.equal(response.status, 400);
+  assert.equal(harness.identityStore.authorizations.size, 1);
   assert.equal(harness.upstreamClient.exchanges, 2);
 });

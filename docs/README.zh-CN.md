@@ -39,6 +39,9 @@
 - 📚 **探索更多** — [全部 396 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
+> 🔜 **即将上线** — Kling 4.0 · Wan 3.0，正在接入 Atlas Cloud，暂时还调用不了。当前最新的视频模型是 Seedance 2.5、Kling 3 / Video O3 和 Wan 2.7。
+
+
 ## 目录
 
 - [你可以做什么](#你可以做什么)

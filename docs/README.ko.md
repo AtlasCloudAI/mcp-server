@@ -33,10 +33,10 @@
 - 🎬 **비디오** (174) — Seedance 2.5 · MiniMax H3 · Youchuan V8.2 · Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash
 - 🎨 **이미지** (116) — Seedream v5.0 Pro · Qwen Image 3.0 · Reve 2.1 · Youchuan V8.2
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
-- 💬 **LLM** (64) — Grok 4.6 · DeepSeek V4 Flash 0731 · Qwen3.8 Max · Kimi K3
+- 💬 **LLM** (65) — Grok 4.6 · DeepSeek V4 Flash 0731 · Qwen3.8 Max · Kimi K3
 - 🔊 **오디오 (TTS · 음악 · STT)** (18) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-v4-5-all
 
-- 📚 **더 살펴보기** — [전체 395개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 396개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 ## 목차

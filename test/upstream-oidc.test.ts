@@ -116,6 +116,9 @@ test("upstream OIDC uses PKCE and accepts only a signed verified-email identity"
   assert.match(account.sub, /^oidc-[A-Za-z0-9_-]{43}$/);
   assert.equal(account.email, "person@example.com");
   assert.equal(account.name, "Example Person");
+  // 派生 sub 是单向哈希，无法反查 Atlas 账号；凭据换取要靠保留下来的原始上游 sub。
+  assert.equal(account.upstreamSubject, "upstream-user-1");
+  assert.notEqual(account.sub, account.upstreamSubject);
   assert.equal(await client.ready(), true);
 });
 

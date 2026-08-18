@@ -23,6 +23,7 @@
     "test:codex-oauth:chrome-live": "node scripts/codex-oauth-chrome-e2e.mjs",
     "test:coverage": "tsx --test --experimental-test-coverage test/**/*.test.ts",
     "validate:production-config": "npm run build && node scripts/validate-production-config.mjs",
+    "check:upstream-oidc": "node scripts/check-upstream-oidc.mjs",
     "check": "npm run build && npm test && npm audit --audit-level=high"
   },
   "engines": {

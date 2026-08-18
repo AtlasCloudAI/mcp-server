@@ -39,6 +39,9 @@
 - 📚 **さらに探す** — [全 396 モデル »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
+> 🔜 **近日対応** — Kling 4.0 · Wan 3.0。Atlas Cloud に追加予定で、まだ呼び出せません。現在の最新動画モデルは Seedance 2.5、Kling 3 / Video O3、Wan 2.7 です。
+
+
 ## 目次
 
 - [できること](#できること)

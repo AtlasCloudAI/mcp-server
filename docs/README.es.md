@@ -39,7 +39,7 @@
 - 📚 **Explora más** — [los 396 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
-> 🔜 **Próximamente** — Kling 4.0 · Wan 3.0. En camino a Atlas Cloud; todavía no se pueden invocar. Los modelos de vídeo más recientes hoy son Seedance 2.5, Kling 3 / Video O3 y Wan 2.7.
+> 🎬 **Modelos de vídeo más recientes** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.
 
 
 ## Contenido

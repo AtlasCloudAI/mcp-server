@@ -726,6 +726,53 @@ async function grantConsent(provider: Provider, interaction: Interaction): Promi
   return grantId;
 }
 
+// The upstream sign-in flow may resume a "consent" interaction as well as a
+// "login" one: when the auth session is alive but the credential must be
+// re-ensured, the consent path re-runs the upstream redirect and its callback.
+function isFederatedInteractionPrompt(name: string): boolean {
+  return name === "login" || name === "consent";
+}
+
+export type ConsentCredentialOutcome = "present" | "linked" | "link";
+
+/**
+ * Ensures a linked Atlas credential exists for `subject` before consent is
+ * granted. Exported for tests.
+ *
+ * "present": a credential is already stored. "linked": the exchange minted one
+ * just now. "link": nothing usable — the caller must fall back to the manual
+ * key form (or a fresh upstream sign-in when even the account record is gone).
+ * Mirrors the upstream-callback semantics: an exchanged key is validated with
+ * the same read-only check as a pasted one before it is stored.
+ */
+export async function ensureConsentCredential(
+  federated: FederatedRuntime,
+  config: AuthorizationServerConfig,
+  auditLogger: AuthorizationAuditLogger,
+  subject: string
+): Promise<ConsentCredentialOutcome> {
+  if (await federated.credentialStore.get(subject)) return "present";
+  const account = await federated.federatedStore.getAccount(subject);
+  if (account?.upstreamSubject && federated.credentialExchange && config.upstream) {
+    try {
+      const exchanged = await federated.credentialExchange.exchange({
+        issuer: config.upstream.issuer.toString().replace(/\/$/, ""),
+        subject: account.upstreamSubject,
+      });
+      if (exchanged) {
+        await federated.validateAtlasCredential(exchanged);
+        await federated.credentialStore.put(subject, exchanged);
+        writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "linked" });
+        return "linked";
+      }
+      writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "no_account" });
+    } catch {
+      writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "error" });
+    }
+  }
+  return "link";
+}
+
 async function finishFederatedLogin(
   provider: Provider,
   request: Request,
@@ -851,29 +898,67 @@ export function createAuthorizationApp(
       response.status(400).type("html").send(renderUnsupportedPrompt());
       return;
     }
+    const redirectToUpstream = async () => {
+      if (!federated) return false;
+      const state = randomBytes(32).toString("base64url");
+      const nonce = randomBytes(32).toString("base64url");
+      const codeVerifier = randomBytes(32).toString("base64url");
+      await federated.federatedStore.beginUpstreamAuthorization(
+        state,
+        { interactionUid: interaction.uid, nonce, codeVerifier },
+        10 * 60
+      );
+      response.redirect(303, federated.upstreamClient.authorizationUrl({
+        state,
+        nonce,
+        codeVerifier,
+      }).toString());
+      return true;
+    };
     if (interaction.prompt.name === "login") {
-      if (federated) {
-        const state = randomBytes(32).toString("base64url");
-        const nonce = randomBytes(32).toString("base64url");
-        const codeVerifier = randomBytes(32).toString("base64url");
-        await federated.federatedStore.beginUpstreamAuthorization(
-          state,
-          { interactionUid: interaction.uid, nonce, codeVerifier },
-          10 * 60
-        );
-        response.redirect(303, federated.upstreamClient.authorizationUrl({
-          state,
-          nonce,
-          codeVerifier,
-        }).toString());
-        return;
-      }
+      if (await redirectToUpstream()) return;
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
       setInteractionHtmlCsp(response, interaction);
       response.status(200).type("html").send(renderLogin(interaction, csrfToken));
       return;
     }
     if (interaction.prompt.name === "consent") {
+      // A consent prompt means oidc-provider found a live auth session, so the
+      // upstream callback — the only place the credential used to be ensured —
+      // never runs on this path. If the stored credential has meanwhile been
+      // wiped or expired (Redis TTL, an ops cleanup), tokens would be minted for
+      // an account the resource server cannot serve, and every MCP call would
+      // fail with account_not_linked. Ensure the credential BEFORE consent.
+      if (federated) {
+        const subject = (interaction.session as { accountId?: string } | undefined)?.accountId;
+        if (!subject) {
+          setStaticHtmlCsp(response);
+          response.status(400).type("html").send(renderUnsupportedPrompt());
+          return;
+        }
+        const outcome = await ensureConsentCredential(federated, config, auditLogger, subject);
+        if (outcome === "link") {
+          const account = await federated.federatedStore.getAccount(subject);
+          if (account) {
+            const ticket = randomBytes(32).toString("base64url");
+            await federated.federatedStore.beginCredentialLink(
+              ticket,
+              { interactionUid: interaction.uid, subject },
+              10 * 60
+            );
+            const csrfToken = issueCsrfToken(config, response, interaction.uid);
+            setInteractionHtmlCsp(response, interaction);
+            response.status(200).type("html").send(
+              renderCredentialLink(interaction, csrfToken, ticket, account.email)
+            );
+            return;
+          }
+          // The federated account record itself is gone (its retention window
+          // passed): re-run the upstream sign-in so the callback can rebuild it
+          // and take the normal exchange-or-link path.
+          if (await redirectToUpstream()) return;
+        }
+      }
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
       setInteractionHtmlCsp(response, interaction);
       response.status(200).type("html").send(renderConsent(interaction, csrfToken));
@@ -948,7 +1033,7 @@ export function createAuthorizationApp(
       !interaction.isValid ||
       interaction.isExpired ||
       interaction.uid !== pending.interactionUid ||
-      interaction.prompt.name !== "login"
+      !isFederatedInteractionPrompt(interaction.prompt.name)
     ) {
       throw new errors.InvalidRequest("upstream OIDC callback does not match the active interaction");
     }
@@ -1015,7 +1100,10 @@ export function createAuthorizationApp(
       throw new errors.InvalidRequest("federated login completion is disabled");
     }
     const interaction = await provider.interactionDetails(request, response);
-    if (interaction.uid !== request.params.uid || interaction.prompt.name !== "login") {
+    if (
+      interaction.uid !== request.params.uid ||
+      !isFederatedInteractionPrompt(interaction.prompt.name)
+    ) {
       throw new errors.InvalidRequest("federated login completion does not match the active interaction");
     }
     const ticket = oneTimeTokenSchema.safeParse(
@@ -1058,7 +1146,7 @@ export function createAuthorizationApp(
       if (
         !pending ||
         pending.interactionUid !== interaction.uid ||
-        interaction.prompt.name !== "login"
+        !isFederatedInteractionPrompt(interaction.prompt.name)
       ) {
         throw new errors.InvalidRequest("credential-link ticket is expired or mismatched");
       }

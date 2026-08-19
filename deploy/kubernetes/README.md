@@ -47,7 +47,7 @@ Staging uses the longest OAuth lifetimes accepted by the current auth config:
 | Credential | Lifetime | Behavior |
 |---|---:|---|
 | Access token | 3,600 seconds (1 hour) | Short-lived bearer token |
-| Refresh token | 604,800 seconds (7 days) | Rotated on refresh; the consumed token allows at most 2 retries inside a fixed 30-second window, then strict replay detection resumes |
+| Refresh token | 7,776,000 seconds (90 days) | Independent from the 8-hour browser session and rotated on refresh; the consumed token allows at most 2 retries inside a fixed 30-second window, then strict replay detection resumes |
 | Authorization grant | 31,536,000 seconds (1 year) | Upper bound for an actively refreshed connection; must not be shorter than the refresh-token lifetime |
 | Dynamic public client (ChatGPT or Codex) | 31,536,000 seconds (1 year) | Re-registration is normally unnecessary during this period |
 
@@ -197,6 +197,21 @@ Register this exact upstream callback URL with the identity provider:
 https://mcp-auth.atlascloud.ai/upstream/callback
 ```
 
+`docs/UPSTREAM_OIDC_REQUIREMENTS.md` states every rule the provider must
+satisfy. Confirm a candidate issuer before requesting DNS, secrets, or a
+deployment window; the check needs no build step, client secret, or cluster
+access:
+
+```bash
+node scripts/check-upstream-oidc.mjs https://issuer.example.com
+```
+
+It prints one `PASS`/`FAIL` line per rule plus the exact
+`AUTH_UPSTREAM_ENDPOINT_HOSTS` value implied by the discovery document, and
+exits non-zero on failure. `email_verified: true` in the ID token is the one
+mandatory behavior discovery cannot prove; confirm it with the provider
+directly.
+
 Create these additional Kubernetes Secret keys out of band:
 
 - `generation-confirmation-secret`: at least 32 random bytes, shared by every
@@ -252,3 +267,25 @@ The directory is intentionally named `.example`; do not apply the rendered
 output until every external production gate above is satisfied. Both staging
 and production reuse the single reviewed manifest in `base/staging.yaml`, so
 there is no duplicated deployment source to drift.
+
+### Validating upstream OIDC on staging first
+
+`staging-upstream-oidc.example/` applies the production identity and credential
+profile to the staging hosts: `AUTH_IDENTITY_MODE=upstream-oidc`,
+`MCP_CREDENTIAL_MODE=redis-subject-map`, the encrypted credential keyring, and
+removal of `OIDC_USERS_JSON` and `MCP_ATLAS_SUBJECT_KEYS_JSON`. It keeps
+`PLUGIN_RELEASE_TIER=staging`, so a staging-labeled upstream issuer is accepted
+there and rejected by the production gate.
+
+```bash
+kubectl kustomize deploy/kubernetes/staging-upstream-oidc.example
+```
+
+It reads the same additional Secret keys as production, so populate
+`auth-upstream-*` and `credential-encryption-keys-json` in
+`mcp-servers/atlascloud-openai-plugin` before applying, and register the
+staging Auth callback with the provider. This overlay retires the reviewer
+password path on staging: `scripts/codex-oauth-e2e.mjs` and
+`npm run test:codex-oauth:chrome-live` both read a reviewer password from stdin
+and cannot drive an upstream sign-in, so validate the browser flow manually
+while it is active.

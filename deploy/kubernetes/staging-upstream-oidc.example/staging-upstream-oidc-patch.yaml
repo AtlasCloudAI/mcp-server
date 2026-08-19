@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-mcp
+  namespace: mcp-servers
+spec:
+  template:
+    spec:
+      containers:
+        - name: mcp
+          env:
+            - name: MCP_CREDENTIAL_MODE
+              value: redis-subject-map
+            - name: MCP_CREDENTIAL_REDIS_PREFIX
+              value: atlascloud:openai-plugin:credential
+            - name: MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: credential-encryption-keys-json
+            - name: MCP_ATLAS_SUBJECT_KEYS_JSON
+              $patch: delete
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+spec:
+  template:
+    spec:
+      containers:
+        - name: auth
+          env:
+            - name: AUTH_IDENTITY_MODE
+              value: upstream-oidc
+            - name: AUTH_UPSTREAM_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-issuer-url
+            - name: AUTH_UPSTREAM_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-client-id
+            - name: AUTH_UPSTREAM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-client-secret
+            - name: AUTH_UPSTREAM_SCOPES
+              value: openid,email,profile
+            - name: AUTH_UPSTREAM_ENDPOINT_HOSTS
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: auth-upstream-endpoint-hosts
+            - name: AUTH_CREDENTIAL_REDIS_PREFIX
+              value: atlascloud:openai-plugin:credential
+            - name: AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: credential-encryption-keys-json
+            - name: OIDC_USERS_JSON
+              $patch: delete

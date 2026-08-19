@@ -227,6 +227,31 @@ Create these additional Kubernetes Secret keys out of band:
   both `AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON` and
   `MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON`
 
+### Optional: link the Atlas key without asking the user
+
+By default a first-time user pastes an Atlas API key once, and it is encrypted
+and reused for 90 days. Setting both of these makes the first sign-in link the
+key automatically, falling back to the manual form whenever the exchange cannot
+answer:
+
+```text
+AUTH_CREDENTIAL_EXCHANGE_URL=https://<atlas api host>/api/v1/federated/credential
+AUTH_CREDENTIAL_EXCHANGE_TOKEN=<dedicated shared secret, at least 32 characters>
+```
+
+Setting only one of them is a startup error rather than a silent no-op, because
+a half-configured exchange looks exactly like a working one: every user simply
+keeps pasting keys. The token must be the backend's dedicated federated
+credential secret, never a service token that can impersonate accounts.
+
+The exchange names the identity in the upstream provider's own terms — the
+issuer plus the subject the provider asserted — so the backend can find the
+matching Atlas account. The subject stored against a linked credential is a
+one-way hash of issuer and subject and cannot be mapped back. An exchanged key
+is still verified with the same read-only balance request as a pasted one, and
+the `federated_credential_exchange` audit event records only the outcome
+(`linked`, `no_account`, `error`), never the identity or the key.
+
 The Auth and MCP processes must use the same password-protected Redis URL and
 the same credential prefix. A linked Atlas API key is verified with one
 read-only balance request, encrypted with AES-256-GCM using the OAuth subject as

@@ -8,6 +8,7 @@ import { createRedisOidcStore } from "./auth/redis-adapter.js";
 import { RedisFederatedIdentityStore } from "./auth/federated-store.js";
 import { createUpstreamIdentityClient } from "./auth/upstream-oidc.js";
 import { validateAtlasCredential } from "./services/credential-validation.js";
+import { createFederatedCredentialExchange } from "./services/federated-credential-exchange.js";
 import { RedisLinkedAtlasCredentialStore } from "./services/linked-credential-store.js";
 
 export async function startAuthorizationServer(): Promise<{
@@ -34,6 +35,10 @@ export async function startAuthorizationServer(): Promise<{
           ),
           upstreamClient: await createUpstreamIdentityClient(config.upstream!),
           validateAtlasCredential,
+          // 未配置 AUTH_CREDENTIAL_EXCHANGE_* 时保持 undefined：首次登录走手工粘贴。
+          credentialExchange: config.credentialExchange
+            ? createFederatedCredentialExchange(config.credentialExchange)
+            : undefined,
         }
       : {};
     const { app } = createAuthorizationApp(config, store, dependencies);

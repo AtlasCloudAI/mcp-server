@@ -651,6 +651,12 @@ function providerConfiguration(
     interactions: {
       url: async (_ctx, interaction) => `/interaction/${interaction.uid}`,
     },
+    // Codex DCR clients support refresh_token but do not request the OIDC
+    // offline_access scope. Keep their rotating refresh tokens independent
+    // from the short-lived interactive browser session; otherwise the token
+    // remains in Redis but becomes unusable as soon as that session expires.
+    expiresWithSession: async (ctx) =>
+      !ctx.oidc.client?.grantTypeAllowed("refresh_token"),
     issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed("refresh_token"),
     jwks: config.jwks,
     pkce: { required: () => true },

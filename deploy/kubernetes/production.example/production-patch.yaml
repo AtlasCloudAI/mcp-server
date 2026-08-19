@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
           env:
             - name: PLUGIN_RELEASE_TIER
               value: production
@@ -61,7 +61,7 @@ spec:
     spec:
       containers:
         - name: auth
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:9e3ea858953d01b55eba0a1dce66793c7b5cc19dccb232cd24b4d4aa484022fb
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
           env:
             - name: PLUGIN_RELEASE_TIER
               value: production
@@ -97,6 +97,8 @@ spec:
                   key: auth-upstream-endpoint-hosts
             - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
               value: "600"
+            - name: AUTH_REFRESH_TOKEN_TTL_SECONDS
+              value: "7776000"
             - name: AUTH_CREDENTIAL_REDIS_PREFIX
               value: atlascloud:openai-plugin:credential
             - name: AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON

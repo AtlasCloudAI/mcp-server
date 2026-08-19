@@ -290,7 +290,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:bdcbd38822b2ff02f05b74ed510d2ebc49d022f88d4960e87178f74677cbe5f0
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
           imagePullPolicy: IfNotPresent
           args: ["node", "dist/auth.js"]
           securityContext:
@@ -325,7 +325,7 @@ spec:
             - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
               value: "3600"
             - name: AUTH_REFRESH_TOKEN_TTL_SECONDS
-              value: "604800"
+              value: "7776000"
             - name: AUTH_REFRESH_TOKEN_REUSE_GRACE_SECONDS
               value: "30"
             - name: AUTH_REFRESH_TOKEN_REUSE_MAX_ATTEMPTS

@@ -359,8 +359,13 @@ export function loadAuthorizationServerConfig(
       if (exchangeUrl.hash) {
         throw new Error("AUTH_CREDENTIAL_EXCHANGE_URL must not contain a fragment");
       }
-      // 这个请求携带一把能换出用户 API key 的密钥，生产必须走 TLS。
-      if (env.NODE_ENV === "production") {
+      // 这个请求携带一把能换出用户 API key 的密钥，公网必须走 TLS。
+      // 集群内 Service DNS（*.svc.cluster.local）不经过公网，允许明文 HTTP：
+      // 为满足 TLS 而把内部服务发布到公网 ingress，反而扩大暴露面。
+      if (
+        env.NODE_ENV === "production" &&
+        !exchangeUrl.hostname.toLowerCase().endsWith(".svc.cluster.local")
+      ) {
         requireHttps("AUTH_CREDENTIAL_EXCHANGE_URL", exchangeUrl);
       }
       credentialExchange = { url: exchangeUrl, token: env.AUTH_CREDENTIAL_EXCHANGE_TOKEN };

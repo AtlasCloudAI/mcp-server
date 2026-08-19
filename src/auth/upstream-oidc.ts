@@ -248,6 +248,7 @@ export async function createUpstreamIdentityClient(
         sub: stableSubject(expectedIssuer, payload.sub),
         email,
         name,
+        upstreamSubject: payload.sub,
       };
     },
 

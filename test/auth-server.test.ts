@@ -703,7 +703,7 @@ test("public release auth requires upstream OIDC and encrypted credential linkin
     );
   }
 
-  // 这个请求携带能换出用户 API key 的密钥，生产必须 TLS。
+  // 这个请求携带能换出用户 API key 的密钥，公网必须 TLS。
   assert.throws(
     () => loadAuthorizationServerConfig({
       ...base,
@@ -711,6 +711,18 @@ test("public release auth requires upstream OIDC and encrypted credential linkin
       AUTH_CREDENTIAL_EXCHANGE_TOKEN: "x".repeat(32),
     }),
     /AUTH_CREDENTIAL_EXCHANGE_URL/
+  );
+
+  // 集群内 Service DNS 不经过公网，明文 HTTP 允许——这是 dev 指向自己 kubedl 的路径。
+  const clusterLocal = loadAuthorizationServerConfig({
+    ...base,
+    AUTH_CREDENTIAL_EXCHANGE_URL:
+      "http://backend.atlascloud-dev.svc.cluster.local:9099/api/v1/federated/credential",
+    AUTH_CREDENTIAL_EXCHANGE_TOKEN: "x".repeat(32),
+  });
+  assert.equal(
+    clusterLocal.credentialExchange?.url.hostname,
+    "backend.atlascloud-dev.svc.cluster.local"
   );
 
   const localReviewer = { ...base, AUTH_IDENTITY_MODE: "local-reviewer" };

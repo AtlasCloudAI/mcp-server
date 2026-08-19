@@ -1,8 +1,61 @@
-// Atlas Cloud API base URLs
-export const API_BASE = "https://api.atlascloud.ai/api/v1";
-export const LLM_API_BASE = "https://api.atlascloud.ai/v1";
+// Atlas Cloud API origin. Every Atlas call the plugin makes is derived from this
+// single value so a non-production deployment can be pointed at a non-production
+// Atlas without patching call sites.
+export const DEFAULT_ATLAS_API_ORIGIN = "https://api.atlascloud.ai";
+
+/**
+ * Resolves the Atlas API origin from ATLASCLOUD_API_BASE_URL, defaulting to
+ * production.
+ *
+ * The override exists for isolated environments: a staging plugin that still
+ * called the production API would validate staging credentials against the
+ * wrong account universe and could bill real accounts from a test run.
+ *
+ * A production release refuses any override. Silently talking to a different
+ * Atlas than the one a production release is supposed to serve is the kind of
+ * mistake that only surfaces as customers seeing someone else's data.
+ */
+export function resolveAtlasApiOrigin(
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const raw = env.ATLASCLOUD_API_BASE_URL?.trim();
+  if (!raw) return DEFAULT_ATLAS_API_ORIGIN;
+
+  if (env.PLUGIN_RELEASE_TIER === "production" && raw !== DEFAULT_ATLAS_API_ORIGIN) {
+    throw new Error(
+      "ATLASCLOUD_API_BASE_URL must not override the Atlas API origin in a production release"
+    );
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("ATLASCLOUD_API_BASE_URL is not a valid URL");
+  }
+  const isLoopback = ["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
+    throw new Error("ATLASCLOUD_API_BASE_URL must use https unless the host is loopback");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("ATLASCLOUD_API_BASE_URL must not contain credentials");
+  }
+  // An origin only: the three API paths below are appended to it, so a path here
+  // would silently produce URLs like `/api/v1/api/v1/...`.
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error(
+      "ATLASCLOUD_API_BASE_URL must be a bare origin without a path, query, or fragment"
+    );
+  }
+  return parsed.origin;
+}
+
+export const ATLAS_API_ORIGIN = resolveAtlasApiOrigin();
+
+export const API_BASE = `${ATLAS_API_ORIGIN}/api/v1`;
+export const LLM_API_BASE = `${ATLAS_API_ORIGIN}/v1`;
 // Public billing/usage endpoints (balance, usage, costs) use a separate base path
-export const PUBLIC_API_BASE = "https://api.atlascloud.ai/public/v1";
+export const PUBLIC_API_BASE = `${ATLAS_API_ORIGIN}/public/v1`;
 
 // Upload timeout (60s for larger files)
 export const UPLOAD_TIMEOUT_MS = 60000;

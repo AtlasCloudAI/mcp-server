@@ -85,6 +85,27 @@ Public staging endpoints:
 - `https://atlascloud-mcp.dev.atlascloud.ai/mcp`
 - `https://atlascloud-auth.dev.atlascloud.ai/.well-known/openid-configuration`
 
+### Pointing a non-production deployment at a non-production Atlas
+
+Every Atlas call the plugin makes derives from one origin, overridable with:
+
+```text
+ATLASCLOUD_API_BASE_URL=https://<non-production atlas api origin>
+```
+
+Unset, it is `https://api.atlascloud.ai`. The value must be a bare origin —
+the three API paths are appended to it, so a path here silently produces
+`/api/v1/api/v1/...` — and must be HTTPS unless the host is loopback.
+
+A `PLUGIN_RELEASE_TIER=production` release refuses any override and fails to
+start. A production plugin quietly talking to a different Atlas would validate
+credentials against the wrong account universe, and that only surfaces once a
+customer sees someone else's data.
+
+Without this override a staging deployment authenticates users against staging
+but calls the production API, so only production API keys work there and a test
+run bills real accounts.
+
 ### ChatGPT and Codex DCR callback policy
 
 Dynamic registration deliberately supports only two exact public-client

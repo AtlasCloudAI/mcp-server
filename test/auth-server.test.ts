@@ -679,6 +679,40 @@ test("public release auth requires upstream OIDC and encrypted credential linkin
   assert.deepEqual(config.upstream?.endpointHosts, ["accounts.atlascloud.ai"]);
   assert.equal(config.credentialEncryptionKeys.length, 2);
 
+  // 凭据自动换取是可选增强：未配置时保持 undefined，首次登录走手工粘贴。
+  assert.equal(config.credentialExchange, undefined);
+
+  const withExchange = loadAuthorizationServerConfig({
+    ...base,
+    AUTH_CREDENTIAL_EXCHANGE_URL: "https://api.atlascloud.ai/api/v1/federated/credential",
+    AUTH_CREDENTIAL_EXCHANGE_TOKEN: "x".repeat(32),
+  });
+  assert.equal(
+    withExchange.credentialExchange?.url.toString(),
+    "https://api.atlascloud.ai/api/v1/federated/credential"
+  );
+
+  // 只给一半属于配置错误：静默忽略会让"以为开了自动绑定、其实全员还在手贴"长期不被发现。
+  for (const half of [
+    { AUTH_CREDENTIAL_EXCHANGE_URL: "https://api.atlascloud.ai/api/v1/federated/credential" },
+    { AUTH_CREDENTIAL_EXCHANGE_TOKEN: "x".repeat(32) },
+  ]) {
+    assert.throws(
+      () => loadAuthorizationServerConfig({ ...base, ...half }),
+      /must be set together/
+    );
+  }
+
+  // 这个请求携带能换出用户 API key 的密钥，生产必须 TLS。
+  assert.throws(
+    () => loadAuthorizationServerConfig({
+      ...base,
+      AUTH_CREDENTIAL_EXCHANGE_URL: "http://api.atlascloud.ai/api/v1/federated/credential",
+      AUTH_CREDENTIAL_EXCHANGE_TOKEN: "x".repeat(32),
+    }),
+    /AUTH_CREDENTIAL_EXCHANGE_URL/
+  );
+
   const localReviewer = { ...base, AUTH_IDENTITY_MODE: "local-reviewer" };
   localReviewer.OIDC_USERS_JSON = JSON.stringify([{
     sub: "reviewer-1",

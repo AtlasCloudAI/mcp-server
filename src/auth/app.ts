@@ -31,6 +31,7 @@ import { isExactAllowedHost } from "../http/host-validation.js";
 import { verifyPassword } from "./password.js";
 import type { LinkedAtlasCredentialStore } from "../services/linked-credential-store.js";
 import type { AtlasCredentialValidator } from "../services/credential-validation.js";
+import type { FederatedCredentialExchange } from "../services/federated-credential-exchange.js";
 import {
   AUTH_STYLES,
   AUTH_SCRIPT,
@@ -86,10 +87,17 @@ export interface AuthorizationAppDependencies {
   credentialStore?: LinkedAtlasCredentialStore;
   upstreamClient?: UpstreamIdentityClient;
   validateAtlasCredential?: AtlasCredentialValidator;
+  credentialExchange?: FederatedCredentialExchange;
   auditLogger?: AuthorizationAuditLogger;
 }
 
 export type AuthorizationAuditEvent =
+  | {
+      // 自动换取凭据的结果。不记录 subject、邮箱或 key，只记录结果分类，
+      // 这样"每个人都退回手贴 key"这种静默降级仍然能在日志里看出来。
+      event: "federated_credential_exchange";
+      outcome: "linked" | "no_account" | "error";
+    }
   | {
       event: "oidc_grant_error";
       error: string;
@@ -149,6 +157,8 @@ interface FederatedRuntime {
   credentialStore: LinkedAtlasCredentialStore;
   upstreamClient: UpstreamIdentityClient;
   validateAtlasCredential: AtlasCredentialValidator;
+  /** 未配置时首次登录仍走手工粘贴 key。 */
+  credentialExchange?: FederatedCredentialExchange;
 }
 
 type SupportedCallbackType = "chatgpt" | "codex_loopback";
@@ -447,6 +457,7 @@ function requireFederatedRuntime(
     credentialStore: dependencies.credentialStore,
     upstreamClient: dependencies.upstreamClient,
     validateAtlasCredential: dependencies.validateAtlasCredential,
+    credentialExchange: dependencies.credentialExchange,
   };
 }
 
@@ -947,7 +958,28 @@ export function createAuthorizationApp(
       codeVerifier: pending.codeVerifier,
     });
     await federated.federatedStore.putAccount(account);
-    const existingCredential = await federated.credentialStore.get(account.sub);
+    let existingCredential = await federated.credentialStore.get(account.sub);
+    // 首次登录尝试用已验证的上游身份直接换取该用户的 Atlas key，省掉手工粘贴。
+    // 任何失败都退回手工表单：这条链路是增强，不该让登录整体失败。
+    if (!existingCredential && federated.credentialExchange && account.upstreamSubject) {
+      try {
+        const exchanged = await federated.credentialExchange.exchange({
+          issuer: config.upstream!.issuer.toString().replace(/\/$/, ""),
+          subject: account.upstreamSubject,
+        });
+        if (exchanged) {
+          // 换来的 key 同样过一次只读校验，不因为来源可信就跳过。
+          await federated.validateAtlasCredential(exchanged);
+          await federated.credentialStore.put(account.sub, exchanged);
+          existingCredential = exchanged;
+          writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "linked" });
+        } else {
+          writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "no_account" });
+        }
+      } catch {
+        writeAudit(auditLogger, { event: "federated_credential_exchange", outcome: "error" });
+      }
+    }
     if (existingCredential) {
       const completionTicket = randomBytes(32).toString("base64url");
       await federated.federatedStore.beginLoginCompletion(

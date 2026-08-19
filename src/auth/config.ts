@@ -116,7 +116,7 @@ const envSchema = z.object({
   AUTH_DYNAMIC_CLIENT_TTL_SECONDS: z.coerce.number().int().min(86400).max(31536000).default(7776000),
   AUTH_GRANT_TTL_SECONDS: z.coerce.number().int().min(3600).max(31536000).optional(),
   AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(300).max(3600).default(600),
-  AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3600).max(604800).default(86400),
+  AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3600).max(7776000).default(7776000),
   AUTH_REFRESH_TOKEN_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).max(120).default(30),
   AUTH_REFRESH_TOKEN_REUSE_MAX_ATTEMPTS: z.coerce.number().int().min(0).max(3).default(2),
 });

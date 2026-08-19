@@ -47,7 +47,7 @@ Staging uses the longest OAuth lifetimes accepted by the current auth config:
 | Credential | Lifetime | Behavior |
 |---|---:|---|
 | Access token | 3,600 seconds (1 hour) | Short-lived bearer token |
-| Refresh token | 604,800 seconds (7 days) | Rotated on refresh; the consumed token allows at most 2 retries inside a fixed 30-second window, then strict replay detection resumes |
+| Refresh token | 7,776,000 seconds (90 days) | Independent from the 8-hour browser session and rotated on refresh; the consumed token allows at most 2 retries inside a fixed 30-second window, then strict replay detection resumes |
 | Authorization grant | 31,536,000 seconds (1 year) | Upper bound for an actively refreshed connection; must not be shorter than the refresh-token lifetime |
 | Dynamic public client (ChatGPT or Codex) | 31,536,000 seconds (1 year) | Re-registration is normally unnecessary during this period |
 

@@ -47,11 +47,15 @@ const REVIEWER_PASSWORD = "correct-horse-battery-staple";
 const CALLBACK = "https://chatgpt.com/connector/oauth/atlascloud-test-callback";
 const CODEX_CALLBACK = "http://127.0.0.1:43123/callback/0jfyHq2aS9Px";
 
+interface TestAuthorizationStore extends AuthorizationStore {
+  clearModel(modelName: string): void;
+}
+
 function inMemoryStore(
   refreshTokenReuseGraceSeconds = 0,
   refreshTokenReuseMaxAttempts = 0,
   nowSeconds: () => number = () => Math.floor(Date.now() / 1000)
-): AuthorizationStore {
+): TestAuthorizationStore {
   const models = new Map<string, Map<string, AdapterPayload>>();
   const revokeGrant = (grantId: string): void => {
     for (const records of models.values()) {
@@ -132,7 +136,13 @@ function inMemoryStore(
       },
     };
   };
-  return { adapter: factory, async ready() { return true; } };
+  return {
+    adapter: factory,
+    async ready() { return true; },
+    clearModel(modelName) {
+      models.get(modelName)?.clear();
+    },
+  };
 }
 
 class MemoryFederatedStore implements FederatedIdentityStore {
@@ -240,6 +250,7 @@ async function fixture(): Promise<{
   server: import("node:http").Server;
   publicJwk: JWK;
   auditEvents: AuthorizationAuditEvent[];
+  store: TestAuthorizationStore;
 }> {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -284,12 +295,13 @@ async function fixture(): Promise<{
     refreshTokenReuseMaxAttempts: 2,
   };
   const auditEvents: AuthorizationAuditEvent[] = [];
+  const store = inMemoryStore(
+    config.refreshTokenReuseGraceSeconds,
+    config.refreshTokenReuseMaxAttempts
+  );
   const { app } = createAuthorizationApp(
     config,
-    inMemoryStore(
-      config.refreshTokenReuseGraceSeconds,
-      config.refreshTokenReuseMaxAttempts
-    ),
+    store,
     { auditLogger: (event) => auditEvents.push(event) }
   );
   return {
@@ -298,6 +310,7 @@ async function fixture(): Promise<{
     server: await listenAuthorizationApp(app, config),
     publicJwk,
     auditEvents,
+    store,
   };
 }
 
@@ -590,6 +603,7 @@ test("production auth config requires HTTPS and password-protected Redis", async
   assert.equal(loaded.resource.toString(), "https://mcp.example.com/mcp");
   assert.equal(loaded.refreshTokenReuseGraceSeconds, 30);
   assert.equal(loaded.refreshTokenReuseMaxAttempts, 2);
+  assert.equal(loaded.refreshTokenTtlSeconds, 90 * 24 * 60 * 60);
   assert.equal(loaded.grantTtlSeconds, loaded.dynamicClientTtlSeconds);
   assert.throws(
     () => loadAuthorizationServerConfig({
@@ -851,7 +865,7 @@ test("OAuth server exposes compliant metadata and rejects unsafe DCR", async (t)
   assert.equal(stripped.admin, undefined);
 });
 
-test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance", async (t) => {
+test("Codex scopes keep refresh tokens valid after the browser session expires", async (t) => {
   const harness = await fixture();
   t.after(() => closeServer(harness.server));
   const client = await dynamicRegister(harness.baseUrl);
@@ -865,7 +879,7 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   authorization.searchParams.set("client_id", clientId as string);
   authorization.searchParams.set("redirect_uri", CALLBACK);
   authorization.searchParams.set("response_type", "code");
-  authorization.searchParams.set("scope", ["openid", "email", "offline_access", ...REMOTE_SCOPES].join(" "));
+  authorization.searchParams.set("scope", ["openid", "email", ...REMOTE_SCOPES].join(" "));
   authorization.searchParams.set("code_challenge", challenge);
   authorization.searchParams.set("code_challenge_method", "S256");
   authorization.searchParams.set("resource", harness.config.resource.toString());
@@ -1074,6 +1088,10 @@ test("DCR and PKCE rotate refresh tokens with bounded concurrent retry tolerance
   });
   assert.equal(invalidUserinfoResponse.status, 401);
   assert.match(invalidUserinfoResponse.headers.get("www-authenticate") ?? "", /invalid_token/);
+
+  // Codex does not request offline_access. Its refresh token must remain usable
+  // after the interactive browser session has expired or been removed.
+  harness.store.clearModel("Session");
 
   const refreshWithOriginal = () => fetch(`${harness.baseUrl}/token`, {
     method: "POST",

@@ -19,13 +19,25 @@ test("atlas API origin accepts an https origin for an isolated environment", () 
   );
 });
 
-test("atlas API origin allows http only for loopback", () => {
+test("atlas API origin allows http only for loopback and in-cluster DNS", () => {
   assert.equal(
     resolveAtlasApiOrigin({ ATLASCLOUD_API_BASE_URL: "http://127.0.0.1:9099" }),
     "http://127.0.0.1:9099"
   );
+  // 集群内 Service DNS 不经过公网，允许明文；这是 dev 指向自己 Atlas 的路径。
+  assert.equal(
+    resolveAtlasApiOrigin({
+      ATLASCLOUD_API_BASE_URL: "http://backend.atlascloud-dev.svc.cluster.local:9099",
+    }),
+    "http://backend.atlascloud-dev.svc.cluster.local:9099"
+  );
+  // 公网域名依然强制 https，不能借道这个例外。
   assert.throws(
     () => resolveAtlasApiOrigin({ ATLASCLOUD_API_BASE_URL: "http://api.dev.atlascloud.ai" }),
+    /must use https/
+  );
+  assert.throws(
+    () => resolveAtlasApiOrigin({ ATLASCLOUD_API_BASE_URL: "http://evil.svc.cluster.local.example.com" }),
     /must use https/
   );
 });

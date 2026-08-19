@@ -33,9 +33,17 @@ export function resolveAtlasApiOrigin(
   } catch {
     throw new Error("ATLASCLOUD_API_BASE_URL is not a valid URL");
   }
-  const isLoopback = ["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
-  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
-    throw new Error("ATLASCLOUD_API_BASE_URL must use https unless the host is loopback");
+  // Plain HTTP is acceptable only where traffic cannot traverse the public
+  // network: loopback, and in-cluster Service DNS. Cluster-internal calls have
+  // no public exposure, and demanding TLS there pushes people toward the worse
+  // fix of publishing internal services behind a public ingress.
+  const hostname = parsed.hostname.toLowerCase();
+  const isLoopback = ["127.0.0.1", "::1", "localhost"].includes(hostname);
+  const isClusterLocal = hostname.endsWith(".svc.cluster.local");
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (isLoopback || isClusterLocal))) {
+    throw new Error(
+      "ATLASCLOUD_API_BASE_URL must use https unless the host is loopback or in-cluster (*.svc.cluster.local)"
+    );
   }
   if (parsed.username || parsed.password) {
     throw new Error("ATLASCLOUD_API_BASE_URL must not contain credentials");

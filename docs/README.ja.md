@@ -34,9 +34,9 @@
 - 🎨 **画像** (118) — Grok Imagine Image 2.0 · Qwen Image 3.0 Pro · Seedream v5.0 Pro · Qwen Image 3.0
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
 - 💬 **LLM** (65) — Grok 4.6 · DeepSeek V4 Flash 0731 · Qwen3.8 Max · Kimi K3
-- 🔊 **音声 (TTS · 音楽 · 音声認識)** (18) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-v4-5-all
+- 🔊 **音声 (TTS · 音楽 · 音声認識)** (17) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-v4-5-all
 
-- 📚 **さらに探す** — [全 398 モデル »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **さらに探す** — [全 400 モデル »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **最新の動画モデル** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3。

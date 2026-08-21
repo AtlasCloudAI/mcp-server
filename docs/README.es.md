@@ -33,8 +33,8 @@
 - 🎬 **Vídeo** (174) — Seedance 2.5 · MiniMax H3 · Youchuan V8.2 · Seedance 2.0 Mini · HappyHorse-1.1 · Gemini Omni Flash
 - 🎨 **Imagen** (118) — Grok Imagine Image 2.0 · Qwen Image 3.0 Pro · Seedream v5.0 Pro · Qwen Image 3.0
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
-- 💬 **LLM** (65) — Grok 4.6 · DeepSeek V4 Flash 0731 · Qwen3.8 Max · Kimi K3
-- 🔊 **Audio (TTS · Música · ASR)** (17) — Seed Audio 1.0 · xAI TTS v1 · ElevenLabs v3 · Suno chirp-v4-5-all
+- 💬 **LLM** (65) — Grok 4.6 · DeepSeek V4 Pro 0813 · DeepSeek V4 Flash 0731 · Qwen3.8 Max
+- 🔊 **Audio (TTS · Música · ASR)** (17) — Suno chirp-v4-5-all · Suno chirp-v4-5-plus · Suno chirp-auk · Suno chirp-fenix
 
 - 📚 **Explora más** — [los 400 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->

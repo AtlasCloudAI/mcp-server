@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { submitGeneration } from "../services/generation.js";
 import { handleError } from "../utils/error-handler.js";
+import { formatDryRun } from "../utils/dry-run.js";
 
 export function registerVideoTools(server: McpServer): void {
   server.registerTool(
@@ -30,6 +31,7 @@ Args:
     - "duration" (number): Video duration in seconds
     - "aspect_ratio" / "ratio" (string): e.g., "16:9", "9:16"
   Use atlas_upload_media to turn a local file into a URL first.
+  - dry_run (boolean, optional): Build and validate the request, show the exact body that would be sent, and stop. Nothing is submitted and no credits are spent. Use this to check what a call will do before paying for it.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction. Video generation typically takes 1-5 minutes.
@@ -45,6 +47,12 @@ Examples:
           .describe(
             "Model-specific parameters as JSON object. Use atlas_get_model_info to see available parameters for your chosen model."
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe(
+            "Build and validate the request and show it, without submitting it or spending credits"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -53,18 +61,34 @@ Examples:
         openWorldHint: true,
       },
     },
-    async ({ model, params }) => {
+    async ({ model, params, dry_run }) => {
       try {
         const result = await submitGeneration(model, params, {
           expectedType: "Video",
           endpoint: "/model/generateVideo",
           typeLabel: "video",
+          dryRun: dry_run,
         });
 
         if (!result.ok) {
           return {
             isError: true,
             content: [{ type: "text", text: result.message }],
+          };
+        }
+
+        if (result.predictionId === null) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDryRun(
+                  result.model,
+                  "/model/generateVideo",
+                  result.body
+                ),
+              },
+            ],
           };
         }
 

@@ -65,7 +65,7 @@ Pídeselo a tu asistente de IA en lenguaje natural: él descubre el modelo adecu
 - 💸 **"¿Cuánto crédito me queda y cuánto he gastado este mes?"** — consulta el saldo, el uso y el desglose de costes
 - 💬 **"Resume este PDF con DeepSeek"** — chat LLM compatible con OpenAI con Claude, GPT, DeepSeek, Qwen, GLM…
 
-Por debajo: descubrimiento de modelos, esquemas de parámetros dinámicos por modelo (validados antes de cada solicitud, de modo que los parámetros inválidos fallan de inmediato sin gastar créditos), carga de medios, generación rápida en un paso, saldo y uso de la cuenta, y búsqueda en la documentación, todo expuesto como herramientas MCP estándar (consulta [Herramientas disponibles](#herramientas-disponibles)).
+Por debajo: descubrimiento de modelos, esquemas de parámetros dinámicos por modelo (validados antes de cada solicitud, de modo que los parámetros inválidos fallan de inmediato sin gastar créditos, además de un indicador `dry_run` en cada herramienta de generación que muestra el cuerpo exacto de la solicitud sin enviarla), carga de medios, generación rápida en un paso, saldo y uso de la cuenta, y búsqueda en la documentación, todo expuesto como herramientas MCP estándar (consulta [Herramientas disponibles](#herramientas-disponibles)).
 
 ## Inicio rápido
 

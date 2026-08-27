@@ -8,7 +8,9 @@ import {
 import type { Model, PredictionResponse } from "../types.js";
 
 export type SubmitResult =
-  | { ok: true; predictionId: string; model: Model }
+  | { ok: true; predictionId: string; model: Model; body: Record<string, unknown> }
+  // Dry run: the body was built and validated but never sent
+  | { ok: true; predictionId: null; model: Model; body: Record<string, unknown> }
   | { ok: false; message: string };
 
 interface SubmitOptions {
@@ -26,6 +28,8 @@ interface SubmitOptions {
    * Return an error message to block, or null to proceed.
    */
   validateModel?: (model: Model) => string | null;
+  // Build and validate the request, then stop short of sending it
+  dryRun?: boolean;
 }
 
 /**
@@ -73,6 +77,11 @@ export async function submitGeneration(
   }
 
   const body = { model: found.model, ...finalParams };
+
+  if (opts.dryRun) {
+    return { ok: true, predictionId: null, model: found, body };
+  }
+
   const response = await api<PredictionResponse>(opts.endpoint, {
     method: "POST",
     body,
@@ -86,5 +95,5 @@ export async function submitGeneration(
     };
   }
 
-  return { ok: true, predictionId, model: found };
+  return { ok: true, predictionId, model: found, body };
 }

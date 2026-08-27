@@ -68,7 +68,7 @@ Ask your AI assistant in plain language — it discovers the right model, builds
 - 💬 **"What is in this screenshot?"** — LLM chat with Claude, GPT, DeepSeek, Qwen, Gemini, GLM…, including image/video input on models that accept it
 - 🕓 **"What did I generate yesterday?"** — browse generation history and pull back the output URLs
 
-Under the hood: model discovery, dynamic per-model parameter schemas (validated before every request so invalid params fail fast without spending credits), media upload, one-step quick-generate, generation history, account balance & usage, and documentation search — all exposed as standard MCP tools (see [Available Tools](#available-tools)).
+Under the hood: model discovery, dynamic per-model parameter schemas (validated before every request so invalid params fail fast without spending credits, plus a `dry_run` flag on every generation tool that shows the exact request body without submitting it), media upload, one-step quick-generate, generation history, account balance & usage, and documentation search — all exposed as standard MCP tools (see [Available Tools](#available-tools)).
 
 LLM calls are protocol-aware: each model is called through the contract it actually declares — OpenAI chat completions, OpenAI Responses, Anthropic Messages, or native Gemini `generateContent` — so Gemini-native models work without any special handling on your side.
 
@@ -225,6 +225,12 @@ The assistant uses `atlas_transcribe_audio` with a speech-to-text model (e.g., `
 > "Ask Qwen to explain quantum computing"
 
 The assistant will use `atlas_chat` with the Qwen model. For a model that accepts images or video, attach them to the message and they are converted to that model's protocol automatically.
+
+### Check a call before paying for it
+
+> "Show me exactly what you'd send to Kling for this, don't run it yet"
+
+Every generation tool takes `dry_run: true` — it resolves the model, builds the request, validates it against the model's schema, prints the exact JSON body, and stops. Nothing is submitted and nothing is billed. Useful when a media URL could land on more than one input field, or when a keyword could match several models.
 
 ### Find an earlier generation
 

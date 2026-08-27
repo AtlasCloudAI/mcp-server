@@ -201,6 +201,24 @@ function buildObjectArrayItems(
 }
 
 /**
+ * Whether a schema property can actually hold a media URL.
+ *
+ * Matching by field name alone is not enough: `audio` is an audio input on most
+ * models but a boolean "should the output have a sound track" toggle on the
+ * wan-3.0 family, and writing a URL into it produces a request the backend
+ * rejects. Only a plain string, or an array of strings/objects, can carry one.
+ * An enum-typed string is a preset list, not a URL slot.
+ */
+function isMediaCapableField(prop: Record<string, any> | undefined): boolean {
+  if (!prop) return false;
+  if (prop.type === "string") return !prop.enum;
+  if (prop.type === "array") {
+    return prop.items?.type === "string" || prop.items?.type === "object";
+  }
+  return false;
+}
+
+/**
  * Place this media kind onto whatever field(s) the model declares for it.
  *
  * Three shapes have to be handled, because models use all three:
@@ -221,7 +239,9 @@ function assignMedia(
   kind: MediaKind,
   urls: string[]
 ): { assigned: boolean; note: string | null } {
-  const candidates = MEDIA_FIELD_CANDIDATES[kind].filter((k) => properties[k]);
+  const candidates = MEDIA_FIELD_CANDIDATES[kind].filter((k) =>
+    isMediaCapableField(properties[k])
+  );
   if (candidates.length === 0) return { assigned: false, note: null };
 
   // Required fields first, keeping the candidate order within each group so the
@@ -273,7 +293,7 @@ function assignMedia(
   params[key] = urls[0];
   const spillTargets = ordered
     .slice(1)
-    .filter((k) => properties[k]?.type !== "array");
+    .filter((k) => properties[k]?.type === "string");
 
   let used = 1;
   for (const target of spillTargets) {

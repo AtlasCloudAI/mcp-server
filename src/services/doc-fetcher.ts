@@ -31,19 +31,34 @@ function fuzzyMatch(target: string, queryWords: string[]): boolean {
   return queryWords.every((w) => normalizedTarget.includes(w));
 }
 
-// Find a model by model ID (e.g., "deepseek-ai/deepseek-v3.2"), supports exact and normalized match
+/**
+ * Find a model by ID or display name, exact matches first.
+ *
+ * The tiers matter: normalization strips `-`, `_`, `.` and `/`, which makes
+ * distinct models collide ("Qwen Image Edit" vs "Qwen-Image Edit" are two
+ * different models). Testing every rule in one pass would return whichever
+ * happens to come first in the catalogue, so a caller naming a model exactly
+ * could still be billed for a different one. Strongest match wins instead.
+ */
 export async function findModel(modelId: string): Promise<Model | undefined> {
   const models = await getModels();
+  const lowerInput = modelId.toLowerCase();
   const normalizedInput = normalize(modelId);
 
-  return models.find(
-    (m) =>
-      m.model === modelId ||
-      m.model.toLowerCase() === modelId.toLowerCase() ||
-      m.displayName.toLowerCase() === modelId.toLowerCase() ||
-      normalize(m.model) === normalizedInput ||
-      normalize(m.displayName) === normalizedInput
-  );
+  const tiers: Array<(m: Model) => boolean> = [
+    (m) => m.model === modelId,
+    (m) => m.model.toLowerCase() === lowerInput,
+    (m) => m.displayName === modelId,
+    (m) => m.displayName?.toLowerCase() === lowerInput,
+    (m) => normalize(m.model) === normalizedInput,
+    (m) => normalize(m.displayName || "") === normalizedInput,
+  ];
+
+  for (const matches of tiers) {
+    const found = models.find(matches);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 // Fetch model OpenAPI schema

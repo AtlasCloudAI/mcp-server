@@ -1,6 +1,6 @@
 {
   "name": "atlascloud-mcp",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "MCP server for AI image / video / 3D / audio (TTS, music, speech-to-text) generation & LLM chat. Use Sora 2, Veo 3, Kling 3, Seedance 2, Flux 2, Nano Banana Pro, Hunyuan 3D, Seed Audio, Suno in Claude Code, Cursor, Codex, Gemini CLI.",
   "type": "module",
   "main": "dist/index.js",

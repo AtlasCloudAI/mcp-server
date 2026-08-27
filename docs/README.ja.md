@@ -136,16 +136,17 @@ MCP よりも Skills を使いたい場合は、Claude Code やその他の Skil
 | ツール | 説明 |
 |------|-------------|
 | `atlas_search_docs` | キーワードで Atlas Cloud のドキュメントとモデルを検索します |
-| `atlas_list_models` | 利用可能なすべてのモデルを一覧表示します（タイプ（Text/Image/Video/Audio）でのフィルタリングも可能） |
+| `atlas_list_models` | 利用可能なモデルを一覧表示します（タイプ（Text/Image/Video/Audio）、サブ種別（3d/tts/stt/music/lyrics）、キーワードでフィルタ可能） |
 | `atlas_get_model_info` | API スキーマ、パラメータ、使用例を含む詳細なモデル情報を取得します |
 | `atlas_generate_image` | サポートされている任意の Image モデルで画像および 3D モデル（画像から 3D / テキストから 3D）を生成します |
 | `atlas_generate_video` | サポートされている任意の動画モデルで動画を生成します |
 | `atlas_generate_audio` | 音声を生成 — スピーチ（TTS）と音楽/楽曲（Suno、MiniMax Music） |
 | `atlas_transcribe_audio` | 音声をテキストに変換（ASR）— 会議・インタビュー・ボイスメモの文字起こし |
 | `atlas_quick_generate` | ワンステップでの画像/動画/音声生成 — キーワードでモデルを自動検索し、パラメータを構築して送信します |
-| `atlas_upload_media` | ローカルファイルをアップロードし、画像編集 / 画像から動画モデルで使用する URL を取得します |
-| `atlas_chat` | LLM モデルとチャットします（OpenAI 互換形式） |
-| `atlas_get_prediction` | 画像/動画/音声/3D 生成タスクのステータスと結果を確認します |
+| `atlas_upload_media` | ローカルの画像・音声・動画・ドキュメントをアップロードし、任意のモデルに渡せる URL を取得します |
+| `atlas_chat` | LLM モデルとチャットします — モデルごとにエンドポイントとリクエスト形式を自動選択（OpenAI chat/responses、Anthropic messages、Gemini ネイティブ）、画像/動画/音声入力に対応 |
+| `atlas_get_prediction` | 生成タスクのステータスと結果を確認します — メディア URL、文字起こし、歌詞、カバーアート、コスト |
+| `atlas_list_predictions` | 過去の生成タスクを一覧します — 失った prediction ID の復元や過去の結果の確認 |
 | `atlas_get_balance` | API キーのアカウント残高とクレジットの概要を取得します |
 | `atlas_get_model_usage` | 指定した期間の日次モデル使用量（リクエスト数、トークン数、画像/動画数）を取得します |
 | `atlas_get_model_costs` | 指定した期間の日次モデルコスト（支出）の内訳を取得します |

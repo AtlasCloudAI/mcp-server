@@ -1,5 +1,5 @@
 import { readFile } from "fs/promises";
-import { basename } from "path";
+import { basename, extname } from "path";
 import { ProxyAgent, type Dispatcher } from "undici";
 import {
   API_BASE,
@@ -27,11 +27,14 @@ function getProxyDispatcher(): Dispatcher | undefined {
 
 const proxyDispatcher = getProxyDispatcher();
 
-// Custom error class that preserves HTTP status code
+// Custom error class that preserves HTTP status code and the parsed body.
+// The body matters because the backend reports *task* failures as HTTP 5xx
+// while still describing the terminal state in the payload.
 export class ApiRequestError extends Error {
   constructor(
     message: string,
-    public statusCode?: number
+    public statusCode?: number,
+    public responseBody?: unknown
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -50,10 +53,39 @@ function getApiKey(): string {
   return key;
 }
 
+// Task states that will never change again. Seeing one of these means the
+// request is answered, however the HTTP layer chose to label it.
+const TERMINAL_TASK_STATUSES = new Set([
+  "failed",
+  "canceled",
+  "cancelled",
+  "error",
+  "timeout",
+]);
+
+/**
+ * A prediction that failed comes back as HTTP 5xx with the real verdict in the
+ * body: { code: 500, message: "...", data: { status: "failed", error: "..." } }.
+ * Treating that as a transient server fault means retrying a decision the
+ * backend already made — several seconds of backoff before showing an error it
+ * returned on the first call. Detect it and stop.
+ */
+export function readTerminalTaskStatus(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const outer = body as Record<string, unknown>;
+  const task = (
+    outer.data && typeof outer.data === "object" ? outer.data : outer
+  ) as Record<string, unknown>;
+  const status = typeof task.status === "string" ? task.status : "";
+  return TERMINAL_TASK_STATUSES.has(status.toLowerCase()) ? status : null;
+}
+
 // Check if an error is retryable
 function isRetryable(error: unknown): boolean {
   if (error instanceof ApiRequestError) {
     const code = error.statusCode;
+    // A body that reports a terminal task state is a decision, not a fault
+    if (readTerminalTaskStatus(error.responseBody)) return false;
     // Retry on network errors (no status), 429 (rate limit), 5xx (server errors)
     if (!code) return true;
     if (code === 429) return true;
@@ -145,15 +177,21 @@ async function request<T>(
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
         let errorMsg = `API request failed: ${response.status} ${response.statusText}`;
+        let parsedBody: unknown;
         try {
-          const errorData = JSON.parse(errorText);
+          parsedBody = JSON.parse(errorText);
+          const errorData = parsedBody as Record<string, any>;
           errorMsg =
             errorData.msg || errorData.message || errorData.error || errorMsg;
         } catch {
           // Use default error message
         }
 
-        const apiError = new ApiRequestError(errorMsg, response.status);
+        const apiError = new ApiRequestError(
+          errorMsg,
+          response.status,
+          parsedBody
+        );
 
         // Don't retry non-retryable errors
         if (!isRetryable(apiError)) {
@@ -180,7 +218,7 @@ async function request<T>(
       lastError = error;
 
       // If it's retryable and we have retries left, continue
-      if (isRetryable(error) && attempt < maxRetries) {
+      if (isRetryable(error) && attempt < effectiveMaxRetries) {
         continue;
       }
 
@@ -217,6 +255,59 @@ export function publicApi<T>(
   return request<T>(PUBLIC_API_BASE, endpoint, options);
 }
 
+/**
+ * Content types by extension for uploads.
+ *
+ * The upload endpoint classifies a file by its name, and downstream models
+ * check the URL extension, so the extension must be preserved. Sending an
+ * explicit type as well keeps the multipart part from defaulting to
+ * application/octet-stream. Note this trusts the extension: a file whose name
+ * lies about its contents (a `.png` that is really AVIF) is not detected here
+ * and will be rejected further upstream.
+ */
+const UPLOAD_MIME_TYPES: Record<string, string> = {
+  // images
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".svg": "image/svg+xml",
+  // video
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  // audio
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+  ".opus": "audio/opus",
+  // documents
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".doc": "application/msword",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx":
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+export function guessUploadMimeType(fileName: string): string {
+  return UPLOAD_MIME_TYPES[extname(fileName).toLowerCase()] || "application/octet-stream";
+}
+
 // Upload a local file to Atlas Cloud, returns a download URL
 export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const apiKey = getApiKey();
@@ -224,7 +315,11 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const fileName = basename(filePath);
 
   const formData = new FormData();
-  formData.append("file", new Blob([fileBuffer]), fileName);
+  formData.append(
+    "file",
+    new Blob([fileBuffer], { type: guessUploadMimeType(fileName) }),
+    fileName
+  );
 
   const url = `${API_BASE}/model/uploadMedia`;
 
@@ -245,13 +340,15 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
       let errorMsg = `Upload failed: ${response.status} ${response.statusText}`;
+      let parsedBody: unknown;
       try {
-        const errorData = JSON.parse(errorText);
+        parsedBody = JSON.parse(errorText);
+        const errorData = parsedBody as Record<string, any>;
         errorMsg = errorData.msg || errorData.message || errorMsg;
       } catch {
         // Use default error message
       }
-      throw new ApiRequestError(errorMsg, response.status);
+      throw new ApiRequestError(errorMsg, response.status, parsedBody);
     }
 
     return (await response.json()) as UploadResponse;

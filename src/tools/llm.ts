@@ -1,38 +1,147 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { llmApi, api } from "../services/api-client.js";
+import { llmApi } from "../services/api-client.js";
+import { findModel } from "../services/doc-fetcher.js";
 import { handleError } from "../utils/error-handler.js";
-import type { ChatCompletionResponse, PredictionResponse } from "../types.js";
+import { truncate } from "../utils/formatter.js";
+import {
+  MODEL_PROTOCOLS,
+  buildChatPath,
+  buildChatRequestBody,
+  extractFinishReason,
+  extractResponseText,
+  extractUsage,
+  isMediaSupportedByProtocol,
+  isProtocolImplemented,
+  resolveChatProtocol,
+  resolveDeclaredProtocol,
+} from "../services/protocols.js";
+import type { ChatTurn, MediaInput, Model } from "../types.js";
+
+// Media a caller attached to one message, in the order we advertise them
+const MEDIA_KEYS = [
+  ["images", "image"],
+  ["videos", "video"],
+  ["audios", "audio"],
+] as const;
+
+interface RawMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+  images?: string[];
+  videos?: string[];
+  audios?: string[];
+}
+
+/** Collect the media attached to a message into protocol-neutral inputs. */
+function mediaOf(message: RawMessage): MediaInput[] {
+  const media: MediaInput[] = [];
+  for (const [key, kind] of MEDIA_KEYS) {
+    for (const url of message[key] ?? []) {
+      if (typeof url === "string" && url.trim()) {
+        media.push({ kind, url: url.trim() });
+      }
+    }
+  }
+  return media;
+}
+
+/**
+ * Warn about media that will not reach the model.
+ * Two independent reasons: the model may not accept that modality at all
+ * (`input_modalities`), or the protocol may have no way to express it.
+ */
+function mediaWarnings(
+  turns: ChatTurn[],
+  protocol: (typeof MODEL_PROTOCOLS)[keyof typeof MODEL_PROTOCOLS],
+  model?: Model | null
+): string[] {
+  const attached = new Set(turns.flatMap((t) => (t.media ?? []).map((m) => m.kind)));
+  if (attached.size === 0) return [];
+
+  const warnings: string[] = [];
+  const modalities = model?.input_modalities;
+
+  for (const kind of attached) {
+    if (Array.isArray(modalities) && modalities.length > 0 && !modalities.includes(kind)) {
+      warnings.push(
+        `The model does not accept ${kind} input (input modalities: ${modalities.join(", ")}). The ${kind} attachments were sent anyway and may be rejected.`
+      );
+      continue;
+    }
+    if (!isMediaSupportedByProtocol(protocol, kind)) {
+      warnings.push(
+        `The \`${protocol}\` protocol has no ${kind} content part, so the ${kind} attachments were dropped.`
+      );
+    }
+  }
+
+  if (
+    attached.has("audio") &&
+    (protocol === MODEL_PROTOCOLS.OPENAI_CHAT_COMPLETIONS ||
+      protocol === MODEL_PROTOCOLS.OPENAI_RESPONSES)
+  ) {
+    warnings.push(
+      "On OpenAI-style protocols audio must be inlined as a `data:audio/...;base64,` URI — plain http(s) audio URLs cannot be expressed and were dropped."
+    );
+  }
+
+  return warnings;
+}
 
 export function registerLLMTools(server: McpServer): void {
-  // Chat completions (OpenAI-compatible)
+  // Chat completions, dispatched to whichever protocol the model speaks
   server.registerTool(
     "atlas_chat",
     {
       title: "Chat with LLM",
-      description: `Send a chat completion request to an LLM model via Atlas Cloud API (OpenAI-compatible format).
+      description: `Send a chat request to an LLM on Atlas Cloud.
+
+The endpoint and request format are chosen automatically from the model's declared protocol — OpenAI chat completions, OpenAI Responses, Anthropic Messages, or native Gemini generateContent. You do not need to know which one a model uses.
+
+Multimodal input is supported for models that accept it: attach image/video/audio URLs (or data: URIs) to a message and they are converted to the right shape for that model's protocol. Use atlas_get_model_info to see a model's input modalities.
 
 Args:
-  - model (string, required): The LLM model ID (e.g., "deepseek-ai/deepseek-v3.2", "qwen/qwen3-32b")
-  - messages (array, required): Array of message objects with "role" and "content" fields.
-    Roles: "system", "user", "assistant"
-  - temperature (number, optional): Sampling temperature, 0-2. Default: 1
-  - max_tokens (number, optional): Maximum tokens in the response
-  - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1
+  - model (string, required): The LLM model ID (e.g. "deepseek-ai/deepseek-v3.2", "google/gemini-3.1-flash-lite")
+  - messages (array, required): Message objects with "role" ("system" | "user" | "assistant") and "content" (text).
+    Optional per message: "images", "videos", "audios" — arrays of URLs or data: URIs.
+  - temperature (number, optional): Sampling temperature, 0-2.
+  - max_tokens (number, optional): Maximum tokens in the response.
+  - top_p (number, optional): Nucleus sampling, 0-1.
+  - extra_params (object, optional): Additional sampling parameters passed through unchanged
+    (e.g. {"top_k": 40, "seed": 7, "stop": ["\\n\\n"], "frequency_penalty": 0.2}).
+    Check atlas_get_model_info for the parameters a model supports. Ignored on the Gemini protocol.
 
 Returns:
-  The LLM response including the generated message, token usage, and finish reason.
+  The generated message, finish reason and token usage.
 
 Examples:
   - model="deepseek-ai/deepseek-v3.2", messages=[{"role": "user", "content": "Hello"}]
-  - model="qwen/qwen3-32b", messages=[{"role": "system", "content": "You are a helpful assistant"}, {"role": "user", "content": "Explain quantum computing"}], temperature=0.7`,
+  - model="qwen/qwen3.7-plus", messages=[{"role": "system", "content": "You are a helpful assistant"}, {"role": "user", "content": "Explain quantum computing"}], temperature=0.7
+  - model="google/gemini-3.1-flash-lite", messages=[{"role": "user", "content": "What is in this picture?", "images": ["https://example.com/photo.jpg"]}]`,
       inputSchema: {
         model: z.string().min(1).describe("LLM model ID"),
         messages: z
           .array(
             z.object({
-              role: z.enum(["system", "user", "assistant"]).describe("Message role"),
-              content: z.string().describe("Message content"),
+              role: z
+                .enum(["system", "user", "assistant"])
+                .describe("Message role"),
+              content: z.string().describe("Message text"),
+              images: z
+                .array(z.string())
+                .optional()
+                .describe("Image URLs or data: URIs to attach to this message"),
+              videos: z
+                .array(z.string())
+                .optional()
+                .describe("Video URLs or data: URIs to attach to this message"),
+              audios: z
+                .array(z.string())
+                .optional()
+                .describe(
+                  "Audio URLs or data: URIs. OpenAI-style protocols require a base64 data: URI"
+                ),
             })
           )
           .min(1)
@@ -42,7 +151,7 @@ Examples:
           .min(0)
           .max(2)
           .optional()
-          .describe("Sampling temperature, 0-2. Default: 1"),
+          .describe("Sampling temperature, 0-2"),
         max_tokens: z
           .number()
           .int()
@@ -54,7 +163,13 @@ Examples:
           .min(0)
           .max(1)
           .optional()
-          .describe("Nucleus sampling parameter, 0-1. Default: 1"),
+          .describe("Nucleus sampling parameter, 0-1"),
+        extra_params: z
+          .record(z.unknown())
+          .optional()
+          .describe(
+            "Additional sampling parameters passed through unchanged (top_k, seed, stop, penalties, ...)"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -63,138 +178,107 @@ Examples:
         openWorldHint: true,
       },
     },
-    async ({ model, messages, temperature, max_tokens, top_p }) => {
+    async ({ model, messages, temperature, max_tokens, top_p, extra_params }) => {
       try {
-        const body: Record<string, unknown> = {
-          model,
-          messages,
-        };
-        if (temperature !== undefined) body.temperature = temperature;
-        if (max_tokens !== undefined) body.max_tokens = max_tokens;
-        if (top_p !== undefined) body.top_p = top_p;
+        // Catalogue lookup is advisory: an unlisted model still gets called,
+        // it just falls back to the default protocol.
+        let found: Model | null = null;
+        try {
+          found = (await findModel(model)) ?? null;
+        } catch {
+          found = null;
+        }
 
-        const response = await llmApi<ChatCompletionResponse>("/chat/completions", {
-          method: "POST",
-          body,
-          timeout: 120000, // LLM responses can be slow
-        });
+        const declared = resolveDeclaredProtocol(found?.supported_protocols);
+        const protocol = resolveChatProtocol(found?.supported_protocols);
 
-        const choice = response.choices?.[0];
-        if (!choice) {
+        if (!isProtocolImplemented(declared)) {
           return {
             isError: true,
             content: [
               {
                 type: "text",
-                text: `No response from model. Raw response: ${JSON.stringify(response)}`,
+                text:
+                  `Model \`${model}\` speaks the \`${declared}\` protocol, which atlas_chat cannot call.\n\n` +
+                  (declared === MODEL_PROTOCOLS.OPENAI_IMAGES
+                    ? "This is an image-generation endpoint, not a chat model. Use `atlas_generate_image` or call `POST /v1/images/generations` directly."
+                    : "Call the endpoint directly, or pick a different model with `atlas_list_models`."),
+              },
+            ],
+          };
+        }
+
+        const turns: ChatTurn[] = (messages as RawMessage[]).map((m) => ({
+          role: m.role,
+          text: m.content,
+          media: mediaOf(m),
+        }));
+
+        const warnings = mediaWarnings(turns, protocol, found);
+
+        const body = buildChatRequestBody(protocol, {
+          model: found?.model || model,
+          turns,
+          maxTokens: max_tokens,
+          temperature,
+          topP: top_p,
+          // Gemini's generationConfig has its own field names; passing OpenAI
+          // sampling keys through would produce a body it rejects.
+          extra:
+            protocol === MODEL_PROTOCOLS.GEMINI_GENERATE
+              ? undefined
+              : extra_params,
+        });
+
+        const path = buildChatPath(protocol, found?.model || model);
+        const response = await llmApi<Record<string, unknown>>(path, {
+          method: "POST",
+          body,
+          timeout: 120000, // LLM responses can be slow
+        });
+
+        const text = extractResponseText(protocol, response);
+        if (text === undefined) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text:
+                  `No response text found for \`${model}\` (protocol \`${protocol}\`).\n\n` +
+                  `Raw response: ${JSON.stringify(response).slice(0, 2000)}`,
               },
             ],
           };
         }
 
         const lines = [`# Chat Response\n`];
-        lines.push(`**Model**: \`${response.model || model}\``);
-        lines.push(`**Finish Reason**: ${choice.finish_reason}\n`);
+        lines.push(`**Model**: \`${(response.model as string) || model}\``);
+        lines.push(`**Protocol**: \`${protocol}\``);
+        const finish = extractFinishReason(protocol, response);
+        if (finish) lines.push(`**Finish Reason**: ${finish}`);
+        lines.push("");
+
+        if (warnings.length > 0) {
+          warnings.forEach((w) => lines.push(`> ${w}`));
+          lines.push("");
+        }
+
         lines.push("## Response\n");
-        lines.push(choice.message.content);
+        lines.push(text);
 
-        if (response.usage) {
+        const usage = extractUsage(protocol, response);
+        if (usage && (usage.prompt || usage.completion || usage.total)) {
           lines.push(`\n## Token Usage\n`);
-          lines.push(`- Prompt: ${response.usage.prompt_tokens}`);
-          lines.push(`- Completion: ${response.usage.completion_tokens}`);
-          lines.push(`- Total: ${response.usage.total_tokens}`);
+          if (usage.prompt !== undefined) lines.push(`- Prompt: ${usage.prompt}`);
+          if (usage.completion !== undefined) {
+            lines.push(`- Completion: ${usage.completion}`);
+          }
+          if (usage.total !== undefined) lines.push(`- Total: ${usage.total}`);
         }
 
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
-        };
-      } catch (error) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: handleError(error) }],
-        };
-      }
-    }
-  );
-
-  // Get prediction result
-  server.registerTool(
-    "atlas_get_prediction",
-    {
-      title: "Get Prediction Result",
-      description: `Check the status and result of an image/video generation task.
-
-Use this after submitting a generation request to check if the result is ready.
-
-If the status is still "processing" or "starting", wait a moment and try again.
-
-When the result is ready (status is "completed" or "succeeded"), the output URLs will be returned. You should then:
-1. Show the output URLs to the user
-2. Ask the user if they want to download the file to their local machine (you can use curl or wget to download it)
-
-Args:
-  - prediction_id (string, required): The prediction ID returned from a generation request
-
-Returns:
-  The current status and output of the generation task.
-
-Examples:
-  - prediction_id="pred_abc123" -> check generation status`,
-      inputSchema: {
-        prediction_id: z
-          .string()
-          .min(1)
-          .describe("Prediction ID from a generation request"),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    async ({ prediction_id }) => {
-      try {
-        const result = await api<PredictionResponse>(
-          `/model/prediction/${prediction_id}`
-        );
-
-        const lines = [`# Prediction Result\n`];
-        lines.push(`- **ID**: \`${prediction_id}\``);
-        lines.push(`- **Status**: ${result.data?.status || "unknown"}\n`);
-
-        if (result.data?.error) {
-          lines.push(`## Error\n\n${result.data.error}`);
-        }
-
-        const outputs = result.data?.outputs || result.data?.output;
-        const outputUrls = Array.isArray(outputs) ? outputs : outputs ? [outputs] : [];
-
-        if (outputUrls.length > 0) {
-          lines.push("## Output\n");
-          outputUrls.forEach((url, i) => {
-            lines.push(`${i + 1}. ${url}`);
-          });
-          lines.push(
-            `\nYou can ask me to download these files to your local machine, or open the URLs directly in your browser.`
-          );
-        }
-
-        if (result.data?.status && !["completed", "succeeded", "failed"].includes(result.data.status)) {
-          lines.push(
-            `\nThe task is still in progress. Please wait a moment and use \`atlas_get_prediction\` again to check.`
-          );
-        }
-
-        if (result.data?.metrics) {
-          lines.push(`\n## Metrics\n`);
-          lines.push("```json");
-          lines.push(JSON.stringify(result.data.metrics, null, 2));
-          lines.push("```");
-        }
-
-        return {
-          content: [{ type: "text", text: lines.join("\n") }],
+          content: [{ type: "text", text: truncate(lines.join("\n")) }],
         };
       } catch (error) {
         return {

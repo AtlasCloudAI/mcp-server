@@ -4,8 +4,9 @@ export const LLM_API_BASE = "https://api.atlascloud.ai/v1";
 // Public billing/usage endpoints (balance, usage, costs) use a separate base path
 export const PUBLIC_API_BASE = "https://api.atlascloud.ai/public/v1";
 
-// Upload timeout (60s for larger files)
-export const UPLOAD_TIMEOUT_MS = 60000;
+// Upload timeout. Matches the console: ASR accepts audio up to ~512MB, and a
+// minute-long upload on a slow link is normal, so 60s was cutting real uploads off.
+export const UPLOAD_TIMEOUT_MS = 300000;
 
 // Billing page URL
 export const BILLING_URL = "https://www.atlascloud.ai/console/billing";

@@ -18,6 +18,14 @@ interface SubmitOptions {
   endpoint: string;
   // Human label used in messages, e.g. "image", "video", "audio"
   typeLabel: string;
+  /**
+   * Optional extra check on the resolved model, for kinds that share a type.
+   * The Audio type covers speech synthesis, music and transcription, which run
+   * on the same endpoint but are not interchangeable — submitting a TTS model
+   * to a transcription request burns credits and returns nonsense.
+   * Return an error message to block, or null to proceed.
+   */
+  validateModel?: (model: Model) => string | null;
 }
 
 /**
@@ -42,10 +50,17 @@ export async function submitGeneration(
     };
   }
   if (found.type !== opts.expectedType) {
+    const article = (word: string) =>
+      /^[aeiou]/i.test(word) ? `an ${word}` : `a ${word}`;
     return {
       ok: false,
-      message: `Model "${modelId}" is a ${found.type} model, not an ${opts.expectedType} model. Use atlas_list_models with type="${opts.expectedType}" to find ${opts.typeLabel} models.`,
+      message: `Model "${modelId}" is ${article(found.type)} model, not ${article(opts.expectedType)} model. Use atlas_list_models with type="${opts.expectedType}" to find ${opts.typeLabel} models.`,
     };
+  }
+
+  const kindError = opts.validateModel?.(found);
+  if (kindError) {
+    return { ok: false, message: kindError };
   }
 
   // Fetch schema and validate params before hitting the billable endpoint.

@@ -136,16 +136,17 @@ Si prefieres usar Skills en lugar de MCP, también ofrecemos un paquete [Atlas C
 | Herramienta | Descripción |
 |------|-------------|
 | `atlas_search_docs` | Buscar en la documentación y los modelos de Atlas Cloud por palabra clave |
-| `atlas_list_models` | Listar todos los modelos disponibles, con filtro opcional por tipo (Text/Image/Video/Audio) |
+| `atlas_list_models` | Lista los modelos disponibles, filtrando por tipo (Text/Image/Video/Audio), subtipo (3d/tts/stt/music/lyrics) o palabra clave |
 | `atlas_get_model_info` | Obtener información detallada del modelo, incluyendo esquema de la API, parámetros y ejemplos de uso |
 | `atlas_generate_image` | Generar imágenes y modelos 3D (imagen-a-3D / texto-a-3D) con cualquier modelo de imagen compatible |
 | `atlas_generate_video` | Generar vídeos con cualquier modelo de vídeo compatible |
 | `atlas_generate_audio` | Generar audio — voz (TTS) y música/canciones (Suno, MiniMax Music) |
 | `atlas_transcribe_audio` | Transcribir voz a texto (ASR) — reuniones, entrevistas, notas de voz |
 | `atlas_quick_generate` | Generación de imagen/vídeo/audio en un paso — encuentra el modelo por palabra clave, construye los parámetros y envía |
-| `atlas_upload_media` | Subir archivos locales para obtener una URL utilizable con modelos de edición de imagen / imagen-a-vídeo |
-| `atlas_chat` | Chatear con modelos LLM (formato compatible con OpenAI) |
-| `atlas_get_prediction` | Consultar el estado y el resultado de las tareas de generación de imagen/vídeo/audio/3D |
+| `atlas_upload_media` | Sube una imagen, audio, vídeo o documento local y obtén una URL para pasarla a cualquier modelo |
+| `atlas_chat` | Chatea con modelos LLM — el endpoint y el formato de petición se eligen automáticamente según el modelo (OpenAI chat/responses, Anthropic messages, Gemini nativo); admite entrada de imagen/vídeo/audio |
+| `atlas_get_prediction` | Consulta el estado y el resultado de una tarea de generación — URLs de medios, transcripciones, letras, portada y coste |
+| `atlas_list_predictions` | Consulta tareas de generación anteriores — recupera un prediction ID perdido o revisa resultados previos |
 | `atlas_get_balance` | Obtener el saldo de la cuenta y el resumen de créditos de tu API key |
 | `atlas_get_model_usage` | Obtener el uso diario por modelo (solicitudes, tokens, recuentos de imagen/vídeo) en un rango de fechas |
 | `atlas_get_model_costs` | Obtener los tramos de coste (gasto) diario por modelo en un rango de fechas |

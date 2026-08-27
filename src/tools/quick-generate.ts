@@ -84,11 +84,20 @@ const MEDIA_FIELD_CANDIDATES = {
     "init_image",
     "source_image",
     "first_frame_image",
+    // Trailing-frame fields of start-end-frame models. Ordered after the
+    // first-frame names so the first URL always lands on the opening frame.
+    "end_image",
+    "last_image",
+    "end_frame_image",
     "frontal_image",
     "product_image",
     "reference_images",
     "reference_image_urls",
     "subject_image",
+    // Object-array fields shared with other media kinds; listed last so a
+    // model with a plain image field uses that one first
+    "subjects",
+    "refers",
   ],
   audio: [
     "audio_url",
@@ -98,6 +107,7 @@ const MEDIA_FIELD_CANDIDATES = {
     "reference_audios",
     "voice_url",
     "audio_urls",
+    "refers",
   ],
   video: [
     "video",
@@ -108,6 +118,7 @@ const MEDIA_FIELD_CANDIDATES = {
     "reference_video",
     "reference_videos",
     "video_clips",
+    "refers",
   ],
 } as const;
 
@@ -116,8 +127,90 @@ type MediaKind = keyof typeof MEDIA_FIELD_CANDIDATES;
 // Fields that carry the user's prompt, most specific first
 const PROMPT_FIELDS = ["prompt", "text", "text_prompt", "user_prompt"];
 
+// Item fields that carry the URL inside an object-array media field
+const ITEM_URL_KEYS = [
+  "url",
+  "image",
+  "images",
+  "image_url",
+  "video",
+  "video_url",
+  "audio",
+  "audio_url",
+  "file",
+];
+
 /**
- * Find the field that carries this media kind and shape the value for it.
+ * Build the items of an object-array media field (`refers`, `subjects`, ...).
+ *
+ * These fields wrap each URL in a small object — `{url, type?}` for reference
+ * material, `{id, images[]}` for named subjects — so a bare array of strings is
+ * rejected. The wrapper shape is mechanical and comes from the item schema, so
+ * build it rather than making the caller hand-write JSON for the common case.
+ *
+ * Returns null when the item schema needs something that cannot be derived; the
+ * schema validator then reports the field by name.
+ */
+function buildObjectArrayItems(
+  itemSchema: Record<string, any>,
+  fieldName: string,
+  kind: MediaKind,
+  urls: string[],
+  startIndex: number
+): Record<string, unknown>[] | null {
+  const props = itemSchema.properties || {};
+  const itemRequired: string[] = itemSchema.required || [];
+
+  const urlKey = ITEM_URL_KEYS.find((k) => props[k]);
+  if (!urlKey) return null;
+
+  // `subjects` -> `subject1`, `refers` -> `refer1`
+  const singular = fieldName.replace(/s$/, "") || "item";
+
+  const items: Record<string, unknown>[] = [];
+  for (const [offset, url] of urls.entries()) {
+    const index = startIndex + offset;
+    const item: Record<string, unknown> = {
+      [urlKey]: props[urlKey]?.type === "array" ? [url] : url,
+    };
+    for (const key of itemRequired) {
+      if (item[key] !== undefined) continue;
+      const prop = props[key] || {};
+      if (prop.default !== undefined) {
+        item[key] = prop.default;
+      } else if (
+        key === "type" &&
+        Array.isArray(prop.enum) &&
+        prop.enum.includes(kind)
+      ) {
+        // Only when the enum really is a media kind. Some models reuse `type`
+        // for something else entirely (pixverse: "subject" | "background"),
+        // and there it is optional, so it is left alone.
+        item[key] = kind;
+      } else if (key === "id" && prop.type === "string") {
+        // An identifier the prompt can reference as @id; any stable value works
+        item[key] = `${singular}${index + 1}`;
+      } else {
+        // A per-item value that cannot be derived (clip start/end times, ...)
+        return null;
+      }
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * Place this media kind onto whatever field(s) the model declares for it.
+ *
+ * Three shapes have to be handled, because models use all three:
+ *   - a single-value string field         -> first URL, remaining URLs spill
+ *                                            onto further fields of the same
+ *                                            kind (start-end-frame models take
+ *                                            `image` + `end_image`)
+ *   - an array-of-strings field           -> all URLs
+ *   - an array-of-objects field           -> each URL wrapped per item schema
+ *
  * Required fields win over optional ones — a model that requires `images` will
  * not accept the value anywhere else.
  */
@@ -127,26 +220,84 @@ function assignMedia(
   required: string[],
   kind: MediaKind,
   urls: string[]
-): string | null {
+): { assigned: boolean; note: string | null } {
   const candidates = MEDIA_FIELD_CANDIDATES[kind].filter((k) => properties[k]);
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return { assigned: false, note: null };
 
-  const key =
-    candidates.find((k) => required.includes(k)) ??
-    candidates[0];
+  // Required fields first, keeping the candidate order within each group so the
+  // opening frame is always filled before the closing one.
+  const ordered = [
+    ...candidates.filter((k) => required.includes(k)),
+    ...candidates.filter((k) => !required.includes(k)),
+  ];
 
+  const key = ordered[0];
   const prop = properties[key];
+
   if (prop?.type === "array") {
-    params[key] = urls;
-  } else {
-    // A single-value field cannot carry extra URLs; say so rather than
-    // silently dropping them.
-    params[key] = urls[0];
-    if (urls.length > 1) {
-      return `\`${key}\` accepts a single value, so only the first ${kind} URL was used.`;
+    if (prop.items?.type === "object") {
+      // A field like `refers` takes a mix of images, video and audio, so an
+      // earlier media kind may already have written entries here — append.
+      const existing = Array.isArray(params[key])
+        ? (params[key] as Record<string, unknown>[])
+        : [];
+      const items = buildObjectArrayItems(
+        prop.items,
+        key,
+        kind,
+        urls,
+        existing.length
+      );
+      if (!items) {
+        return {
+          assigned: false,
+          note: `\`${key}\` expects entries with per-item values this tool cannot derive (such as clip start/end times) — pass \`${key}\` yourself via extra_params.`,
+        };
+      }
+      params[key] = [...existing, ...items];
+      return {
+        assigned: true,
+        note:
+          urls.length > 1
+            ? `Mapped ${urls.length} ${kind} URLs onto \`${key}\` as one entry each. Pass \`${key}\` via extra_params to group them differently.`
+            : null,
+      };
     }
+    params[key] = urls;
+    return { assigned: true, note: null };
   }
-  return null;
+
+  // Single-value field: take the first URL, then spill the rest onto the other
+  // single-value fields of this kind, in declaration order. This is what makes
+  // start-end-frame models work from image_url=[first, last].
+  params[key] = urls[0];
+  const spillTargets = ordered
+    .slice(1)
+    .filter((k) => properties[k]?.type !== "array");
+
+  let used = 1;
+  for (const target of spillTargets) {
+    if (used >= urls.length) break;
+    params[target] = urls[used];
+    used += 1;
+  }
+
+  if (used > 1) {
+    const names = [key, ...spillTargets.slice(0, used - 1)]
+      .map((k) => `\`${k}\``)
+      .join(" → ");
+    return {
+      assigned: true,
+      note: `Mapped the ${kind} URLs in order onto ${names}.`,
+    };
+  }
+  if (urls.length > 1) {
+    return {
+      assigned: true,
+      note: `\`${key}\` accepts a single value and this model has no further ${kind} field, so only the first URL was used.`,
+    };
+  }
+  return { assigned: true, note: null };
 }
 
 // Build request params from schema, filling in user prompt and media inputs
@@ -192,10 +343,9 @@ function buildParams(
   for (const kind of Object.keys(media) as MediaKind[]) {
     const urls = media[kind];
     if (urls.length === 0) continue;
-    const before = Object.keys(params).length;
-    const note = assignMedia(params, properties, required, kind, urls);
-    if (note) notes.push(note);
-    if (Object.keys(params).length === before) {
+    const result = assignMedia(params, properties, required, kind, urls);
+    if (result.note) notes.push(result.note);
+    if (!result.assigned) {
       notes.push(
         `This model has no ${kind} input field, so the ${kind} URL was ignored. Check \`atlas_get_model_info\` for its accepted parameters.`
       );
@@ -238,7 +388,7 @@ Args:
   - model_keyword (string, required): A keyword to search for the model. Use the model's display name or key words (e.g., "Nano Banana", "Seedream", "Kling", "Vidu", "Seedance", "Seed Audio", "Suno", "Omni Human")
   - type (string, required): Generation type: "Image", "Video", or "Audio"
   - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description). Some models take no prompt at all (upscalers, lipsync, transcription) — pass a short description anyway and the response will note that it was ignored.
-  - image_url (string or string[], optional): Source image(s) for image editing, image-to-video, image-to-3D, reference images or talking-avatar models. Pass an array for models that take multiple references.
+  - image_url (string or string[], optional): Source image(s) for image editing, image-to-video, image-to-3D, reference images or talking-avatar models. Pass an array for models that take multiple images — order matters: for start-end-frame video models the first URL becomes the opening frame and the second the closing frame.
   - video_url (string, optional): Source video for video-to-video, video editing or video-extension models
   - audio_url (string, optional): Source audio for lipsync / talking-avatar video models (the speech the character should say) or for speech-to-text models
   - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
@@ -252,6 +402,7 @@ Examples:
   - model_keyword="kling v3", type="Video", prompt="a rocket launching", extra_params={"duration": 5}
   - model_keyword="seedance", type="Video", prompt="camera panning right", image_url="https://example.com/photo.jpg"
   - model_keyword="wan video to video", type="Video", prompt="make it look like winter", video_url="https://example.com/clip.mp4"
+  - model_keyword="kling start end frame", type="Video", prompt="the flower blooms", image_url=["https://example.com/bud.jpg", "https://example.com/bloom.jpg"]
   - model_keyword="seed audio", type="Audio", prompt="Welcome to Atlas Cloud."
   - model_keyword="suno", type="Audio", prompt="upbeat synthwave song about coding at night"
   - model_keyword="seed asr", type="Audio", prompt="transcribe this", audio_url="https://example.com/meeting.mp3"

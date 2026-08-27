@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { submitGeneration } from "../services/generation.js";
 import { handleError } from "../utils/error-handler.js";
+import { formatDryRun } from "../utils/dry-run.js";
 
 export function registerImageTools(server: McpServer): void {
   server.registerTool(
@@ -25,6 +26,7 @@ You should also use atlas_get_model_info to understand what parameters a specifi
 Args:
   - model (string, required): The exact image model ID. Use atlas_list_models to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. Each model has different parameters defined in its schema. Common params include "prompt", "image_size", "num_inference_steps", etc. Input images go in a field whose name and shape vary by model — often "image" (string) or "images" (array of URLs), sometimes "first_frame_image" or "reference_images". Use atlas_get_model_info to see the full parameter list for your chosen model, and atlas_upload_media to turn a local file into a URL.
+  - dry_run (boolean, optional): Build and validate the request, show the exact body that would be sent, and stop. Nothing is submitted and no credits are spent. Use this to check what a call will do before paying for it.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction.
@@ -41,6 +43,12 @@ Examples:
           .describe(
             "Model-specific parameters as JSON object. Use atlas_get_model_info to see available parameters for your chosen model."
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe(
+            "Build and validate the request and show it, without submitting it or spending credits"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -49,18 +57,34 @@ Examples:
         openWorldHint: true,
       },
     },
-    async ({ model, params }) => {
+    async ({ model, params, dry_run }) => {
       try {
         const result = await submitGeneration(model, params, {
           expectedType: "Image",
           endpoint: "/model/generateImage",
           typeLabel: "image",
+          dryRun: dry_run,
         });
 
         if (!result.ok) {
           return {
             isError: true,
             content: [{ type: "text", text: result.message }],
+          };
+        }
+
+        if (result.predictionId === null) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDryRun(
+                  result.model,
+                  "/model/generateImage",
+                  result.body
+                ),
+              },
+            ],
           };
         }
 

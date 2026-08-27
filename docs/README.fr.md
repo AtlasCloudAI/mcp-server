@@ -65,7 +65,7 @@ Demandez à votre assistant IA en langage naturel — il découvre le bon modèl
 - 💸 **« Combien de crédits me reste-t-il, et combien ai-je dépensé ce mois-ci ? »** — consultez le solde, l'utilisation et le détail des coûts
 - 💬 **« Résume ce PDF avec DeepSeek »** — chat LLM compatible OpenAI avec Claude, GPT, DeepSeek, Qwen, GLM…
 
-Sous le capot : découverte de modèles, schémas de paramètres dynamiques propres à chaque modèle (validés avant chaque requête, de sorte que les paramètres invalides échouent immédiatement sans consommer de crédits), téléversement de médias, génération rapide en une étape, solde et utilisation du compte, et recherche dans la documentation — le tout exposé sous forme d'outils MCP standard (voir [Outils disponibles](#outils-disponibles)).
+Sous le capot : découverte de modèles, schémas de paramètres dynamiques propres à chaque modèle (validés avant chaque requête, de sorte que les paramètres invalides échouent immédiatement sans consommer de crédits, ainsi qu'un indicateur `dry_run` sur chaque outil de génération qui affiche le corps exact de la requête sans la soumettre), téléversement de médias, génération rapide en une étape, solde et utilisation du compte, et recherche dans la documentation — le tout exposé sous forme d'outils MCP standard (voir [Outils disponibles](#outils-disponibles)).
 
 ## Démarrage rapide
 

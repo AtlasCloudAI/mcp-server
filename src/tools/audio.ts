@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { submitGeneration } from "../services/generation.js";
 import { handleError } from "../utils/error-handler.js";
+import { formatDryRun } from "../utils/dry-run.js";
 import {
   isLyricsModel,
   isMusicModel,
@@ -73,6 +74,7 @@ You should also use atlas_get_model_info to see the full parameter list and sche
 Args:
   - model (string, required): The exact audio model ID. Use atlas_list_models with type="Audio" to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. For TTS the main field is usually "text" (the content to synthesize); for music models it is usually "prompt" and/or "lyrics"/"style". Use atlas_get_model_info to see available params.
+  - dry_run (boolean, optional): Build and validate the request, show the exact body that would be sent, and stop. Nothing is submitted and no credits are spent. Use this to check what a call will do before paying for it.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction.
@@ -91,6 +93,12 @@ Examples:
           .describe(
             "Model-specific parameters as JSON object. Use atlas_get_model_info to see available parameters for your chosen model."
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe(
+            "Build and validate the request and show it, without submitting it or spending credits"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -99,19 +107,35 @@ Examples:
         openWorldHint: true,
       },
     },
-    async ({ model, params }) => {
+    async ({ model, params, dry_run }) => {
       try {
         const result = await submitGeneration(model, params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "audio",
           validateModel: rejectTranscriptionModel,
+          dryRun: dry_run,
         });
 
         if (!result.ok) {
           return {
             isError: true,
             content: [{ type: "text", text: result.message }],
+          };
+        }
+
+        if (result.predictionId === null) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDryRun(
+                  result.model,
+                  "/model/generateAudio",
+                  result.body
+                ),
+              },
+            ],
           };
         }
 
@@ -165,6 +189,7 @@ The audio must be reachable via URL. For local files, first call atlas_upload_me
 Args:
   - model (string, required): The exact speech-to-text model ID.
   - params (object, required): Model-specific parameters. The main field is usually "audio_url" (URL of the audio to transcribe). Other common params: "language", "format", "enable_punc", "show_utterances". Use atlas_get_model_info to see available params.
+  - dry_run (boolean, optional): Build and validate the request, show the exact body that would be sent, and stop. Nothing is submitted and no credits are spent. Use this to check what a call will do before paying for it.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction. The output is the transcribed text.
@@ -179,6 +204,12 @@ Examples:
           .describe(
             'Model-specific parameters as JSON object. The main field is usually "audio_url". Use atlas_get_model_info to see available parameters.'
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe(
+            "Build and validate the request and show it, without submitting it or spending credits"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -187,19 +218,35 @@ Examples:
         openWorldHint: true,
       },
     },
-    async ({ model, params }) => {
+    async ({ model, params, dry_run }) => {
       try {
         const result = await submitGeneration(model, params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "audio",
           validateModel: requireTranscriptionModel,
+          dryRun: dry_run,
         });
 
         if (!result.ok) {
           return {
             isError: true,
             content: [{ type: "text", text: result.message }],
+          };
+        }
+
+        if (result.predictionId === null) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDryRun(
+                  result.model,
+                  "/model/generateAudio",
+                  result.body
+                ),
+              },
+            ],
           };
         }
 

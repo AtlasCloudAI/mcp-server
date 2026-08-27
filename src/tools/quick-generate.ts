@@ -3,6 +3,7 @@ import { z } from "zod";
 import { searchModels, findModel } from "../services/doc-fetcher.js";
 import { api, fetchExternal } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
+import { formatDryRun } from "../utils/dry-run.js";
 import {
   validateModelParams,
   formatValidationError,
@@ -412,6 +413,7 @@ Args:
   - video_url (string, optional): Source video for video-to-video, video editing or video-extension models
   - audio_url (string, optional): Source audio for lipsync / talking-avatar video models (the speech the character should say) or for speech-to-text models
   - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
+  - dry_run (boolean, optional): Resolve the model, build the request and validate it, then show the exact body that would be sent and stop. Nothing is submitted and no credits are spent. Useful when you are unsure which field a media URL will land on, or which model a keyword resolves to.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction.
@@ -465,6 +467,12 @@ Examples:
           .describe(
             "Additional model-specific parameters to override defaults. Only include parameters the model's schema accepts."
           ),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe(
+            "Build and validate the request and show it, without submitting it or spending credits"
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -481,6 +489,7 @@ Examples:
       video_url,
       audio_url,
       extra_params,
+      dry_run,
     }) => {
       try {
         // Step 1: Resolve model
@@ -561,8 +570,29 @@ Examples:
           }
         }
 
-        // Step 4: Submit generation
         const endpoint = ENDPOINTS[type];
+
+        if (dry_run) {
+          const dryNotes = [...notes];
+          if (candidates && candidates.length > 1) {
+            dryNotes.unshift(
+              `"${model_keyword}" matched ${candidates.length} models; this one was picked. Others: ${candidates
+                .slice(1, 5)
+                .map((c) => `\`${c.model}\``)
+                .join(", ")}`
+            );
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDryRun(foundModel, endpoint, requestBody, dryNotes),
+              },
+            ],
+          };
+        }
+
+        // Step 4: Submit generation
         const response = await api<PredictionResponse>(endpoint, {
           method: "POST",
           body: requestBody,

@@ -138,16 +138,17 @@ goose mcp add atlascloud -- npx -y atlascloud-mcp
 | 工具 | 描述 |
 |------|-------------|
 | `atlas_search_docs` | 按关键词搜索 Atlas Cloud 文档和模型 |
-| `atlas_list_models` | 列出所有可用模型，可按类型过滤（Text/Image/Video/Audio） |
+| `atlas_list_models` | 列出可用模型，可按类型（Text/Image/Video/Audio）、子类型（3d/tts/stt/music/lyrics）或关键词过滤 |
 | `atlas_get_model_info` | 获取模型详情，包括 API Schema、参数说明和使用示例 |
 | `atlas_generate_image` | 使用任意支持的图片模型生成图片和 3D 模型（图生 3D / 文生 3D） |
 | `atlas_generate_video` | 使用任意支持的视频模型生成视频 |
 | `atlas_generate_audio` | 生成音频 — 语音（TTS）与音乐/歌曲（Suno、MiniMax Music） |
 | `atlas_transcribe_audio` | 语音转文字（ASR）— 会议、访谈、语音笔记转写 |
 | `atlas_quick_generate` | 一步生成图片/视频/音频 —— 按关键词自动查找模型、构建参数并提交 |
-| `atlas_upload_media` | 上传本地文件获取 URL，用于图片编辑 / 图生视频等模型 |
-| `atlas_chat` | 与大语言模型对话（兼容 OpenAI 格式） |
-| `atlas_get_prediction` | 查询图片/视频/音频/3D 生成任务的状态和结果 |
+| `atlas_upload_media` | 上传本地图片、音频、视频或文档，获取可传给任意模型的 URL |
+| `atlas_chat` | 与大语言模型对话 —— 按模型自动选择端点与报文格式（OpenAI chat/responses、Anthropic messages、Gemini 原生），支持图片/视频/音频输入 |
+| `atlas_get_prediction` | 查询生成任务的状态与结果 —— 媒体 URL、转写文本、歌词、封面图与花费 |
+| `atlas_list_predictions` | 浏览历史生成任务 —— 找回丢失的 prediction ID 或回看此前的结果 |
 | `atlas_get_balance` | 查询你的 API Key 对应账户余额与额度概览 |
 | `atlas_get_model_usage` | 查询某时间范围内每日的模型用量（请求数、token、图片/视频数量） |
 | `atlas_get_model_costs` | 查询某时间范围内每日的模型费用（支出）分布 |

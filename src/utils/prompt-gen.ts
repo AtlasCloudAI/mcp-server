@@ -1,3 +1,14 @@
+import { LLM_API_BASE } from "../constants.js";
+import {
+  buildChatEndpoint,
+  buildChatRequestBody,
+  isOpenAiCompatible,
+  isProtocolImplemented,
+  renderResponsePath,
+  resolveDeclaredProtocol,
+} from "../services/protocols.js";
+import type { MediaInput, Model } from "../types.js";
+
 /**
  * Generate LLM-friendly model documentation from OpenAPI schema.
  * Adapted from Atlas Cloud homepage generateLLMPrompt utility.
@@ -83,6 +94,19 @@ export function generateLLMPrompt(
         sections.push(
           `  - Options: ${enumValues.map((v: unknown) => JSON.stringify(v)).join(", ")}`
         );
+      }
+      if (prop.minimum !== undefined || prop.maximum !== undefined) {
+        sections.push(
+          `  - Range: ${prop.minimum ?? "-inf"} .. ${prop.maximum ?? "+inf"}`
+        );
+      }
+      // Upload constraints the backend declares per field. Without these a
+      // caller cannot tell an image field from a document field by name alone.
+      if (prop["x-accept"]) {
+        sections.push(`  - Accepts files: ${prop["x-accept"]}`);
+      }
+      if (prop["x-max-size-mb"]) {
+        sections.push(`  - Max file size: ${prop["x-max-size-mb"]} MB`);
       }
       sections.push("");
     }
@@ -197,7 +221,16 @@ export function generateLLMPrompt(
       sections.push(`  -H "Authorization: Bearer $ATLASCLOUD_API_KEY"`);
       sections.push("");
       sections.push(
-        `# Keep polling until status is "completed", "succeeded" or "failed"`
+        `# Keep polling until the status is terminal: "completed"/"succeeded", or "failed"/"timeout"`
+      );
+      sections.push(
+        `# Note: outputs[] is not always a list of URLs — speech-to-text and lyrics`
+      );
+      sections.push(
+        `# models return the generated text itself, with structured detail in`
+      );
+      sections.push(
+        `# stt_result / lyrics_result alongside it.`
       );
     }
 
@@ -210,6 +243,96 @@ export function generateLLMPrompt(
       `- [Model Playground](https://www.atlascloud.ai/models/${modelName})\n`
     );
   }
+
+  return sections.join("\n");
+}
+
+/**
+ * Build API documentation for a Text/LLM model.
+ *
+ * LLM models have no OpenAPI schema to render (the schema URL is only
+ * published for the async media endpoints), and their call shape is decided by
+ * `supported_protocols` rather than by a fixed path. Without this, asking for
+ * details about a chat model returned metadata and nothing about how to call it.
+ */
+export function generateTextModelPrompt(model: Model): string {
+  const protocol = resolveDeclaredProtocol(model.supported_protocols);
+  const callable = isProtocolImplemented(protocol);
+  const endpoint = buildChatEndpoint(protocol, LLM_API_BASE, model.model);
+
+  const sections: string[] = ["## API Information\n"];
+  sections.push(`- **Endpoint (POST)**: \`${endpoint}\``);
+  sections.push(`- **Protocol**: \`${protocol}\``);
+  sections.push(`- **Model ID**: \`${model.model}\``);
+  if (model.input_modalities?.length) {
+    sections.push(`- **Input modalities**: ${model.input_modalities.join(", ")}`);
+  }
+  if (!isOpenAiCompatible(protocol)) {
+    sections.push(
+      "- **Note**: this endpoint is not OpenAI-compatible — the OpenAI SDK will not work against it."
+    );
+  }
+  if (!callable) {
+    sections.push(
+      `- **Note**: \`atlas_chat\` cannot call this protocol; use the endpoint above directly.`
+    );
+  }
+  sections.push("");
+
+  const media: MediaInput[] = [];
+  if (model.input_modalities?.includes("image")) {
+    media.push({ kind: "image", url: "https://example.com/photo.jpg" });
+  }
+  if (model.input_modalities?.includes("video")) {
+    media.push({ kind: "video", url: "https://example.com/clip.mp4" });
+  }
+
+  const body = buildChatRequestBody(protocol, {
+    model: model.model,
+    turns: [
+      {
+        role: "user",
+        text: "What is the difference between HTTP and HTTPS?",
+        media,
+      },
+    ],
+    maxTokens: model.maxCompletionTokens
+      ? Math.min(model.maxCompletionTokens, 1024)
+      : 1024,
+    temperature: 0.7,
+  });
+
+  sections.push("### Request\n");
+  sections.push("```bash");
+  sections.push(`curl -X POST "${endpoint}" \\`);
+  sections.push(`  -H "Authorization: Bearer $ATLASCLOUD_API_KEY" \\`);
+  sections.push(`  -H "Content-Type: application/json" \\`);
+  sections.push(`  -d '${JSON.stringify(body, null, 2)}'`);
+  sections.push("```\n");
+
+  sections.push("### Reading the response\n");
+  sections.push(
+    `The generated text is at \`response${renderResponsePath(protocol)}\`.\n`
+  );
+
+  if (model.supported_sampling_parameters?.length) {
+    sections.push("### Supported sampling parameters\n");
+    sections.push(model.supported_sampling_parameters.map((p) => `\`${p}\``).join(", "));
+    sections.push("");
+  }
+
+  sections.push("### Via this MCP server\n");
+  sections.push(
+    callable
+      ? `Call \`atlas_chat\` with model="${model.model}" — the protocol above is applied automatically.`
+      : `Not callable through \`atlas_chat\`; use the HTTP endpoint above.`
+  );
+  sections.push("");
+
+  sections.push("## Additional Resources\n");
+  sections.push(
+    `- [Model Playground](https://www.atlascloud.ai/models/${model.model})\n`
+  );
 
   return sections.join("\n");
 }

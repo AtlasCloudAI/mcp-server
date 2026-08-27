@@ -136,16 +136,17 @@ MCP보다 Skills를 사용하고 싶다면, Claude Code 및 기타 Skills 지원
 | 도구 | 설명 |
 |------|-------------|
 | `atlas_search_docs` | 키워드로 Atlas Cloud 문서 및 모델 검색 |
-| `atlas_list_models` | 사용 가능한 전체 모델 목록 표시, 유형별 필터 선택 가능 (Text/Image/Video/Audio) |
+| `atlas_list_models` | 사용 가능한 모델 목록 — 타입(Text/Image/Video/Audio), 세부 종류(3d/tts/stt/music/lyrics), 키워드로 필터링 |
 | `atlas_get_model_info` | API 스키마, 파라미터, 사용 예제를 포함한 모델 상세 정보 조회 |
 | `atlas_generate_image` | 지원되는 모든 Image 모델로 이미지 및 3D 모델 생성 (이미지→3D / 텍스트→3D) |
 | `atlas_generate_video` | 지원되는 모든 비디오 모델로 비디오 생성 |
 | `atlas_generate_audio` | 오디오 생성 — 음성(TTS) 및 음악/노래(Suno, MiniMax Music) |
 | `atlas_transcribe_audio` | 음성을 텍스트로 변환(ASR) — 회의·인터뷰·음성 메모 전사 |
 | `atlas_quick_generate` | 원스텝 이미지/비디오/오디오 생성 — 키워드로 모델을 자동으로 찾고, 파라미터를 구성하여 제출 |
-| `atlas_upload_media` | 로컬 파일을 업로드하여 이미지 편집 / 이미지→비디오 모델에 사용할 URL 획득 |
-| `atlas_chat` | LLM 모델과 채팅 (OpenAI 호환 형식) |
-| `atlas_get_prediction` | 이미지/비디오/오디오/3D 생성 작업의 상태 및 결과 확인 |
+| `atlas_upload_media` | 로컬 이미지·오디오·비디오·문서를 업로드하고 모델에 전달할 URL을 받습니다 |
+| `atlas_chat` | LLM 모델과 대화 — 모델별로 엔드포인트와 요청 형식을 자동 선택(OpenAI chat/responses, Anthropic messages, Gemini 네이티브), 이미지/비디오/오디오 입력 지원 |
+| `atlas_get_prediction` | 생성 작업의 상태와 결과 확인 — 미디어 URL, 전사 텍스트, 가사, 커버 아트, 비용 |
+| `atlas_list_predictions` | 과거 생성 작업 조회 — 잃어버린 prediction ID 복구 또는 이전 결과 확인 |
 | `atlas_get_balance` | API 키의 계정 잔액 및 크레딧 요약 조회 |
 | `atlas_get_model_usage` | 지정한 기간의 일별 모델 사용량 조회 (요청 수, 토큰, 이미지/비디오 개수) |
 | `atlas_get_model_costs` | 지정한 기간의 일별 모델 비용(지출) 구간 조회 |

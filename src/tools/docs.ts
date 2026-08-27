@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchModels, findModel, getModelSchema, getModelReadme } from "../services/doc-fetcher.js";
 import { formatModelList, formatModelInfo, truncate } from "../utils/formatter.js";
-import { generateLLMPrompt } from "../utils/prompt-gen.js";
+import { generateLLMPrompt, generateTextModelPrompt } from "../utils/prompt-gen.js";
 import { handleError } from "../utils/error-handler.js";
 
 export function registerDocsTools(server: McpServer): void {
@@ -59,12 +59,16 @@ Examples:
           const model = models[0];
           let detail = formatModelInfo(model);
 
-          // Try to get schema doc
-          const schema = await getModelSchema(model);
-          if (schema) {
-            detail +=
-              "\n\n---\n\n" +
-              generateLLMPrompt(schema, model.model, model.profile, model.type);
+          if (model.type === "Text") {
+            // LLMs publish no OpenAPI schema; document the chat protocol instead
+            detail += "\n\n---\n\n" + generateTextModelPrompt(model);
+          } else {
+            const schema = await getModelSchema(model);
+            if (schema) {
+              detail +=
+                "\n\n---\n\n" +
+                generateLLMPrompt(schema, model.model, model.profile, model.type);
+            }
           }
 
           return {
@@ -73,7 +77,12 @@ Examples:
         }
 
         return {
-          content: [{ type: "text", text: formatModelList(models) }],
+          content: [
+            {
+              type: "text",
+              text: formatModelList(models, { filterLabel: `query="${query}"` }),
+            },
+          ],
         };
       } catch (error) {
         return {

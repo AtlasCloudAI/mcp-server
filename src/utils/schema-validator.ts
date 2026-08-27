@@ -19,6 +19,13 @@ interface SchemaProperty {
   minLength?: number;
   maxLength?: number;
   items?: SchemaProperty;
+  // A field that accepts more than one shape, e.g. a size preset string OR a
+  // {width,height} object. Such fields carry no top-level `type`/`enum`.
+  anyOf?: SchemaProperty[];
+  oneOf?: SchemaProperty[];
+  // Backend-declared upload constraints
+  "x-accept"?: string;
+  "x-max-size-mb"?: number;
 }
 
 interface InputSchema {
@@ -51,6 +58,26 @@ function firstSentence(desc?: string): string {
   const trimmed = desc.trim();
   const idx = trimmed.search(/[.]\s/);
   return idx > 0 ? trimmed.slice(0, idx + 1) : trimmed;
+}
+
+// The alternative shapes of a union field, if it is one
+function branchesOf(prop: SchemaProperty): SchemaProperty[] | null {
+  const branches = prop.anyOf || prop.oneOf;
+  return Array.isArray(branches) && branches.length > 0 ? branches : null;
+}
+
+// Human-readable type label, including union fields
+function typeLabel(prop: SchemaProperty): string {
+  const branches = branchesOf(prop);
+  if (branches) {
+    const types = branches
+      .map((b) => b.type)
+      .filter((t): t is string => !!t);
+    // A $ref branch has no inline type; call it what it is rather than guessing
+    const label = types.length > 0 ? types.join(" | ") : "object";
+    return branches.length > types.length ? `${label} | object` : label;
+  }
+  return prop.type || "string";
 }
 
 // Whether a JS value matches the JSON Schema declared type
@@ -125,8 +152,9 @@ export function summarizeInputSchema(
     const prop = properties[key];
     if (!prop) continue;
 
-    const bits: string[] = [prop.type || "string"];
+    const bits: string[] = [typeLabel(prop)];
     bits.push(required.has(key) ? "required" : "optional");
+    if (prop["x-accept"]) bits.push(`accepts ${prop["x-accept"]}`);
     if (Array.isArray(prop.enum)) {
       bits.push(
         `one of: ${prop.enum.map((v) => JSON.stringify(v)).join(" | ")}`
@@ -134,6 +162,9 @@ export function summarizeInputSchema(
     }
     if (prop.minimum !== undefined || prop.maximum !== undefined) {
       bits.push(`range ${prop.minimum ?? "-inf"}..${prop.maximum ?? "+inf"}`);
+    }
+    if (prop.type === "array" && prop.items?.type) {
+      bits.push(`of ${prop.items.type}`);
     }
     if (prop.default !== undefined) {
       bits.push(`default ${JSON.stringify(prop.default)}`);
@@ -198,6 +229,24 @@ export function validateModelParams(
 
     // null is treated as "unset" for optional fields; skip further checks
     if (value === null) continue;
+
+    // Union fields: accept the value if any branch would accept it. Enum and
+    // range checks below are skipped for them — the constraints belong to the
+    // individual branches, and applying one branch's enum to all of them would
+    // reject values the model does accept.
+    const branches = branchesOf(prop);
+    if (branches) {
+      const typed = branches.filter((b) => !!b.type);
+      const anyMatch =
+        typed.length === 0 ||
+        typed.some((b) => matchesType(value, b.type as string));
+      if (!anyMatch) {
+        errors.push(
+          `Parameter \`${key}\` must be of type ${typeLabel(prop)}, but got ${jsType(value)}.`
+        );
+      }
+      continue;
+    }
 
     // Type check
     if (prop.type && !matchesType(value, prop.type)) {

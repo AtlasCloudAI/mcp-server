@@ -136,16 +136,17 @@ Si vous préférez utiliser les Skills plutôt que MCP, nous proposons égalemen
 | Outil | Description |
 |-------|-------------|
 | `atlas_search_docs` | Rechercher dans la documentation et les modèles Atlas Cloud par mot-clé |
-| `atlas_list_models` | Lister tous les modèles disponibles, avec filtrage optionnel par type (Text/Image/Video/Audio) |
+| `atlas_list_models` | Liste les modèles disponibles, filtrables par type (Text/Image/Video/Audio), sous-type (3d/tts/stt/music/lyrics) ou mot-clé |
 | `atlas_get_model_info` | Obtenir les informations détaillées d'un modèle : schéma API, paramètres et exemples d'utilisation |
 | `atlas_generate_image` | Générer des images et des modèles 3D (image-vers-3D / texte-vers-3D) avec n'importe quel modèle Image pris en charge |
 | `atlas_generate_video` | Générer des vidéos avec n'importe quel modèle vidéo pris en charge |
 | `atlas_generate_audio` | Générer de l'audio — parole (TTS) et musique/chansons (Suno, MiniMax Music) |
 | `atlas_transcribe_audio` | Transcrire la parole en texte (ASR) — réunions, interviews, notes vocales |
 | `atlas_quick_generate` | Génération d'image/vidéo/audio en une étape — trouve automatiquement le modèle par mot-clé, construit les paramètres et soumet |
-| `atlas_upload_media` | Téléverser des fichiers locaux pour obtenir une URL utilisable avec les modèles d'édition d'image / image-vers-vidéo |
-| `atlas_chat` | Discuter avec les modèles LLM (format compatible OpenAI) |
-| `atlas_get_prediction` | Vérifier le statut et le résultat des tâches de génération d'image/vidéo/audio/3D |
+| `atlas_upload_media` | Téléverse une image, un audio, une vidéo ou un document local et renvoie une URL à passer à n'importe quel modèle |
+| `atlas_chat` | Discutez avec des modèles LLM — l'endpoint et le format de requête sont choisis automatiquement selon le modèle (OpenAI chat/responses, Anthropic messages, Gemini natif) ; prend en charge les entrées image/vidéo/audio |
+| `atlas_get_prediction` | Vérifie le statut et le résultat d'une tâche de génération — URLs média, transcriptions, paroles, pochette et coût |
+| `atlas_list_predictions` | Parcourez les tâches de génération passées — récupérez un prediction ID perdu ou revoyez des résultats antérieurs |
 | `atlas_get_balance` | Obtenir le solde du compte et le récapitulatif des crédits pour votre clé API |
 | `atlas_get_model_usage` | Obtenir l'utilisation quotidienne des modèles (requêtes, tokens, nombre d'images/vidéos) sur une plage de dates |
 | `atlas_get_model_costs` | Obtenir les coûts quotidiens des modèles (dépenses) répartis sur une plage de dates |

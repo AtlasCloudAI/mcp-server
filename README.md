@@ -65,9 +65,12 @@ Ask your AI assistant in plain language — it discovers the right model, builds
 - 🎞️ **"Storyboard this script into 6 shots"** — chain LLM → image → video inside one conversation
 - ✏️ **"Edit this image — add a hat"** — upload a local file, then run an image-editing model
 - 💸 **"How much credit is left, and what did I spend this month?"** — check balance, usage, and cost breakdowns
-- 💬 **"Summarize this PDF with DeepSeek"** — OpenAI-compatible LLM chat with Claude, GPT, DeepSeek, Qwen, GLM…
+- 💬 **"What is in this screenshot?"** — LLM chat with Claude, GPT, DeepSeek, Qwen, Gemini, GLM…, including image/video input on models that accept it
+- 🕓 **"What did I generate yesterday?"** — browse generation history and pull back the output URLs
 
-Under the hood: model discovery, dynamic per-model parameter schemas (validated before every request so invalid params fail fast without spending credits), media upload, one-step quick-generate, account balance & usage, and documentation search — all exposed as standard MCP tools (see [Available Tools](#available-tools)).
+Under the hood: model discovery, dynamic per-model parameter schemas (validated before every request so invalid params fail fast without spending credits), media upload, one-step quick-generate, generation history, account balance & usage, and documentation search — all exposed as standard MCP tools (see [Available Tools](#available-tools)).
+
+LLM calls are protocol-aware: each model is called through the contract it actually declares — OpenAI chat completions, OpenAI Responses, Anthropic Messages, or native Gemini `generateContent` — so Gemini-native models work without any special handling on your side.
 
 ## Quick Start
 
@@ -138,16 +141,17 @@ If you'd rather use Skills than MCP, we also ship an [Atlas Cloud Skills](https:
 | Tool | Description |
 |------|-------------|
 | `atlas_search_docs` | Search Atlas Cloud documentation and models by keyword |
-| `atlas_list_models` | List all available models, optionally filtered by type (Text/Image/Video/Audio) |
+| `atlas_list_models` | List available models, filtered by type (Text/Image/Video/Audio), sub-kind (3d/tts/stt/music/lyrics) or keyword |
 | `atlas_get_model_info` | Get detailed model info including API schema, parameters, and usage examples |
 | `atlas_generate_image` | Generate images and 3D models (image-to-3D / text-to-3D) with any supported Image model |
 | `atlas_generate_video` | Generate videos with any supported video model |
 | `atlas_generate_audio` | Generate audio — speech (TTS) and music/songs (Suno, MiniMax Music) — with any supported audio model |
 | `atlas_transcribe_audio` | Transcribe speech to text (ASR) — meetings, interviews, voice notes |
 | `atlas_quick_generate` | One-step image/video/audio generation — auto-finds model by keyword, builds params, and submits |
-| `atlas_upload_media` | Upload local files to get a URL for use with image-edit / image-to-video models |
-| `atlas_chat` | Chat with LLM models (OpenAI-compatible format) |
-| `atlas_get_prediction` | Check status and result of image/video/audio/3D generation tasks |
+| `atlas_upload_media` | Upload a local image, audio, video or document and get a URL to pass to any model |
+| `atlas_chat` | Chat with LLM models — endpoint and request format are picked automatically per model (OpenAI chat/responses, Anthropic messages, native Gemini); supports image/video/audio input |
+| `atlas_get_prediction` | Check status and result of a generation task — media URLs, transcripts, lyrics, cover art and cost |
+| `atlas_list_predictions` | Browse past generation tasks — recover a lost prediction ID or review earlier results |
 | `atlas_get_balance` | Get the account balance and credit summary for your API key |
 | `atlas_get_model_usage` | Get daily model usage (requests, tokens, image/video counts) over a date range |
 | `atlas_get_model_costs` | Get daily model cost (spend) buckets over a date range |
@@ -220,7 +224,13 @@ The assistant uses `atlas_transcribe_audio` with a speech-to-text model (e.g., `
 
 > "Ask Qwen to explain quantum computing"
 
-The assistant will use `atlas_chat` with the Qwen model.
+The assistant will use `atlas_chat` with the Qwen model. For a model that accepts images or video, attach them to the message and they are converted to that model's protocol automatically.
+
+### Find an earlier generation
+
+> "What did I generate yesterday? Give me the video link again"
+
+The assistant uses `atlas_list_predictions` to list recent tasks and `atlas_get_prediction` for the full result. This is also how to recover a task whose prediction ID was lost — the job keeps running (and is billed) even if the submitting call timed out.
 
 ### Check balance and usage
 

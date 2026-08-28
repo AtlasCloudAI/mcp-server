@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import { createLocalJWKSet, jwtVerify, type JWK } from "jose";
 import Provider, {
   errors,
+  type ClientAuthMethod,
   type Configuration,
   type AdapterFactory,
   type Grant,
@@ -24,8 +25,12 @@ import type {
 } from "./federated-store.js";
 import type { UpstreamIdentityClient } from "./upstream-oidc.js";
 import {
+  classifyCallback,
+  enforceClientIdMetadataDocument,
   enforceRegisteredClientMetadata,
-  isSupportedCallback,
+  isAllowedClientIdMetadataUrl,
+  isClientIdMetadataDocumentId,
+  type ClientIdMetadataPolicy,
 } from "./client-registration.js";
 import { isExactAllowedHost } from "../http/host-validation.js";
 import { verifyPassword } from "./password.js";
@@ -83,6 +88,12 @@ export interface AuthorizationStore {
 }
 
 export interface AuthorizationAppDependencies {
+  /**
+   * CIMD 文档的抓取实现。只为测试留的注入点——CIMD 要求 client_id 是公网 https URL，
+   * 单测里没法真的托管一份，但「抓文档→建客户端→匹配回调」正是这条路最容易出错的地方，
+   * 不能只测纯函数。生产不传，走 oidc-provider 默认的 fetch（自带 SSRF 与体积防护）。
+   */
+  clientIdMetadataFetch?: typeof fetch;
   federatedStore?: FederatedIdentityStore;
   credentialStore?: LinkedAtlasCredentialStore;
   upstreamClient?: UpstreamIdentityClient;
@@ -377,23 +388,27 @@ function securityHeaders(config: AuthorizationServerConfig) {
   };
 }
 
-function supportedCallback(interaction: Interaction): {
+function supportedCallback(
+  interaction: Interaction,
+  policy?: ClientIdMetadataPolicy
+): {
   origin: string;
   type: SupportedCallbackType;
 } {
   const raw = stringParam(interaction.params, "redirect_uri");
-  if (!raw || !isSupportedCallback(raw)) {
+  const kind = raw ? classifyCallback(raw, policy) : undefined;
+  if (!raw || !kind) {
     throw new errors.InvalidRequest("authorization redirect URI is not supported");
   }
-  const url = new URL(raw);
-  return {
-    origin: url.origin,
-    type: url.hostname === "127.0.0.1" ? "codex_loopback" : "chatgpt",
-  };
+  return { origin: new URL(raw).origin, type: kind };
 }
 
-function setInteractionHtmlCsp(response: Response, interaction: Interaction): void {
-  const callback = supportedCallback(interaction);
+function setInteractionHtmlCsp(
+  response: Response,
+  interaction: Interaction,
+  policy?: ClientIdMetadataPolicy
+): void {
+  const callback = supportedCallback(interaction, policy);
   response.setHeader(
     "Content-Security-Policy",
     `default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' ${callback.origin}; frame-ancestors 'none'; base-uri 'none'`
@@ -547,17 +562,28 @@ function resourceUserinfo(
 function providerConfiguration(
   config: AuthorizationServerConfig,
   store: AuthorizationStore,
-  federatedStore?: FederatedIdentityStore
+  federatedStore?: FederatedIdentityStore,
+  clientIdMetadataFetch?: typeof fetch
 ): Configuration {
   // oidc-provider path-scopes interaction and resume cookies to each generated
   // authorization flow. `__Host-` would require Path=/ and collapse those
   // independent cookies into one browser-global value, so short-lived cookies
   // use `__Secure-` while the long-lived session remains `__Host-`.
   const scopedCookiePrefix = config.issuer.protocol === "https:" ? "__Secure-" : "";
+  const cimd: ClientIdMetadataPolicy = {
+    hosts: config.clientIdMetadata.hosts,
+    allowPrivateKeyJwt: config.clientIdMetadata.allowPrivateKeyJwt,
+  };
+  // ChatGPT 的顶层客户端文档声明 private_key_jwt（Codex 的那份是 none），所以只要还想
+  // 让 ChatGPT 走 CIMD，令牌端点就得接受这个方法。DCR 侧不受影响：那套策略仍只放 none。
+  const clientAuthMethods: readonly ClientAuthMethod[] = config.clientIdMetadata.enabled && cimd.allowPrivateKeyJwt
+    ? ["none", "private_key_jwt"]
+    : ["none"];
   return {
     adapter: store.adapter,
+    ...(clientIdMetadataFetch ? { fetch: clientIdMetadataFetch } : {}),
     clients: [],
-    clientAuthMethods: ["none"],
+    clientAuthMethods,
     clientDefaults: {
       application_type: "web",
       grant_types: ["authorization_code", "refresh_token"],
@@ -600,7 +626,15 @@ function providerConfiguration(
       properties: ["urn:atlascloud:dcr-policy"],
       validator: (_ctx, _key, _value, metadata) => {
         try {
-          enforceRegisteredClientMetadata(metadata);
+          // CIMD 与 DCR 是两套形状不同的客户端，必须分派到各自的策略：CIMD 文档里的
+          // loopback 回调不带端口，DCR 提交的带端口，一套判据放不下两边。分派判据是
+          // client_id 的形态——CIMD 的 client_id 就是 https 文档地址，而 DCR 的
+          // client_id 由本服务生成并覆盖客户端提交值，外部污染不了。
+          if (isClientIdMetadataDocumentId(metadata.client_id)) {
+            enforceClientIdMetadataDocument(metadata, cimd);
+          } else {
+            enforceRegisteredClientMetadata(metadata);
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : "invalid client metadata";
           throw new errors.InvalidClientMetadata(message);
@@ -609,6 +643,20 @@ function providerConfiguration(
     },
     features: {
       devInteractions: { enabled: false },
+      // OpenAI 首选 CIMD，DCR 保留作兜底（官方文档允许 plugin builder 选 DCR，且
+      // dev 上已注册的 ChatGPT 客户端还落在 DCR 那条路上）。
+      clientIdMetadataDocument: {
+        enabled: config.clientIdMetadata.enabled,
+        // ack 钉在实现的 draft 版本上：升级 oidc-provider 时若草案版本变了，这里会直接
+        // 启动报错，强制复核策略，而不是静默按新语义跑。
+        ack: "draft-02",
+        allowFetch: async (_ctx, clientId) => isAllowedClientIdMetadataUrl(clientId, cimd),
+        allowClient: async (_ctx, client) =>
+          isAllowedClientIdMetadataUrl(client.clientId, cimd),
+        // 上限压到 1 小时：撤下一个 redirect_uri 后最长只被认一小时（默认 24 小时）。
+        // OpenAI 的文档本身回 Cache-Control: max-age=300，正常路径不受影响。
+        cacheDuration: { min: 30, max: 3600 },
+      },
       registration: {
         enabled: true,
         initialAccessToken: false,
@@ -800,9 +848,23 @@ export function createAuthorizationApp(
   dependencies: AuthorizationAppDependencies = {}
 ): { app: Express; provider: Provider } {
   const federated = requireFederatedRuntime(config, dependencies);
+  // CIMD 客户端的回调形状与 DCR 的不同（不带端口、可能不带 callback id），交互页判定
+  // form-action 时必须同时认这两套，否则 CIMD 流程会在登录/同意页被判成
+  // "authorization redirect URI is not supported"。
+  const callbackPolicy: ClientIdMetadataPolicy | undefined = config.clientIdMetadata.enabled
+    ? {
+        hosts: config.clientIdMetadata.hosts,
+        allowPrivateKeyJwt: config.clientIdMetadata.allowPrivateKeyJwt,
+      }
+    : undefined;
   const provider = new Provider(
     config.issuer.toString().replace(/\/$/, ""),
-    providerConfiguration(config, store, federated?.federatedStore)
+    providerConfiguration(
+      config,
+      store,
+      federated?.federatedStore,
+      dependencies.clientIdMetadataFetch
+    )
   );
   provider.proxy = Boolean(config.trustProxy);
   const auditLogger = dependencies.auditLogger ?? defaultAuditLogger;
@@ -918,7 +980,7 @@ export function createAuthorizationApp(
     if (interaction.prompt.name === "login") {
       if (await redirectToUpstream()) return;
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
-      setInteractionHtmlCsp(response, interaction);
+      setInteractionHtmlCsp(response, interaction, callbackPolicy);
       response.status(200).type("html").send(renderLogin(interaction, csrfToken));
       return;
     }
@@ -947,7 +1009,7 @@ export function createAuthorizationApp(
               10 * 60
             );
             const csrfToken = issueCsrfToken(config, response, interaction.uid);
-            setInteractionHtmlCsp(response, interaction);
+            setInteractionHtmlCsp(response, interaction, callbackPolicy);
             response.status(200).type("html").send(
               renderCredentialLink(interaction, csrfToken, ticket, account.email)
             );
@@ -960,7 +1022,7 @@ export function createAuthorizationApp(
         }
       }
       const csrfToken = issueCsrfToken(config, response, interaction.uid);
-      setInteractionHtmlCsp(response, interaction);
+      setInteractionHtmlCsp(response, interaction, callbackPolicy);
       response.status(200).type("html").send(renderConsent(interaction, csrfToken));
       return;
     }
@@ -988,7 +1050,7 @@ export function createAuthorizationApp(
       const passwordMatches = await verifyPassword(parsed.data.password, comparisonHash);
       if (!user || !passwordMatches) {
         const csrfToken = issueCsrfToken(config, response, interaction.uid);
-        setInteractionHtmlCsp(response, interaction);
+        setInteractionHtmlCsp(response, interaction, callbackPolicy);
         response.status(401).type("html").send(
           renderLogin(interaction, csrfToken, "Email or password is incorrect.")
         );
@@ -1088,7 +1150,7 @@ export function createAuthorizationApp(
       10 * 60
     );
     const csrfToken = issueCsrfToken(config, response, interaction.uid);
-    setInteractionHtmlCsp(response, interaction);
+    setInteractionHtmlCsp(response, interaction, callbackPolicy);
     response.status(200).type("html").send(
       renderCredentialLink(interaction, csrfToken, ticket, account.email)
     );
@@ -1156,7 +1218,7 @@ export function createAuthorizationApp(
         await federated.validateAtlasCredential(parsed.data.atlas_api_key);
       } catch {
         const csrfToken = issueCsrfToken(config, response, interaction.uid);
-        setInteractionHtmlCsp(response, interaction);
+        setInteractionHtmlCsp(response, interaction, callbackPolicy);
         response.status(401).type("html").send(
           renderCredentialLink(
             interaction,
@@ -1203,7 +1265,7 @@ export function createAuthorizationApp(
         );
         return;
       }
-      const callback = supportedCallback(interaction);
+      const callback = supportedCallback(interaction, callbackPolicy);
       const grantId = await grantConsent(provider, interaction);
       await provider.interactionFinished(
         request,

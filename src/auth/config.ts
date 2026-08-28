@@ -35,6 +35,18 @@ export interface CredentialExchangeConfig {
   token: string;
 }
 
+/**
+ * CIMD（Client ID Metadata Document, draft-02）：client_id 就是客户端自托管的 HTTPS
+ * 元数据文档地址，授权时按需抓取、不落库。OpenAI 明确把它列为 ChatGPT / Codex 首选的
+ * 客户端注册方式、DCR 只作兜底，所以默认打开。hosts 是允许被抓取的文档主机白名单——
+ * 抓取由未认证的授权请求触发，没有白名单就等于开了一个任意 URL 的服务端抓取面。
+ */
+export interface ClientIdMetadataConfig {
+  enabled: boolean;
+  hosts: readonly string[];
+  allowPrivateKeyJwt: boolean;
+}
+
 export interface AuthorizationServerConfig {
   nodeEnv: "development" | "test" | "production";
   releaseTier: "staging" | "production";
@@ -62,6 +74,7 @@ export interface AuthorizationServerConfig {
   refreshTokenTtlSeconds: number;
   refreshTokenReuseGraceSeconds: number;
   refreshTokenReuseMaxAttempts: number;
+  clientIdMetadata: ClientIdMetadataConfig;
 }
 
 const encodedBytes = /^[A-Za-z0-9_-]+$/;
@@ -132,6 +145,12 @@ const envSchema = z.object({
   AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3600).max(604800).default(86400),
   AUTH_REFRESH_TOKEN_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).max(120).default(30),
   AUTH_REFRESH_TOKEN_REUSE_MAX_ATTEMPTS: z.coerce.number().int().min(0).max(3).default(2),
+  AUTH_CLIENT_ID_METADATA_ENABLED: z.enum(["true", "false"]).default("true"),
+  AUTH_CLIENT_ID_METADATA_HOSTS: z.string().default("chatgpt.com"),
+  // ChatGPT 的顶层客户端文档声明 private_key_jwt（Codex 那份是 none），所以打开这个开关
+  // 才能让 ChatGPT 也走 CIMD。默认关：一旦令牌端点公示 private_key_jwt，ChatGPT 就会从
+  // 已经验证过的 DCR 路径切到这条没验证过的路径上，接 ChatGPT surface 时再单独开。
+  AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT: z.enum(["true", "false"]).default("false"),
 });
 
 function parseJson(name: string, raw: string): unknown {
@@ -386,6 +405,19 @@ export function loadAuthorizationServerConfig(
     throw new Error("AUTH_ALLOWED_HOSTS must contain exact host names without ports, wildcards, or paths");
   }
 
+  const clientIdMetadataEnabled = env.AUTH_CLIENT_ID_METADATA_ENABLED === "true";
+  const clientIdMetadataHosts = commaList(env.AUTH_CLIENT_ID_METADATA_HOSTS);
+  if (clientIdMetadataEnabled && clientIdMetadataHosts.length === 0) {
+    throw new Error(
+      "AUTH_CLIENT_ID_METADATA_HOSTS must list at least one host while client ID metadata documents are enabled"
+    );
+  }
+  if (clientIdMetadataHosts.some((host) => !isPlainHostname(host))) {
+    throw new Error(
+      "AUTH_CLIENT_ID_METADATA_HOSTS must contain exact host names without ports, wildcards, or paths"
+    );
+  }
+
   return {
     nodeEnv: env.NODE_ENV,
     releaseTier: env.PLUGIN_RELEASE_TIER,
@@ -413,6 +445,11 @@ export function loadAuthorizationServerConfig(
     refreshTokenTtlSeconds: env.AUTH_REFRESH_TOKEN_TTL_SECONDS,
     refreshTokenReuseGraceSeconds: env.AUTH_REFRESH_TOKEN_REUSE_GRACE_SECONDS,
     refreshTokenReuseMaxAttempts: env.AUTH_REFRESH_TOKEN_REUSE_MAX_ATTEMPTS,
+    clientIdMetadata: {
+      enabled: clientIdMetadataEnabled,
+      hosts: clientIdMetadataHosts,
+      allowPrivateKeyJwt: env.AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT === "true",
+    },
   };
 }
 

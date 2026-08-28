@@ -189,7 +189,26 @@ AUTH_UPSTREAM_CLIENT_ID=<registered confidential client ID>
 AUTH_UPSTREAM_SCOPES=openid,email,profile
 AUTH_UPSTREAM_ENDPOINT_HOSTS=<comma-separated exact hosts used by discovery, token, and JWKS endpoints>
 AUTH_CREDENTIAL_REDIS_PREFIX=atlascloud:openai-plugin:credential
+AUTH_CLIENT_ID_METADATA_ENABLED=false
 ```
+
+`AUTH_CLIENT_ID_METADATA_ENABLED` controls Client ID Metadata Documents (CIMD),
+which OpenAI prefers over dynamic client registration: the `client_id` is the
+client's own HTTPS metadata document URL, fetched on demand instead of stored.
+Codex publishes a stable document at `https://chatgpt.com/oauth/codex/client.json`
+and needs no registration once this is on. Two more knobs come with it:
+
+- `AUTH_CLIENT_ID_METADATA_HOSTS` (default `chatgpt.com`): the only hosts whose
+  documents may be fetched. The fetch is triggered by unauthenticated
+  authorization requests, so an empty allowlist would be an arbitrary-URL
+  server-side fetch surface.
+- `AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT` (default `false`): ChatGPT's
+  top-level document declares `private_key_jwt`, so its CIMD surface only works
+  with this on. Turning it on also advertises `private_key_jwt` at the token
+  endpoint, which moves ChatGPT off the DCR path it is verified on — keep it off
+  until that surface is deliberately migrated.
+
+Production keeps CIMD off until Codex is verified against it on dev.
 
 Register this exact upstream callback URL with the identity provider:
 

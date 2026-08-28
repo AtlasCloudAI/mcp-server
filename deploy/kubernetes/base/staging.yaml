@@ -336,6 +336,15 @@ spec:
               value: "31536000"
             - name: AUTH_IDENTITY_MODE
               value: local-reviewer
+            # OpenAI 首选 CIMD（client_id 是客户端自托管的元数据文档地址），DCR 只是兜底。
+            # dev 打开它才能验 Codex 的真机连接；private_key_jwt 仍关着，所以 ChatGPT
+            # 继续走已经验过的 DCR。
+            - name: AUTH_CLIENT_ID_METADATA_ENABLED
+              value: "true"
+            - name: AUTH_CLIENT_ID_METADATA_HOSTS
+              value: chatgpt.com
+            - name: AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT
+              value: "false"
             - name: OIDC_JWKS_JSON
               valueFrom:
                 secretKeyRef:

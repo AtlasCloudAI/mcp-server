@@ -73,6 +73,11 @@ spec:
               value: mcp-auth.atlascloud.ai
             - name: AUTH_IDENTITY_MODE
               value: upstream-oidc
+            # 生产暂不开 CIMD：现网 ChatGPT 客户端是 DCR 注册的，而 ChatGPT 的顶层客户端
+            # 文档声明 private_key_jwt（我们还没支持）。先在 dev 验完 Codex 的 CIMD 连接、
+            # 确认 ChatGPT 在 CIMD 被拒后仍会退回 DCR，再打开这个开关。
+            - name: AUTH_CLIENT_ID_METADATA_ENABLED
+              value: "false"
             - name: AUTH_UPSTREAM_ISSUER_URL
               valueFrom:
                 secretKeyRef:

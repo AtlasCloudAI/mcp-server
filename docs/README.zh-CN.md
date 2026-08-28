@@ -30,7 +30,7 @@
 
 <!-- ATLAS-MODELS:START lang=zh-CN campaign=mcp-server -->
 <!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
-- 🎬 **视频** (186) — Wan-3.0-Prime · Wan-3.0 · Seedance 2.5 · MiniMax H3 · Youchuan V8.2 · Seedance 2.0 Mini
+- 🎬 **视频** (186) — MiniMax H3 · Wan-3.0-Prime · Wan-3.0 · Seedance 2.5 · Youchuan V8.2 · Seedance 2.0 Mini
 - 🎨 **图片** (113) — Grok Imagine Image 2.0 · Qwen Image 3.0 Pro · Seedream v5.0 Pro · Qwen Image 3.0
 - 🧊 **3D** (7) — Seed3D 2.0 · Hunyuan 3D Rapid · Hunyuan 3D Pro · Tripo H3.1
 - 💬 **大语言模型** (65) — DeepSeek V4 Pro 0813 · Grok 4.6 · DeepSeek V4 Flash 0731 · Qwen3.8 Max

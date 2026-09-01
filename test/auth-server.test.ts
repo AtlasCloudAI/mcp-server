@@ -27,6 +27,11 @@ import {
   loadAuthorizationServerConfig,
   type AuthorizationServerConfig,
 } from "../src/auth/config.js";
+import {
+  ClientRegistrationError,
+  classifyCallback,
+  enforceClientIdMetadataDocument,
+} from "../src/auth/client-registration.js";
 import { hashPassword, verifyPassword } from "../src/auth/password.js";
 import type {
   CredentialLinkTicket,
@@ -234,7 +239,10 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function fixture(): Promise<{
+async function fixture(options: {
+  clientIdMetadataFetch?: typeof fetch;
+  clientIdMetadata?: Partial<AuthorizationServerConfig["clientIdMetadata"]>;
+} = {}): Promise<{
   baseUrl: string;
   config: AuthorizationServerConfig;
   server: import("node:http").Server;
@@ -282,6 +290,12 @@ async function fixture(): Promise<{
     refreshTokenTtlSeconds: 3600,
     refreshTokenReuseGraceSeconds: 30,
     refreshTokenReuseMaxAttempts: 2,
+    clientIdMetadata: {
+      enabled: true,
+      hosts: ["chatgpt.com"],
+      allowPrivateKeyJwt: false,
+      ...options.clientIdMetadata,
+    },
   };
   const auditEvents: AuthorizationAuditEvent[] = [];
   const { app } = createAuthorizationApp(
@@ -290,7 +304,10 @@ async function fixture(): Promise<{
       config.refreshTokenReuseGraceSeconds,
       config.refreshTokenReuseMaxAttempts
     ),
-    { auditLogger: (event) => auditEvents.push(event) }
+    {
+      auditLogger: (event) => auditEvents.push(event),
+      clientIdMetadataFetch: options.clientIdMetadataFetch,
+    }
   );
   return {
     baseUrl,
@@ -383,6 +400,11 @@ async function federatedFixture(): Promise<{
     refreshTokenTtlSeconds: 3600,
     refreshTokenReuseGraceSeconds: 30,
     refreshTokenReuseMaxAttempts: 2,
+    clientIdMetadata: {
+      enabled: true,
+      hosts: ["chatgpt.com"],
+      allowPrivateKeyJwt: false,
+    },
   };
   const identityStore = new MemoryFederatedStore();
   const credentialStore = new MemoryCredentialStore();
@@ -1560,4 +1582,313 @@ test("federated OIDC login links a validated Atlas key before issuing downstream
   response = await requestWithCookies(mismatchJar, mismatchCallback);
   assert.equal(response.status, 400);
   assert.equal(harness.upstreamClient.exchanges, 2);
+});
+
+// —— CIMD（Client ID Metadata Document）——
+// OpenAI 把 CIMD 列为 ChatGPT / Codex 首选的客户端注册方式、DCR 只作兜底，两条路的客户端
+// 形状不同（CIMD 文档里的 loopback 回调不带端口），所以两套策略要各自有用例。
+
+const CODEX_CIMD_CLIENT_ID = "https://chatgpt.com/oauth/codex/client.json";
+const CODEX_CIMD_CALLBACK = "http://127.0.0.1:43123/callback";
+
+/**
+ * 逐字取自 https://chatgpt.com/oauth/codex/client.json（2026-08-28 实测）。回调不带端口是
+ * 对的：Codex 每次监听随机端口，按 RFC 8252 匹配时忽略端口。
+ */
+function codexClientDocument(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    client_id: CODEX_CIMD_CLIENT_ID,
+    client_uri: "https://chatgpt.com/codex",
+    application_type: "native",
+    redirect_uris: ["http://127.0.0.1/callback", "http://localhost/callback"],
+    token_endpoint_auth_method: "none",
+    token_endpoint_auth_methods_supported: ["none"],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    client_name: "Codex",
+    logo_uri: "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+    ...overrides,
+  };
+}
+
+function stubMetadataFetch(documents: Record<string, Record<string, unknown>>): {
+  fetch: typeof fetch;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const impl: typeof fetch = async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    calls.push(url);
+    const document = documents[url];
+    if (!document) {
+      return new Response("not found", { status: 404 });
+    }
+    return new Response(JSON.stringify(document), {
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "max-age=300" },
+    });
+  };
+  return { fetch: impl, calls };
+}
+
+async function completeInteractiveAuthorization(
+  baseUrl: string,
+  authorization: URL
+): Promise<{ callback: URL; loginCsp: string | null }> {
+  const jar: CookieJar = [];
+  let response = await requestWithCookies(jar, authorization);
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, baseUrl));
+  assert.equal(response.status, 200);
+  const loginCsp = response.headers.get("content-security-policy");
+  let html = await response.text();
+  const loginUid = hidden(html, "interaction_uid");
+  const loginCsrf = hidden(html, "csrf_token");
+
+  response = await requestWithCookies(jar, `${baseUrl}/interaction/${loginUid}/login`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      csrf_token: loginCsrf,
+      interaction_uid: loginUid,
+      email: "reviewer@example.com",
+      password: REVIEWER_PASSWORD,
+    }),
+  });
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, baseUrl));
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, baseUrl));
+  assert.equal(response.status, 200);
+  html = await response.text();
+  const consentUid = hidden(html, "interaction_uid");
+  const consentCsrf = hidden(html, "csrf_token");
+
+  response = await requestWithCookies(jar, `${baseUrl}/interaction/${consentUid}/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      csrf_token: consentCsrf,
+      interaction_uid: consentUid,
+      decision: "allow",
+    }),
+  });
+  assert.equal(response.status, 303);
+  response = await requestWithCookies(jar, location(response, baseUrl));
+  assert.equal(response.status, 303);
+  return { callback: location(response, baseUrl), loginCsp };
+}
+
+function cimdAuthorizationUrl(baseUrl: string, resource: URL, clientId: string, redirectUri: string): URL {
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const authorization = new URL(`${baseUrl}/auth`);
+  authorization.searchParams.set("client_id", clientId);
+  authorization.searchParams.set("redirect_uri", redirectUri);
+  authorization.searchParams.set("response_type", "code");
+  authorization.searchParams.set(
+    "scope",
+    ["openid", "email", "profile", "offline_access", "atlas:models:read"].join(" ")
+  );
+  authorization.searchParams.set("code_challenge", challenge);
+  authorization.searchParams.set("code_challenge_method", "S256");
+  authorization.searchParams.set("resource", resource.toString());
+  authorization.searchParams.set("state", "codex-cimd-state");
+  return authorization;
+}
+
+test("Codex authorizes through its client ID metadata document without registering", async (t) => {
+  const stub = stubMetadataFetch({ [CODEX_CIMD_CLIENT_ID]: codexClientDocument() });
+  const harness = await fixture({ clientIdMetadataFetch: stub.fetch });
+  t.after(() => closeServer(harness.server));
+
+  const { callback, loginCsp } = await completeInteractiveAuthorization(
+    harness.baseUrl,
+    cimdAuthorizationUrl(
+      harness.baseUrl,
+      harness.config.resource,
+      CODEX_CIMD_CLIENT_ID,
+      CODEX_CIMD_CALLBACK
+    )
+  );
+
+  // 文档登记的是 http://127.0.0.1/callback（无端口），实际回调带随机端口，按 RFC 8252
+  // 忽略端口后才能匹配上——这条链断了 Codex 就永远拿不到码。
+  assert.equal(callback.origin + callback.pathname, CODEX_CIMD_CALLBACK);
+  assert.equal(callback.searchParams.get("state"), "codex-cimd-state");
+  assert.ok(callback.searchParams.get("code"));
+  assert.equal(callback.searchParams.get("iss"), harness.baseUrl);
+  assert.ok(loginCsp?.includes("form-action 'self' http://127.0.0.1:43123"));
+  assert.deepEqual(stub.calls, [CODEX_CIMD_CLIENT_ID]);
+
+  const consentSuccess = harness.auditEvents.find(
+    (event) => event.event === "authorization_consent_success"
+  );
+  assert.ok(consentSuccess);
+  assert.equal(consentSuccess.callback_type, "codex_loopback");
+});
+
+test("discovery advertises CIMD support while keeping DCR as the fallback", async (t) => {
+  const enabled = await fixture();
+  t.after(() => closeServer(enabled.server));
+  const advertised = await (
+    await fetch(`${enabled.baseUrl}/.well-known/openid-configuration`)
+  ).json() as Record<string, unknown>;
+  // OpenAI 只有看到这个字段才会走 CIMD；registration_endpoint 留着是给选 DCR 的客户端兜底。
+  assert.equal(advertised.client_id_metadata_document_supported, true);
+  assert.equal(advertised.registration_endpoint, `${enabled.baseUrl}/reg`);
+  // Codex 只在授权服务器公示会回 iss 时才用稳定的 client.json，否则每个 MCP server URL
+  // 派生一个新客户端，用户的已授权应用列表会堆成一片、撤销也撤不干净。
+  assert.equal(advertised.authorization_response_iss_parameter_supported, true);
+  assert.deepEqual(advertised.token_endpoint_auth_methods_supported, ["none"]);
+
+  const off = await fixture({ clientIdMetadata: { enabled: false } });
+  t.after(() => closeServer(off.server));
+  const disabled = await (
+    await fetch(`${off.baseUrl}/.well-known/openid-configuration`)
+  ).json() as Record<string, unknown>;
+  assert.equal(disabled.client_id_metadata_document_supported, undefined);
+});
+
+test("private_key_jwt is only advertised once ChatGPT's CIMD surface is turned on", async (t) => {
+  const harness = await fixture({ clientIdMetadata: { allowPrivateKeyJwt: true } });
+  t.after(() => closeServer(harness.server));
+  const metadata = await (
+    await fetch(`${harness.baseUrl}/.well-known/openid-configuration`)
+  ).json() as Record<string, unknown>;
+  assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none", "private_key_jwt"]);
+});
+
+test("client ID metadata documents are only fetched from allowed hosts", async (t) => {
+  const stub = stubMetadataFetch({ [CODEX_CIMD_CLIENT_ID]: codexClientDocument() });
+  const harness = await fixture({ clientIdMetadataFetch: stub.fetch });
+  t.after(() => closeServer(harness.server));
+
+  const response = await fetch(
+    cimdAuthorizationUrl(
+      harness.baseUrl,
+      harness.config.resource,
+      "https://evil.example/client.json",
+      CODEX_CIMD_CALLBACK
+    ),
+    { redirect: "manual" }
+  );
+  assert.equal(response.status, 400);
+  assert.equal(response.headers.get("location"), null);
+  // 白名单挡在抓取之前：授权端点未认证就能触发抓取，放开等于开一个任意 URL 的服务端抓取面。
+  assert.deepEqual(stub.calls, []);
+});
+
+test("a dynamic registration cannot borrow the CIMD policy by sending its own client_id", async (t) => {
+  const harness = await fixture();
+  t.after(() => closeServer(harness.server));
+  const response = await fetch(`${harness.baseUrl}/reg`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_id: CODEX_CIMD_CLIENT_ID,
+      application_type: "native",
+      redirect_uris: ["http://127.0.0.1/callback"],
+      token_endpoint_auth_method: "none",
+    }),
+  });
+  assert.equal(response.status, 400);
+  // DCR 侧的 redirect_uri 校验比 extraClientMetadata 的策略钩子先跑，所以错误码是
+  // invalid_redirect_uri。要点在于这次注册没有落到 CIMD 那套宽松形状上：无端口的
+  // http://127.0.0.1/callback 只在 CIMD 文档里合法，DCR 提交上来必须被拒。
+  assert.equal(
+    (await response.json() as Record<string, unknown>).error,
+    "invalid_redirect_uri"
+  );
+});
+
+test("the CIMD policy rejects documents that widen the trust boundary", () => {
+  const policy = { hosts: ["chatgpt.com"], allowPrivateKeyJwt: false };
+  const accept = (overrides: Record<string, unknown> = {}) =>
+    enforceClientIdMetadataDocument(codexClientDocument(overrides), policy);
+
+  accept();
+  accept({
+    application_type: "web",
+    redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+  });
+
+  const rejected: Array<[string, Record<string, unknown>]> = [
+    ["off-list document host", { client_id: "https://evil.example/client.json" }],
+    ["http document", { client_id: "http://chatgpt.com/oauth/codex/client.json" }],
+    ["off-list callback host", { redirect_uris: ["http://10.0.0.5/callback"] }],
+    ["https callback on a native client", { redirect_uris: ["https://chatgpt.com/connector/oauth/abc"] }],
+    [
+      "loopback callback on a web client",
+      { application_type: "web", redirect_uris: ["http://127.0.0.1/callback"] },
+    ],
+    [
+      "off-list callback on a web client",
+      { application_type: "web", redirect_uris: ["https://evil.example/callback"] },
+    ],
+    ["callback carrying a query", { redirect_uris: ["http://127.0.0.1/callback?next=https://evil.example"] }],
+    ["callback carrying a fragment", { redirect_uris: ["http://127.0.0.1/callback#x"] }],
+    ["shared secret auth", { token_endpoint_auth_method: "client_secret_basic" }],
+    ["private_key_jwt while it is off", { token_endpoint_auth_method: "private_key_jwt" }],
+    ["inline client keys", { jwks: { keys: [] } }],
+    ["a jwks_uri on a public client", { jwks_uri: "https://chatgpt.com/oauth/jwks.json" }],
+    ["unknown scopes", { scope: "openid atlas:models:read atlas:admin" }],
+    ["no redirect_uris", { redirect_uris: [] }],
+  ];
+  for (const [label, overrides] of rejected) {
+    assert.throws(
+      () => enforceClientIdMetadataDocument(codexClientDocument(overrides), policy),
+      ClientRegistrationError,
+      label
+    );
+  }
+
+  const withPrivateKeyJwt = { hosts: ["chatgpt.com"], allowPrivateKeyJwt: true };
+  enforceClientIdMetadataDocument(
+    codexClientDocument({
+      application_type: "web",
+      redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      token_endpoint_auth_method: "private_key_jwt",
+      jwks_uri: "https://chatgpt.com/oauth/jwks.json",
+    }),
+    withPrivateKeyJwt
+  );
+  assert.throws(
+    () =>
+      enforceClientIdMetadataDocument(
+        codexClientDocument({
+          application_type: "web",
+          redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+          token_endpoint_auth_method: "private_key_jwt",
+          jwks_uri: "https://evil.example/jwks.json",
+        }),
+        withPrivateKeyJwt
+      ),
+    ClientRegistrationError,
+    "jwks_uri off the allowed hosts"
+  );
+});
+
+test("interaction pages accept both the DCR and the CIMD callback shapes", () => {
+  const policy = { hosts: ["chatgpt.com"], allowPrivateKeyJwt: false };
+  // DCR 形状（带端口 + callback id）与 CIMD 形状（无端口 / 无 callback id）都要认，
+  // 否则 CIMD 流程会在登录页被判成 "authorization redirect URI is not supported"。
+  assert.equal(classifyCallback("http://127.0.0.1:43123/callback/0jfyHq2aS9Px"), "codex_loopback");
+  assert.equal(classifyCallback("http://127.0.0.1:43123/callback", policy), "codex_loopback");
+  assert.equal(classifyCallback("http://localhost:43123/callback", policy), "codex_loopback");
+  assert.equal(classifyCallback("https://chatgpt.com/connector/oauth/abc123"), "chatgpt");
+  assert.equal(
+    classifyCallback("https://chatgpt.com/connector_platform_oauth_redirect", policy),
+    "chatgpt"
+  );
+  // CIMD 关闭时只认 DCR 那套。
+  assert.equal(classifyCallback("http://127.0.0.1:43123/callback"), undefined);
+  assert.equal(classifyCallback("https://chatgpt.com/connector_platform_oauth_redirect"), undefined);
+  assert.equal(classifyCallback("https://evil.example/callback", policy), undefined);
+  assert.equal(classifyCallback("not a url", policy), undefined);
 });

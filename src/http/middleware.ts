@@ -4,6 +4,27 @@ import type { HttpServerConfig } from "../config.js";
 import { isAtlasToolName, TOOL_POLICIES } from "../tool-policy.js";
 import { isExactAllowedHost } from "./host-validation.js";
 
+/**
+ * MCP 客户端靠「未认证请求 → 401 + WWW-Authenticate」这一步找到 protected resource
+ * metadata。Codex 发现连接器时先打的是 GET /mcp，而这个端点是无状态的、只接受 POST，
+ * 直接回 405 就把发现链断在这里：客户端只能去猜 .well-known 路径——Codex 会猜（实测猜的是
+ * /.well-known/oauth-protected-resource/mcp，能猜中），但那多两轮往返，而且不是每个客户端
+ * 都会猜。所以没带任何凭据时先给挑战，带了凭据再按方法不支持处理。
+ */
+export function challengeUnauthenticated(resourceMetadataUrl: string): RequestHandler {
+  return (req, res, next) => {
+    if (req.headers.authorization) {
+      next();
+      return;
+    }
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`
+    );
+    res.status(401).json({ error: "invalid_token" });
+  };
+}
+
 export function enforceExactHost(config: HttpServerConfig): RequestHandler {
   return (req, res, next) => {
     if (!isExactAllowedHost(req.headers.host, config.allowedHosts, config.nodeEnv)) {

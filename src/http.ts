@@ -29,6 +29,7 @@ import {
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
 import {
+  challengeUnauthenticated,
   createPreAuthRateLimiter,
   createSubjectRateLimiter,
   enforceExactHost,
@@ -198,8 +199,16 @@ export function createHttpApp(
       }
     }
   );
-  app.get(config.publicMcpUrl.pathname, methodNotAllowed);
-  app.delete(config.publicMcpUrl.pathname, methodNotAllowed);
+  app.get(
+    config.publicMcpUrl.pathname,
+    challengeUnauthenticated(resourceMetadataUrl),
+    methodNotAllowed
+  );
+  app.delete(
+    config.publicMcpUrl.pathname,
+    challengeUnauthenticated(resourceMetadataUrl),
+    methodNotAllowed
+  );
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });

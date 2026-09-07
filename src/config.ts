@@ -13,7 +13,15 @@ export const REMOTE_SCOPES = [
 ] as const;
 
 export type ReleaseTier = "staging" | "production";
-export type CredentialMode = "service-account" | "subject-map" | "redis-subject-map";
+export type CredentialMode =
+  | "service-account"
+  | "subject-map"
+  | "redis-subject-map"
+  /**
+   * 不用任何 API key：把客户端发来的令牌按 RFC 8693 换成面向模型 API 的令牌，
+   * 用它调 Atlas。账单按令牌里的 account_id 记，用户不需要粘贴凭据。
+   */
+  | "oauth-exchange";
 export type IdempotencyBackend = "memory" | "redis";
 
 export interface HttpServerConfig {
@@ -37,6 +45,13 @@ export interface HttpServerConfig {
   challengeToken?: string;
   resourceDocumentation?: URL;
   credentialMode: CredentialMode;
+  tokenExchange?: {
+    url: URL;
+    clientId: string;
+    clientSecret: string;
+    resource: string;
+    scope?: string;
+  };
   atlasServiceAccountKey?: string;
   atlasSubjectKeys: Record<string, string>;
   credentialEncryptionKeys: readonly CredentialEncryptionKey[];
@@ -61,6 +76,12 @@ const envSchema = z.object({
   MCP_OAUTH_ALGORITHMS: z.string().default("RS256,ES256"),
   MCP_OAUTH_CLOCK_TOLERANCE_SECONDS: z.coerce.number().int().min(0).max(300).default(30),
   MCP_OAUTH_SCOPES: z.string().optional(),
+  // RFC 8693 令牌交换（credentialMode=oauth-exchange 时必填）
+  MCP_TOKEN_EXCHANGE_URL: z.string().url().optional(),
+  MCP_TOKEN_EXCHANGE_CLIENT_ID: z.string().min(1).max(512).optional(),
+  MCP_TOKEN_EXCHANGE_CLIENT_SECRET: z.string().min(1).max(2048).optional(),
+  MCP_TOKEN_EXCHANGE_RESOURCE: z.string().url().optional(),
+  MCP_TOKEN_EXCHANGE_SCOPE: z.string().optional(),
   MCP_ALLOWED_HOSTS: z.string().optional(),
   MCP_ALLOWED_ORIGINS: z.string().default(
     "https://chatgpt.com,https://chat.openai.com,https://platform.openai.com"
@@ -71,7 +92,7 @@ const envSchema = z.object({
   OPENAI_APPS_CHALLENGE_TOKEN: z.string().min(1).max(1024).optional(),
   MCP_RESOURCE_DOCUMENTATION: z.string().url().optional(),
   MCP_CREDENTIAL_MODE: z
-    .enum(["service-account", "subject-map", "redis-subject-map"])
+    .enum(["service-account", "subject-map", "redis-subject-map", "oauth-exchange"])
     .default("service-account"),
   ATLASCLOUD_API_KEY: z.string().min(1).optional(),
   MCP_ATLAS_SUBJECT_KEYS_JSON: z.string().optional(),
@@ -331,6 +352,45 @@ export function loadHttpServerConfig(
     }
   }
 
+  // 令牌交换：oauth-exchange 模式下这几项缺一不可。缺了就当配置错误报出来——
+  // 静默降级会让「以为不用贴 key、实际每个人还在贴」长期不被发现。
+  let tokenExchange: HttpServerConfig["tokenExchange"];
+  if (
+    env.MCP_TOKEN_EXCHANGE_URL ||
+    env.MCP_TOKEN_EXCHANGE_CLIENT_ID ||
+    env.MCP_TOKEN_EXCHANGE_CLIENT_SECRET ||
+    env.MCP_TOKEN_EXCHANGE_RESOURCE
+  ) {
+    if (
+      !env.MCP_TOKEN_EXCHANGE_URL ||
+      !env.MCP_TOKEN_EXCHANGE_CLIENT_ID ||
+      !env.MCP_TOKEN_EXCHANGE_CLIENT_SECRET ||
+      !env.MCP_TOKEN_EXCHANGE_RESOURCE
+    ) {
+      throw new Error(
+        "MCP_TOKEN_EXCHANGE_URL, MCP_TOKEN_EXCHANGE_CLIENT_ID, MCP_TOKEN_EXCHANGE_CLIENT_SECRET and MCP_TOKEN_EXCHANGE_RESOURCE must be set together"
+      );
+    }
+    const exchangeUrl = new URL(env.MCP_TOKEN_EXCHANGE_URL);
+    requireCredentialFreeUrl("MCP_TOKEN_EXCHANGE_URL", exchangeUrl);
+    if (env.NODE_ENV === "production" && exchangeUrl.protocol !== "https:") {
+      throw new Error("MCP_TOKEN_EXCHANGE_URL must use HTTPS in production");
+    }
+    // 资源标识按逐字字符串比对，尾斜杠都算不同资源，所以这里不做任何归一化。
+    tokenExchange = {
+      url: exchangeUrl,
+      clientId: env.MCP_TOKEN_EXCHANGE_CLIENT_ID,
+      clientSecret: env.MCP_TOKEN_EXCHANGE_CLIENT_SECRET,
+      resource: env.MCP_TOKEN_EXCHANGE_RESOURCE,
+      scope: env.MCP_TOKEN_EXCHANGE_SCOPE,
+    };
+  }
+  if (env.MCP_CREDENTIAL_MODE === "oauth-exchange" && !tokenExchange) {
+    throw new Error(
+      "MCP_CREDENTIAL_MODE=oauth-exchange requires the MCP_TOKEN_EXCHANGE_* settings"
+    );
+  }
+
   return {
     nodeEnv: env.NODE_ENV,
     releaseTier: env.PLUGIN_RELEASE_TIER,
@@ -354,6 +414,7 @@ export function loadHttpServerConfig(
       ? new URL(env.MCP_RESOURCE_DOCUMENTATION)
       : undefined,
     credentialMode: env.MCP_CREDENTIAL_MODE,
+    tokenExchange,
     atlasServiceAccountKey: env.ATLASCLOUD_API_KEY,
     atlasSubjectKeys,
     credentialEncryptionKeys,

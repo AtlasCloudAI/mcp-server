@@ -4,6 +4,7 @@ import {
   createRedisLinkedAtlasCredentialStore,
   type LinkedAtlasCredentialStore,
 } from "./linked-credential-store.js";
+import { createTokenExchanger, TokenExchangeError, type TokenExchanger } from "./token-exchange.js";
 
 export class CredentialResolutionError extends Error {
   constructor(message: string) {
@@ -29,11 +30,38 @@ export function authSubject(authInfo: AuthInfo): string {
 export class ConfiguredCredentialResolver implements AtlasCredentialResolver {
   constructor(
     private readonly config: HttpServerConfig,
-    private readonly linkedStore?: LinkedAtlasCredentialStore
+    private readonly linkedStore?: LinkedAtlasCredentialStore,
+    private readonly exchanger?: TokenExchanger
   ) {}
 
   async resolve(authInfo: AuthInfo): Promise<{ subject: string; apiKey: string }> {
     const subject = authSubject(authInfo);
+
+    // 不用任何 API key：把客户端发来的这枚令牌换成面向模型 API 的令牌，直接当凭据用。
+    // 调用方（api-client）只管把它放进 Authorization: Bearer，所以这里返回令牌即可。
+    if (this.config.credentialMode === "oauth-exchange") {
+      if (!this.exchanger) {
+        throw new CredentialResolutionError("Token exchange is not configured");
+      }
+      const subjectToken = authInfo.token;
+      if (!subjectToken) {
+        throw new CredentialResolutionError("The validated OAuth token is not available for exchange");
+      }
+      // 缓存键用 grant identity（grant_id 或 jti）而不是原始令牌：令牌刷新后身份不变，
+      // 缓存还能命中；也避免把令牌本身当 map 的键。
+      const identity =
+        typeof authInfo.extra?.grant_id === "string" ? authInfo.extra.grant_id : subject;
+      try {
+        const exchanged = await this.exchanger.exchange(subjectToken, `${subject} ${identity}`);
+        return { subject, apiKey: exchanged.accessToken };
+      } catch (error) {
+        if (error instanceof TokenExchangeError) {
+          throw new CredentialResolutionError(error.message);
+        }
+        throw error;
+      }
+    }
+
     if (this.config.credentialMode === "service-account") {
       const apiKey = this.config.atlasServiceAccountKey;
       if (!apiKey) {
@@ -65,6 +93,14 @@ export class ConfiguredCredentialResolver implements AtlasCredentialResolver {
 export async function createConfiguredCredentialResolver(
   config: HttpServerConfig
 ): Promise<ConfiguredCredentialResolver> {
+  if (config.credentialMode === "oauth-exchange") {
+    // config 已经保证了这几项齐全（缺就在加载配置时报错，不会静默降级）
+    return new ConfiguredCredentialResolver(
+      config,
+      undefined,
+      createTokenExchanger(config.tokenExchange!)
+    );
+  }
   if (config.credentialMode !== "redis-subject-map") {
     return new ConfiguredCredentialResolver(config);
   }

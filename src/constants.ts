@@ -15,15 +15,20 @@ export const DEFAULT_ATLAS_API_ORIGIN = "https://api.atlascloud.ai";
  * Atlas than the one a production release is supposed to serve is the kind of
  * mistake that only surfaces as customers seeing someone else's data.
  */
+export type AtlasOriginVariable =
+  | "ATLASCLOUD_API_BASE_URL"
+  | "ATLASCLOUD_GENERATION_API_BASE_URL";
+
 export function resolveAtlasApiOrigin(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  variable: AtlasOriginVariable = "ATLASCLOUD_API_BASE_URL"
 ): string {
-  const raw = env.ATLASCLOUD_API_BASE_URL?.trim();
+  const raw = env[variable]?.trim();
   if (!raw) return DEFAULT_ATLAS_API_ORIGIN;
 
   if (env.PLUGIN_RELEASE_TIER === "production" && raw !== DEFAULT_ATLAS_API_ORIGIN) {
     throw new Error(
-      "ATLASCLOUD_API_BASE_URL must not override the Atlas API origin in a production release"
+      `${variable} must not override the Atlas API origin in a production release`
     );
   }
 
@@ -31,7 +36,7 @@ export function resolveAtlasApiOrigin(
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error("ATLASCLOUD_API_BASE_URL is not a valid URL");
+    throw new Error(`${variable} is not a valid URL`);
   }
   // Plain HTTP is acceptable only where traffic cannot traverse the public
   // network: loopback, and in-cluster Service DNS. Cluster-internal calls have
@@ -42,17 +47,17 @@ export function resolveAtlasApiOrigin(
   const isClusterLocal = hostname.endsWith(".svc.cluster.local");
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (isLoopback || isClusterLocal))) {
     throw new Error(
-      "ATLASCLOUD_API_BASE_URL must use https unless the host is loopback or in-cluster (*.svc.cluster.local)"
+      `${variable} must use https unless the host is loopback or in-cluster (*.svc.cluster.local)`
     );
   }
   if (parsed.username || parsed.password) {
-    throw new Error("ATLASCLOUD_API_BASE_URL must not contain credentials");
+    throw new Error(`${variable} must not contain credentials`);
   }
   // An origin only: the three API paths below are appended to it, so a path here
   // would silently produce URLs like `/api/v1/api/v1/...`.
   if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
     throw new Error(
-      "ATLASCLOUD_API_BASE_URL must be a bare origin without a path, query, or fragment"
+      `${variable} must be a bare origin without a path, query, or fragment`
     );
   }
   return parsed.origin;
@@ -60,8 +65,23 @@ export function resolveAtlasApiOrigin(
 
 export const ATLAS_API_ORIGIN = resolveAtlasApiOrigin();
 
+/**
+ * OpenAI 兼容端点（`/v1/*`）的 origin。
+ *
+ * 生产是一个网关后面两个上游：`/api/v1` 与 `/public/v1` 走 backend，`/v1` 走
+ * aiproxy，所以一个 origin 就够。集群内部署直连 Service 时这两个上游是两个不同
+ * 地址，单 origin 表达不了——`ATLASCLOUD_API_BASE_URL` 指向 backend 时推导出的
+ * `backend:9099/v1` 并不存在，`chat_completion` 会静默打到一个没有的路径上。
+ *
+ * 不设置就跟随主 origin，也就是生产与网关部署的现状。
+ */
+export const ATLAS_GENERATION_API_ORIGIN =
+  process.env.ATLASCLOUD_GENERATION_API_BASE_URL?.trim()
+    ? resolveAtlasApiOrigin(process.env, "ATLASCLOUD_GENERATION_API_BASE_URL")
+    : ATLAS_API_ORIGIN;
+
 export const API_BASE = `${ATLAS_API_ORIGIN}/api/v1`;
-export const LLM_API_BASE = `${ATLAS_API_ORIGIN}/v1`;
+export const LLM_API_BASE = `${ATLAS_GENERATION_API_ORIGIN}/v1`;
 // Public billing/usage endpoints (balance, usage, costs) use a separate base path
 export const PUBLIC_API_BASE = `${ATLAS_API_ORIGIN}/public/v1`;
 

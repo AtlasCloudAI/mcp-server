@@ -90,3 +90,52 @@ test("derived API bases all come from the same origin", async () => {
   assert.equal(LLM_API_BASE, `${ATLAS_API_ORIGIN}/v1`);
   assert.equal(PUBLIC_API_BASE, `${ATLAS_API_ORIGIN}/public/v1`);
 });
+
+test("OpenAI 兼容端点可以独立指向另一个上游", () => {
+  // 集群内是两个 Service：/api/v1 与 /public/v1 在 backend，/v1 在 aiproxy。
+  // 只有后者认 OAuth 令牌，所以这两个 origin 必须能分开配。
+  assert.equal(
+    resolveAtlasApiOrigin(
+      {
+        ATLASCLOUD_API_BASE_URL: "http://backend.atlascloud-dev.svc.cluster.local:9099",
+        ATLASCLOUD_GENERATION_API_BASE_URL:
+          "http://aiproxy-service.atlascloud-dev.svc.cluster.local",
+      },
+      "ATLASCLOUD_GENERATION_API_BASE_URL"
+    ),
+    "http://aiproxy-service.atlascloud-dev.svc.cluster.local"
+  );
+});
+
+test("独立 origin 沿用同一套校验，且报错点名正确的变量", () => {
+  for (const [value, pattern] of [
+    ["not-a-url", /ATLASCLOUD_GENERATION_API_BASE_URL is not a valid URL/],
+    ["http://example.com", /ATLASCLOUD_GENERATION_API_BASE_URL must use https/],
+    ["https://u:p@api.test", /ATLASCLOUD_GENERATION_API_BASE_URL must not contain credentials/],
+    ["https://api.test/v1", /ATLASCLOUD_GENERATION_API_BASE_URL must be a bare origin/],
+  ] as Array<[string, RegExp]>) {
+    assert.throws(
+      () =>
+        resolveAtlasApiOrigin(
+          { ATLASCLOUD_GENERATION_API_BASE_URL: value },
+          "ATLASCLOUD_GENERATION_API_BASE_URL"
+        ),
+      pattern,
+      value
+    );
+  }
+});
+
+test("production 发布同样拒绝独立 origin 的覆盖", () => {
+  assert.throws(
+    () =>
+      resolveAtlasApiOrigin(
+        {
+          PLUGIN_RELEASE_TIER: "production",
+          ATLASCLOUD_GENERATION_API_BASE_URL: "https://api.dev.atlascloud.ai",
+        },
+        "ATLASCLOUD_GENERATION_API_BASE_URL"
+      ),
+    /must not override the Atlas API origin in a production release/
+  );
+});

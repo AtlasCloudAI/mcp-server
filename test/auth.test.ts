@@ -50,6 +50,10 @@ async function signToken(
     scope?: string;
     expired?: boolean;
     omitGrantId?: boolean;
+    omitJti?: boolean;
+    issuer?: string;
+    accountId?: number | string;
+    extraClaims?: Record<string, unknown>;
   } = {}
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
@@ -59,10 +63,13 @@ async function signToken(
     email: "user@example.com",
     email_verified: true,
     ...(!overrides.omitGrantId ? { grant_id: "grant-test-1" } : {}),
+    ...(!overrides.omitJti ? { jti: "jti-test-1" } : {}),
+    ...(overrides.accountId !== undefined ? { account_id: overrides.accountId } : {}),
+    ...(overrides.extraClaims ?? {}),
   })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setSubject("user-1")
-    .setIssuer(fixture.config.authorizationServer.toString().replace(/\/$/, ""))
+    .setIssuer(overrides.issuer ?? fixture.config.authorizationServer.toString().replace(/\/$/, ""))
     .setAudience(overrides.audience ?? fixture.config.resourceId)
     .setIssuedAt(overrides.expired ? now - 120 : now)
     .setExpirationTime(overrides.expired ? now - 60 : now + 300);
@@ -95,8 +102,11 @@ test("JWT verifier rejects wrong audience, expired and unsupported scopes", asyn
     ),
     /unsupported scopes/i
   );
+  // 新语义：grant_id 与 jti 任取其一即可（本地 AS 给前者，Atlas 给后者），两个都缺才拒。
   await assert.rejects(
-    fixture.verifier.verifyAccessToken(await signToken(fixture, { omitGrantId: true })),
+    fixture.verifier.verifyAccessToken(
+      await signToken(fixture, { omitGrantId: true, omitJti: true })
+    ),
     /invalid|grant identity/i
   );
 });
@@ -141,14 +151,27 @@ test("authorization-server metadata validates PKCE, discovery, OIDC and scopes",
   assert.equal(redirectMode, "error");
 });
 
-test("authorization-server metadata fails closed when OIDC email support is absent", async () => {
+test("authorization-server metadata accepts an issuer without userinfo or email scope", async () => {
+  // Atlas 的授权服务器没有 userinfo 端点，ID token 也不含 email。那两项只有 ChatGPT 的
+  // workspace 域限制才需要，强制它们会让插件对着 Atlas 直接启动失败。
   const config = authConfig();
-  const invalid = metadata(config);
-  invalid.scopes_supported = config.scopesSupported;
-  delete invalid.userinfo_endpoint;
+  const lean = metadata(config);
+  lean.scopes_supported = config.scopesSupported;
+  delete lean.userinfo_endpoint;
+  const accepted = await fetchAndValidateAuthorizationServerMetadata(
+    config,
+    metadataFetcher(lean)
+  );
+  assert.equal(accepted.issuer, config.authorizationServer.toString().replace(/\/$/, ""));
+  assert.equal(accepted.userinfo_endpoint, undefined);
+
+  // 但资源自己要用的 scope 若没被公示，仍然要拒。
+  const missingScope = metadata(config);
+  missingScope.scopes_supported = ["openid"];
+  delete missingScope.userinfo_endpoint;
   await assert.rejects(
-    fetchAndValidateAuthorizationServerMetadata(config, metadataFetcher(invalid)),
-    /metadata validation failed/
+    fetchAndValidateAuthorizationServerMetadata(config, metadataFetcher(missingScope)),
+    /does not advertise the scopes/
   );
 });
 
@@ -240,4 +263,70 @@ test("authorization-server metadata retry remains fail-closed", async () => {
   );
   assert.equal(fetchCalls, 6);
   assert.deepEqual(delays, [2, 3]);
+});
+
+test("契约 5.4 的拒绝向量全部被拒，基线用例仍通过", async () => {
+  const fixture = await signingFixture();
+  const resource = fixture.config.resourceId;
+
+  // 基线：一枚符合 Atlas 契约的令牌（没有 grant_id，只有 jti + account_id）应当通过，
+  // 确保后面那些拒绝不是因为整体坏掉。
+  const baseline = await fixture.verifier.verifyAccessToken(
+    await signToken(fixture, { omitGrantId: true, accountId: 789 })
+  );
+  assert.equal(baseline.extra?.sub, "user-1");
+  assert.equal(baseline.extra?.grant_id, "jti-test-1", "缺 grant_id 时应回退用 jti");
+  assert.equal(baseline.extra?.account_id, "789", "account_id 要带进 AuthInfo");
+
+  const rejected: Array<[string, Parameters<typeof signToken>[1]]> = [
+    ["exp 已过期", { expired: true }],
+    ["iss 不匹配", { issuer: "http://evil.test" }],
+    ["aud 是别的资源", { audience: "http://other.test/mcp" }],
+    ["scope 越界", { scope: "atlas:models:read admin:root" }],
+    ["既无 grant_id 也无 jti", { omitGrantId: true, omitJti: true }],
+    ["携带管理员标志 is_admin", { extraClaims: { is_admin: true } }],
+    ["携带 roles", { extraClaims: { roles: ["admin"] } }],
+  ];
+  for (const [name, overrides] of rejected) {
+    const token = await signToken(fixture, overrides);
+    await assert.rejects(
+      () => fixture.verifier.verifyAccessToken(token),
+      /invalid|expired|another resource|unsupported|forbidden|grant identity/i,
+      name
+    );
+  }
+
+  // alg 混淆：拿 RSA 公钥当 HMAC 密钥签的 HS256 令牌
+  const publicJwk = await exportJWK((await generateKeyPair("RS256")).publicKey);
+  const hmacKey = new TextEncoder().encode(JSON.stringify(publicJwk));
+  const now = Math.floor(Date.now() / 1000);
+  const confused = await new SignJWT({ client_id: "x", scope: "atlas:models:read", jti: "j" })
+    .setProtectedHeader({ alg: "HS256", kid: "test-key" })
+    .setSubject("user-1")
+    .setIssuer(fixture.config.authorizationServer.toString().replace(/\/$/, ""))
+    .setAudience(resource)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 300)
+    .sign(hmacKey);
+  await assert.rejects(() => fixture.verifier.verifyAccessToken(confused), /invalid/i, "HS256 alg 混淆");
+
+  // alg: none
+  const header = Buffer.from(JSON.stringify({ alg: "none", kid: "test-key" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({
+    sub: "user-1", jti: "j", iss: fixture.config.authorizationServer.toString().replace(/\/$/, ""),
+    aud: resource, iat: now, exp: now + 300, client_id: "x", scope: "atlas:models:read",
+  })).toString("base64url");
+  await assert.rejects(() => fixture.verifier.verifyAccessToken(`${header}.${body}.`), /invalid/i, "alg:none");
+
+  // kid 未知
+  const otherPair = await generateKeyPair("RS256");
+  const unknownKid = await new SignJWT({ client_id: "x", scope: "atlas:models:read", jti: "j" })
+    .setProtectedHeader({ alg: "RS256", kid: "no-such-kid" })
+    .setSubject("user-1")
+    .setIssuer(fixture.config.authorizationServer.toString().replace(/\/$/, ""))
+    .setAudience(resource)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 300)
+    .sign(otherPair.privateKey);
+  await assert.rejects(() => fixture.verifier.verifyAccessToken(unknownKid), /invalid/i, "kid 未知");
 });

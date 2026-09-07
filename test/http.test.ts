@@ -281,6 +281,15 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       assert.match(challenge, /scope="tasks:read"/, method);
       assert.ok(!/error=/.test(challenge), `${method}: 缺凭据的挑战不应带 error 参数`);
     }
+    // POST 走的是 MCP SDK 的 requireBearerAuth，它自己拼的头也必须被修正到同一形状
+    {
+      const post = await fetch(`${baseUrl}/mcp`, { method: "POST" });
+      assert.equal(post.status, 401);
+      const challenge = post.headers.get("www-authenticate") ?? "";
+      assert.match(challenge, /resource_metadata="http/);
+      assert.match(challenge, /scope="tasks:read"/);
+      assert.ok(!/error=/.test(challenge), "SDK 的挑战头也不应带 error 参数");
+    }
     // 带了凭据就按「这个无状态端点只接受 POST」处理。
     for (const method of ["GET", "DELETE"]) {
       const response = await fetch(`${baseUrl}/mcp`, {

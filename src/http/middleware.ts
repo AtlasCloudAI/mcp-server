@@ -37,18 +37,33 @@ export function challengeUnauthenticated(resourceMetadataUrl: string): RequestHa
  * 已经带 scope 的头原样放行。
  */
 export function ensureChallengeScope(): RequestHandler {
-  return (_req, res, next) => {
+  return (req, res, next) => {
+    // 请求是否真的带了凭据，决定挑战里该不该出现 error 参数。必须在处理链之前读，
+    // 后面的中间件可能已经改写过 req。
+    const hadCredentials = Boolean(req.headers.authorization);
     const original = res.setHeader.bind(res);
     res.setHeader = ((name: string, value: unknown) => {
       if (
-        String(name).toLowerCase() === "www-authenticate" &&
-        typeof value === "string" &&
-        value.startsWith("Bearer") &&
-        !/[,\s]scope=/.test(value)
+        String(name).toLowerCase() !== "www-authenticate" ||
+        typeof value !== "string" ||
+        !value.startsWith("Bearer")
       ) {
-        return original(name, `${value}, scope="${ADVERTISED_SCOPES.join(" ")}"`);
+        return original(name, value as never);
       }
-      return original(name, value as never);
+      let challenge = value;
+      if (!hadCredentials) {
+        // RFC 6750 把 error 留给「带了凭据但不被接受」。SDK 的 requireBearerAuth
+        // 对缺失的头也报 invalid_token，这里改正——aiproxy 的实测响应同样不带 error。
+        challenge = challenge
+          .replace(/error(?:_description)?="(?:[^"\\]|\\.)*"\s*,?\s*/g, "")
+          .replace(/^Bearer\s*,?\s*/, "Bearer ")
+          .replace(/,\s*$/, "")
+          .trim();
+      }
+      if (!/[,\s]scope=/.test(challenge)) {
+        challenge = `${challenge}, scope="${ADVERTISED_SCOPES.join(" ")}"`;
+      }
+      return original(name, challenge);
     }) as typeof res.setHeader;
     next();
   };

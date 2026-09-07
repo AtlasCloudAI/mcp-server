@@ -801,7 +801,7 @@ test("OAuth server exposes compliant metadata and rejects unsafe DCR", async (t)
   assert.equal(metadata.registration_endpoint, `${harness.baseUrl}/reg`);
   assert.deepEqual(metadata.code_challenge_methods_supported, ["S256"]);
   assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none"]);
-  assert.ok((metadata.scopes_supported as string[]).includes("atlas:generation:write"));
+  assert.ok((metadata.scopes_supported as string[]).includes("tasks:write"));
 
   const authScriptResponse = await fetch(`${harness.baseUrl}/assets/auth.js`);
   assert.equal(authScriptResponse.status, 200);
@@ -1077,7 +1077,7 @@ test("Codex scopes keep refresh tokens valid after the browser session expires",
   });
   assert.equal(access.payload.sub, "reviewer-1");
   assert.equal(access.payload.client_id, clientId);
-  assert.ok(String(access.payload.scope).includes("atlas:generation:write"));
+  assert.ok(String(access.payload.scope).includes("tasks:write"));
 
   const identity = await jwtVerify(tokens.id_token as string, jwks, {
     issuer: harness.baseUrl,
@@ -1340,8 +1340,8 @@ test("Codex native DCR flow returns a loopback authorization code for read-only 
       "email",
       "profile",
       "offline_access",
-      "atlas:models:read",
-      "atlas:billing:read",
+      "tasks:read",
+      "billing:read",
     ].join(" ")
   );
   authorization.searchParams.set("code_challenge", challenge);
@@ -1723,7 +1723,7 @@ function cimdAuthorizationUrl(baseUrl: string, resource: URL, clientId: string, 
   authorization.searchParams.set("response_type", "code");
   authorization.searchParams.set(
     "scope",
-    ["openid", "email", "profile", "offline_access", "atlas:models:read"].join(" ")
+    ["openid", "email", "profile", "offline_access", "tasks:read"].join(" ")
   );
   authorization.searchParams.set("code_challenge", challenge);
   authorization.searchParams.set("code_challenge_method", "S256");

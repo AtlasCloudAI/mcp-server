@@ -9,8 +9,7 @@ import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/p
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   loadHttpServerConfig,
-  type HttpServerConfig,
-} from "./config.js";
+  type HttpServerConfig, ADVERTISED_SCOPES } from "./config.js";
 import {
   createConfiguredCredentialResolver,
   CredentialResolutionError,
@@ -36,6 +35,7 @@ import {
   enforceToolScopes,
   restrictedCors,
   securityHeaders,
+  ensureChallengeScope,
 } from "./http/middleware.js";
 
 export interface HttpAppDependencies {
@@ -50,8 +50,11 @@ function protectedResourceMetadata(config: HttpServerConfig): Record<string, unk
     authorization_servers: [
       config.authorizationServer.toString().replace(/\/$/, ""),
     ],
-    scopes_supported: config.scopesSupported,
+    // v3 §4.3：只公示 tasks:read，写权限走 step-up。
+    // v3 §8：不含 offline_access —— refresh token 是客户端与 AS 之间的事。
+    scopes_supported: [...ADVERTISED_SCOPES],
     bearer_methods_supported: ["header"],
+    resource_name: "Atlas Cloud MCP Server",
     ...(config.resourceDocumentation
       ? { resource_documentation: config.resourceDocumentation.toString() }
       : {}),
@@ -116,6 +119,7 @@ export function createHttpApp(
   app.post(
     config.publicMcpUrl.pathname,
     createPreAuthRateLimiter(config),
+    ensureChallengeScope(),
     requireBearerAuth({
       verifier: dependencies.verifier,
       resourceMetadataUrl,

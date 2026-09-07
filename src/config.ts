@@ -5,12 +5,28 @@ import {
   type CredentialEncryptionKey,
 } from "./services/credential-envelope.js";
 
+/**
+ * 全平台唯一的一套 scope（令牌契约 v3 §4）。资源服务器不得引入自己的前缀或
+ * 同义词：§7 的令牌交换要求请求的 scope 落在主体令牌已批准范围内，各资源一套
+ * 词表会让跨资源交换必然 invalid_scope；同意页也是按 scope 向用户解释的，同一
+ * 件事两个名字用户无法判断该不该同意。
+ */
 export const REMOTE_SCOPES = [
-  "atlas:models:read",
-  "atlas:predictions:read",
-  "atlas:billing:read",
-  "atlas:generation:write",
+  "tasks:read",
+  "tasks:write",
+  "billing:read",
 ] as const;
+
+/**
+ * 资源元数据里公示的 scope（契约 v3 §4.3）。只公示 tasks:read —— tasks:write 与
+ * billing:read 走 step-up：客户端拿只读令牌来，撞到 403 insufficient_scope 时才
+ * 去申请写权限。这样「同意消耗额度」发生在用户第一次真要生成的时刻，而不是初次
+ * 连接时就要求全部权限。
+ *
+ * 注意它和 REMOTE_SCOPES 的区别：这里是「初次授权公示什么」，REMOTE_SCOPES 是
+ * 「这个资源一共认哪几个」，令牌交换和授权服务器元数据校验用的是后者。
+ */
+export const ADVERTISED_SCOPES = ["tasks:read"] as const;
 
 export type ReleaseTier = "staging" | "production";
 export type CredentialMode =

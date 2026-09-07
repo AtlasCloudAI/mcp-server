@@ -147,7 +147,7 @@ test("authorization-server metadata validates PKCE, discovery, OIDC and scopes",
     }) as typeof fetch
   );
   assert.ok(result.code_challenge_methods_supported?.includes("S256"));
-  assert.ok(result.scopes_supported?.includes("atlas:generation:write"));
+  assert.ok(result.scopes_supported?.includes("tasks:write"));
   assert.equal(redirectMode, "error");
 });
 
@@ -300,7 +300,7 @@ test("契约 5.4 的拒绝向量全部被拒，基线用例仍通过", async () 
   const publicJwk = await exportJWK((await generateKeyPair("RS256")).publicKey);
   const hmacKey = new TextEncoder().encode(JSON.stringify(publicJwk));
   const now = Math.floor(Date.now() / 1000);
-  const confused = await new SignJWT({ client_id: "x", scope: "atlas:models:read", jti: "j" })
+  const confused = await new SignJWT({ client_id: "x", scope: "tasks:read", jti: "j" })
     .setProtectedHeader({ alg: "HS256", kid: "test-key" })
     .setSubject("user-1")
     .setIssuer(fixture.config.authorizationServer.toString().replace(/\/$/, ""))
@@ -314,13 +314,13 @@ test("契约 5.4 的拒绝向量全部被拒，基线用例仍通过", async () 
   const header = Buffer.from(JSON.stringify({ alg: "none", kid: "test-key" })).toString("base64url");
   const body = Buffer.from(JSON.stringify({
     sub: "user-1", jti: "j", iss: fixture.config.authorizationServer.toString().replace(/\/$/, ""),
-    aud: resource, iat: now, exp: now + 300, client_id: "x", scope: "atlas:models:read",
+    aud: resource, iat: now, exp: now + 300, client_id: "x", scope: "tasks:read",
   })).toString("base64url");
   await assert.rejects(() => fixture.verifier.verifyAccessToken(`${header}.${body}.`), /invalid/i, "alg:none");
 
   // kid 未知
   const otherPair = await generateKeyPair("RS256");
-  const unknownKid = await new SignJWT({ client_id: "x", scope: "atlas:models:read", jti: "j" })
+  const unknownKid = await new SignJWT({ client_id: "x", scope: "tasks:read", jti: "j" })
     .setProtectedHeader({ alg: "RS256", kid: "no-such-kid" })
     .setSubject("user-1")
     .setIssuer(fixture.config.authorizationServer.toString().replace(/\/$/, ""))
@@ -329,4 +329,73 @@ test("契约 5.4 的拒绝向量全部被拒，基线用例仍通过", async () 
     .setExpirationTime(now + 300)
     .sign(otherPair.privateKey);
   await assert.rejects(() => fixture.verifier.verifyAccessToken(unknownKid), /invalid/i, "kid 未知");
+});
+
+test("契约 v3 §2：无 kid 时仅当 JWKS 恰好一把密钥才接受", async () => {
+  const config = authConfig();
+  const a = await generateKeyPair("RS256");
+  const b = await generateKeyPair("RS256");
+  const jwkOf = async (pair: Awaited<ReturnType<typeof generateKeyPair>>, kid: string) => {
+    const jwk: JWK = await exportJWK(pair.publicKey);
+    jwk.alg = "RS256";
+    jwk.use = "sig";
+    jwk.kid = kid;
+    return jwk;
+  };
+  const jwkA = await jwkOf(a, "key-a");
+  const jwkB = await jwkOf(b, "key-b");
+
+  const now = Math.floor(Date.now() / 1000);
+  // 关键：protected header 里不带 kid
+  const tokenWithoutKid = await new SignJWT({
+    client_id: "x",
+    scope: "tasks:read",
+    jti: "j",
+    grant_id: "g",
+  })
+    .setProtectedHeader({ alg: "RS256" })
+    .setSubject("user-1")
+    .setIssuer(config.authorizationServer.toString().replace(/\/$/, ""))
+    .setAudience(config.resourceId)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 300)
+    .sign(a.privateKey);
+
+  // 恰好一把 → 接受
+  const single = new JwtAccessTokenVerifier(config, createLocalJWKSet({ keys: [jwkA] }));
+  const ok = await single.verifyAccessToken(tokenWithoutKid);
+  assert.equal(ok.extra?.sub, "user-1");
+
+  // 多把 → 拒绝（无从选择公钥，不得猜）
+  const multi = new JwtAccessTokenVerifier(config, createLocalJWKSet({ keys: [jwkA, jwkB] }));
+  await assert.rejects(
+    () => multi.verifyAccessToken(tokenWithoutKid),
+    /invalid/i,
+    "无 kid 且 JWKS 含多把密钥必须拒绝"
+  );
+});
+
+test("契约 v3 §3：签发方多带的身份 claim 不会流向下游", async () => {
+  const fixture = await signingFixture();
+  const token = await signToken(fixture, {
+    extraClaims: { name: "Someone", avatar: "https://example.test/a.png" },
+  });
+  const auth = await fixture.verifier.verifyAccessToken(token);
+  const extra = (auth.extra ?? {}) as Record<string, unknown>;
+  for (const claim of ["email", "email_verified", "name", "avatar"]) {
+    assert.equal(extra[claim], undefined, `${claim} 不应出现在下游可见的 extra 里`);
+  }
+  // 该带的仍然在
+  assert.equal(extra.sub, "user-1");
+});
+
+test("契约 v3 §5：消费账户只认 account_id claim，不受请求头影响", async () => {
+  const fixture = await signingFixture();
+  // 令牌里写 789；如果实现读了 X-Account-ID 这类请求头就会串账
+  const token = await signToken(fixture, { accountId: 789 });
+  const auth = await fixture.verifier.verifyAccessToken(token);
+  assert.equal((auth.extra as Record<string, unknown>).account_id, "789");
+
+  // 校验器只接受令牌本身，没有任何入口能从请求头注入账户
+  assert.equal(fixture.verifier.verifyAccessToken.length, 1, "verifyAccessToken 只接受令牌一个入参");
 });

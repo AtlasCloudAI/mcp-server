@@ -17,7 +17,14 @@ export type AtlasToolName =
   | "atlas_quick_generate";
 
 export interface ToolPolicy {
-  scope: string;
+  /**
+   * 本工具所需的 scope，取自 REMOTE_SCOPES。
+   *
+   * null 表示不需要任何 scope：契约 v3 §4.2 规定模型目录与单模型 schema 的读取
+   * 匿名可读，带令牌与不带令牌返回同一份内容。MCP 端点本身仍然要求一枚有效令牌
+   * （那是 MCP 协议的授权模型），但不再额外要求 scope。
+   */
+  scope: string | null;
   remote: boolean;
   billable: boolean;
   annotations: Required<
@@ -45,7 +52,7 @@ const billableExternalWrite: ToolPolicy["annotations"] = {
 
 export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
   atlas_search_docs: {
-    scope: "atlas:models:read",
+    scope: null,
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -53,7 +60,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads the bounded Atlas model catalog and documentation without changing account or public state.",
   },
   atlas_list_models: {
-    scope: "atlas:models:read",
+    scope: null,
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -61,7 +68,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Lists the bounded Atlas model catalog and does not mutate any state.",
   },
   atlas_get_model_info: {
-    scope: "atlas:models:read",
+    scope: null,
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -69,7 +76,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads one model's catalog metadata, schema, and documentation without mutation.",
   },
   atlas_generate_image: {
-    scope: "atlas:generation:write",
+    scope: "tasks:write",
     remote: true,
     billable: true,
     annotations: billableExternalWrite,
@@ -77,7 +84,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Creates a billable external generation task and asset; a stable idempotency key prevents duplicate effects.",
   },
   atlas_generate_video: {
-    scope: "atlas:generation:write",
+    scope: "tasks:write",
     remote: true,
     billable: true,
     annotations: billableExternalWrite,
@@ -85,7 +92,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Creates a billable external generation task and asset; a stable idempotency key prevents duplicate effects.",
   },
   atlas_upload_media: {
-    scope: "atlas:assets:write",
+    scope: "tasks:write",
     remote: false,
     billable: false,
     annotations: billableExternalWrite,
@@ -93,7 +100,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Uploads a local file and creates an externally hosted asset; retries are deduplicated by idempotency key.",
   },
   atlas_generate_audio: {
-    scope: "atlas:generation:write",
+    scope: "tasks:write",
     remote: true,
     billable: true,
     annotations: billableExternalWrite,
@@ -101,7 +108,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Creates a billable external audio task and asset; a stable idempotency key prevents duplicate effects.",
   },
   atlas_transcribe_audio: {
-    scope: "atlas:generation:write",
+    scope: "tasks:write",
     remote: true,
     billable: true,
     annotations: billableExternalWrite,
@@ -109,7 +116,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Creates a billable external transcription task; a stable idempotency key prevents duplicate effects.",
   },
   atlas_chat: {
-    scope: "atlas:chat:write",
+    scope: "tasks:write",
     remote: false,
     billable: true,
     annotations: billableExternalWrite,
@@ -117,7 +124,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Invokes a billable external model; a stable idempotency key prevents duplicate charges.",
   },
   atlas_get_prediction: {
-    scope: "atlas:predictions:read",
+    scope: "tasks:read",
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -125,7 +132,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads a specific Atlas prediction and does not alter task or asset state.",
   },
   atlas_get_balance: {
-    scope: "atlas:billing:read",
+    scope: "billing:read",
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -133,7 +140,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads the authenticated Atlas account balance without mutation.",
   },
   atlas_get_model_usage: {
-    scope: "atlas:billing:read",
+    scope: "billing:read",
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -141,7 +148,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads bounded usage records for the authenticated Atlas account without mutation.",
   },
   atlas_get_model_costs: {
-    scope: "atlas:billing:read",
+    scope: "billing:read",
     remote: true,
     billable: false,
     annotations: firstPartyRead,
@@ -149,7 +156,7 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
       "Reads bounded cost records for the authenticated Atlas account without mutation.",
   },
   atlas_quick_generate: {
-    scope: "atlas:generation:write",
+    scope: "tasks:write",
     remote: true,
     billable: true,
     annotations: billableExternalWrite,

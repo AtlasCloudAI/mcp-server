@@ -27,8 +27,9 @@ The script fails closed unless every check passes:
 - MCP resource is exactly `https://atlascloud-mcp.dev.atlascloud.ai/mcp`.
 - Authorization origin is exactly `https://atlascloud-auth.dev.atlascloud.ai/auth`.
 - Requested scopes are only `openid`, `email`, `profile`, `offline_access`,
-  `atlas:models:read`, `atlas:predictions:read`, and `atlas:billing:read`.
-- `atlas:generation:write` is rejected before the browser can open.
+  and `tasks:read` (token contract v3 §4 — one platform-wide scope set).
+- `tasks:write` is rejected before the browser can open; it is granted through
+  step-up (403 `insufficient_scope`) when a tool first needs to spend credits.
 - The loopback callback is `127.0.0.1` and its listening socket belongs to the
   newly started Codex App Server process.
 - Temporary protocol logs are private and removed on exit.

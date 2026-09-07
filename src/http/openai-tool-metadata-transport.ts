@@ -19,7 +19,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function securitySchemes(name: string): Array<{ type: "oauth2"; scopes: string[] }> | undefined {
   if (!isAtlasToolName(name) || !TOOL_POLICIES[name].remote) return undefined;
-  return [{ type: "oauth2", scopes: [TOOL_POLICIES[name].scope] }];
+  const scope = TOOL_POLICIES[name].scope;
+  // 目录类工具不要求 scope（契约 v3 §4.2），公示成空集而不是编造一个 scope 名。
+  return [{ type: "oauth2", scopes: scope === null ? [] : [scope] }];
 }
 
 export function withOpenAIToolSecuritySchemes(

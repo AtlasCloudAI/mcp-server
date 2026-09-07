@@ -6,6 +6,8 @@ export interface AtlasRequestContext {
   authInfo: AuthInfo;
   subject: string;
   atlasApiKey: string;
+  /** 上游判定凭据无效时调用一次，让下一个请求重新取凭据。 */
+  onCredentialRejected?: () => void;
   idempotencyStore: IdempotencyStore;
   idempotencyTtlSeconds: number;
   generationConfirmationSecret: string;

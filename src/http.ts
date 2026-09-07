@@ -2,7 +2,7 @@
 
 import { pathToFileURL } from "node:url";
 import type { Server as NodeHttpServer } from "node:http";
-import type { Express, Request, Response } from "express";
+import type { Express, Request, RequestHandler, Response } from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
@@ -13,8 +13,7 @@ import {
 import {
   createConfiguredCredentialResolver,
   CredentialResolutionError,
-  type AtlasCredentialResolver,
-} from "./services/credential-resolver.js";
+  type AtlasCredentialResolver, type ResolvedCredential } from "./services/credential-resolver.js";
 import {
   createRedisIdempotencyStore,
   InMemoryIdempotencyStore,
@@ -37,11 +36,46 @@ import {
   securityHeaders,
   ensureChallengeScope,
 } from "./http/middleware.js";
+import {
+  alwaysReady,
+  startAuthorizationServerProbe,
+  type AuthorizationServerReadiness,
+} from "./http/readiness.js";
 
 export interface HttpAppDependencies {
   verifier: OAuthTokenVerifier;
   idempotencyStore: IdempotencyStore;
   credentialResolver: AtlasCredentialResolver;
+  /**
+   * 授权服务器自检的就绪状态。省略即视为已就绪（stdio 模式与测试用）。
+   * 未就绪时 MCP 端点拒绝一切请求——JWKS 拿不到就无法验签，放行等于不验令牌。
+   */
+  readiness?: AuthorizationServerReadiness;
+}
+
+/**
+ * 授权服务器自检没过时拒绝一切 MCP 请求。
+ *
+ * 这不是保守，是必需：JWKS 拉不到就没法验签，而验签失败一律拒绝（fail-closed）。
+ * 与其让每个请求各自撞一次 JWKS 超时、返回一堆 401，不如在入口一次说清「服务
+ * 未就绪」，客户端也能据此重试而不是把令牌当成坏的。
+ */
+function requireAuthorizationServerReady(dependencies: HttpAppDependencies): RequestHandler {
+  return (_req, res, next) => {
+    if (dependencies.readiness?.ready() ?? true) {
+      next();
+      return;
+    }
+    res.setHeader("Retry-After", "5");
+    res.status(503).json({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: "authorization server metadata is not yet validated; retry shortly",
+      },
+      id: null,
+    });
+  };
 }
 
 function protectedResourceMetadata(config: HttpServerConfig): Record<string, unknown> {
@@ -105,12 +139,22 @@ export function createHttpApp(
     res.status(200).json({ status: "ok", service: "atlascloud-ai-media" });
   });
   app.get("/readyz", async (_req, res) => {
+    const authorizationServerReady = dependencies.readiness?.ready() ?? true;
     const checks = await Promise.all([
       dependencies.idempotencyStore.ready().catch(() => false),
       dependencies.credentialResolver.ready?.().catch(() => false) ?? Promise.resolve(true),
     ]);
-    const ready = checks.every(Boolean);
-    res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready" });
+    const ready = authorizationServerReady && checks.every(Boolean);
+    res.status(ready ? 200 : 503).json({
+      status: ready ? "ready" : "not_ready",
+      // 把原因说出来：否则「一直 not_ready」要靠翻日志才知道是授权服务器不通。
+      ...(authorizationServerReady
+        ? {}
+        : {
+            authorization_server: "unreachable",
+            detail: dependencies.readiness?.lastError() ?? "validation pending",
+          }),
+    });
   });
 
   app.options(config.publicMcpUrl.pathname, (_req, res) => {
@@ -119,6 +163,7 @@ export function createHttpApp(
   app.post(
     config.publicMcpUrl.pathname,
     createPreAuthRateLimiter(config),
+    requireAuthorizationServerReady(dependencies),
     ensureChallengeScope(),
     requireBearerAuth({
       verifier: dependencies.verifier,
@@ -132,7 +177,7 @@ export function createHttpApp(
         return;
       }
 
-      let credential: { subject: string; apiKey: string };
+      let credential: ResolvedCredential;
       try {
         credential = await dependencies.credentialResolver.resolve(req.auth);
       } catch (error) {
@@ -179,6 +224,7 @@ export function createHttpApp(
             authInfo: req.auth,
             subject: credential.subject,
             atlasApiKey: credential.apiKey,
+            onCredentialRejected: credential.onRejected,
             idempotencyStore: dependencies.idempotencyStore,
             idempotencyTtlSeconds: config.idempotencyTtlSeconds,
             generationConfirmationSecret:
@@ -257,11 +303,20 @@ export async function startHttpServer(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<{ server: NodeHttpServer; close: () => Promise<void> }> {
   const config = loadHttpServerConfig(env);
-  await fetchAndValidateAuthorizationServerMetadataWithRetry(config, fetch, {
-    onRetry: (error, attempt, delayMs) => {
+  // 自检不阻塞启动：失败就退出会变成 CrashLoopBackOff，而 k8s 的退避最长到 5 分钟,
+  // 授权服务器恢复后还要多等一个周期。改成后台探针 + 就绪门槛，恢复是秒级的，
+  // 而且未就绪期间 MCP 端点一律 503，不比退出时更宽松。
+  const readiness = startAuthorizationServerProbe(config, {
+    onAttemptFailed: (error, attempt, delayMs) => {
       const detail = error instanceof Error ? error.message : "unknown error";
       console.error(
-        `OAuth metadata validation attempt ${attempt} failed (${detail}); retrying in ${delayMs}ms`
+        `OAuth metadata validation attempt ${attempt} failed (${detail}); retrying in ${delayMs}ms. ` +
+          `The server is listening but /readyz reports 503 and the MCP endpoint rejects requests until this passes.`
+      );
+    },
+    onReady: (attempt) => {
+      console.error(
+        `OAuth authorization server metadata validated${attempt > 1 ? ` after ${attempt} attempts` : ""}; ready.`
       );
     },
   });
@@ -271,6 +326,7 @@ export async function startHttpServer(
   try {
     credentialResolver = await createConfiguredCredentialResolver(config);
     const dependencies: HttpAppDependencies = {
+      readiness,
       verifier: new JwtAccessTokenVerifier(config),
       idempotencyStore,
       credentialResolver,
@@ -281,6 +337,7 @@ export async function startHttpServer(
       listening.once("error", reject);
     });
   } catch (error) {
+    readiness.stop();
     await Promise.allSettled([
       idempotencyStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
@@ -292,6 +349,7 @@ export async function startHttpServer(
   );
 
   const close = async (): Promise<void> => {
+    readiness.stop();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });

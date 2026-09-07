@@ -208,6 +208,13 @@ export async function request<T>(
 
         const apiError = new ApiRequestError(errorMsg, response.status);
 
+        // 上游说这份凭据不认：交换来的令牌可能已被撤销。丢掉缓存，让下一个请求
+        // 重新换一枚，而不是拿着废令牌一路 401 到它自然过期（最长十几分钟）。
+        // 只认 401——403 是权限不足，凭据本身是好的，丢了只会白白多换一次。
+        if (response.status === 401) {
+          getRequestContext()?.onCredentialRejected?.();
+        }
+
         // Don't retry non-retryable errors
         if (!isRetryable(apiError)) {
           throw apiError;

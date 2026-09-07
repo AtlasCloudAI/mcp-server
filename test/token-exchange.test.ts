@@ -35,7 +35,7 @@ function authInfo(token: string, extra: Record<string, unknown> = {}): AuthInfo 
   return {
     token,
     clientId: "https://chatgpt.com/oauth/codex/client.json",
-    scopes: ["atlas:models:read"],
+    scopes: ["tasks:read"],
     expiresAt: Math.floor(Date.now() / 1000) + 300,
     extra: { sub: "123456", grant_id: "jti-1", ...extra },
   } as AuthInfo;

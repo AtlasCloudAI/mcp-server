@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { REMOTE_SCOPES, loadHttpServerConfig } from "../src/config.js";
+import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES } from "../src/config.js";
 import { createHttpApp } from "../src/http.js";
 import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
@@ -16,7 +16,7 @@ import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
 class StubVerifier implements OAuthTokenVerifier {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     if (token === "invalid") throw new InvalidTokenError("invalid test token");
-    const scopes = token === "models" ? ["atlas:models:read"] : [...REMOTE_SCOPES];
+    const scopes = token === "models" ? ["tasks:read"] : [...REMOTE_SCOPES];
     return {
       token,
       clientId: "chatgpt-test-client",
@@ -129,7 +129,14 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
     const body = await metadata.json() as Record<string, unknown>;
     assert.equal(body.resource, "http://127.0.0.1/mcp");
-    assert.deepEqual(body.scopes_supported, [...REMOTE_SCOPES]);
+    // 契约 v3 §4.3：只公示 tasks:read，写权限走 step-up。
+    assert.deepEqual(body.scopes_supported, [...ADVERTISED_SCOPES]);
+    assert.equal(body.resource_name, "Atlas Cloud MCP Server");
+    assert.deepEqual(body.bearer_methods_supported, ["header"]);
+    assert.ok(
+      !(body.scopes_supported as string[]).includes("offline_access"),
+      "v3 §8：refresh token 是客户端与 AS 之间的事，不进资源的 scope 清单"
+    );
     assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/readyz`)).status, 200);
   });
@@ -224,7 +231,9 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     assert.equal(tools.length, 12);
     for (const tool of tools) {
       const name = tool.name as keyof typeof TOOL_POLICIES;
-      const expected = [{ type: "oauth2", scopes: [TOOL_POLICIES[name].scope] }];
+      const scope = TOOL_POLICIES[name].scope;
+      // 目录类工具不要求 scope（v3 §4.2），公示成空集
+      const expected = [{ type: "oauth2", scopes: scope === null ? [] : [scope] }];
       assert.deepEqual(tool.securitySchemes, expected);
       assert.deepEqual(
         (tool._meta as Record<string, unknown>).securitySchemes,
@@ -267,7 +276,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       assert.equal(discovery.status, 401, method);
       const challenge = discovery.headers.get("www-authenticate") ?? "";
       assert.match(challenge, /resource_metadata="http/, method);
-      assert.match(challenge, /error="invalid_token"/, method);
+      // 契约 v3 §6：401 必须带 scope。缺凭据时不带 error 参数——RFC 6750 把 error
+      // 留给「带了凭据但不被接受」，aiproxy 的实测响应也是这个形状。
+      assert.match(challenge, /scope="tasks:read"/, method);
+      assert.ok(!/error=/.test(challenge), `${method}: 缺凭据的挑战不应带 error 参数`);
     }
     // 带了凭据就按「这个无状态端点只接受 POST」处理。
     for (const method of ["GET", "DELETE"]) {

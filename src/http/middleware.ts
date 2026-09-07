@@ -1,3 +1,4 @@
+import { ADVERTISED_SCOPES } from "../config.js";
 import type { Request, RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import type { HttpServerConfig } from "../config.js";
@@ -17,11 +18,39 @@ export function challengeUnauthenticated(resourceMetadataUrl: string): RequestHa
       next();
       return;
     }
+    // 契约 v3 §6：401 必须带 resource_metadata 与 scope。缺少凭据时不带 error 参数
+    // ——RFC 6750 把 error 留给「带了凭据但不被接受」的情形，这也是 aiproxy 的实测形状。
     res.setHeader(
       "WWW-Authenticate",
-      `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`
+      `Bearer resource_metadata="${resourceMetadataUrl}", scope="${ADVERTISED_SCOPES.join(" ")}"`
     );
     res.status(401).json({ error: "invalid_token" });
+  };
+}
+
+/**
+ * 保证每一个 WWW-Authenticate 挑战都带 scope 参数（契约 v3 §6）。
+ *
+ * 401 挑战有三个来源：本文件的 challengeUnauthenticated、MCP SDK 的
+ * requireBearerAuth、以及 http.ts 里凭据未绑定的分支。SDK 那个的头是它自己拼的，
+ * 改不到；与其在三处各写一遍、日后再各漏一次，不如在链路上游统一补齐。
+ * 已经带 scope 的头原样放行。
+ */
+export function ensureChallengeScope(): RequestHandler {
+  return (_req, res, next) => {
+    const original = res.setHeader.bind(res);
+    res.setHeader = ((name: string, value: unknown) => {
+      if (
+        String(name).toLowerCase() === "www-authenticate" &&
+        typeof value === "string" &&
+        value.startsWith("Bearer") &&
+        !/[,\s]scope=/.test(value)
+      ) {
+        return original(name, `${value}, scope="${ADVERTISED_SCOPES.join(" ")}"`);
+      }
+      return original(name, value as never);
+    }) as typeof res.setHeader;
+    next();
   };
 }
 
@@ -142,7 +171,8 @@ export function enforceToolScopes(
         return;
       }
       const requiredScope = TOOL_POLICIES[name].scope;
-      if (!req.auth?.scopes.includes(requiredScope)) {
+      // null = 契约 v3 §4.2 的匿名可读目录：端点级认证已经足够，不再要求 scope。
+      if (requiredScope !== null && !req.auth?.scopes.includes(requiredScope)) {
         res.setHeader(
           "WWW-Authenticate",
           `Bearer error="insufficient_scope", scope="${requiredScope}", resource_metadata="${resourceMetadataUrl}"`

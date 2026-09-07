@@ -26,7 +26,7 @@ function withSubject<T>(subject: string, operation: () => T): T {
       authInfo: {
         token: "test-access-token",
         clientId: "test-client",
-        scopes: ["atlas:generation:write"],
+        scopes: ["tasks:write"],
       } as AuthInfo,
       subject,
       atlasApiKey: "not-used-by-this-test",

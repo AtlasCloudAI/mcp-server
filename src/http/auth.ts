@@ -53,7 +53,15 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
     private readonly config: HttpServerConfig,
     key?: JWTVerifyGetKey
   ) {
-    this.key = key ?? createRemoteJWKSet(config.jwksUri);
+    // 契约 v3 §2：本地固定缓存 5 分钟，忽略响应的 Cache-Control / Age / Date；
+    // 未知 kid 允许刷新一次，外发刷新按独立的 30 秒窗口节流。jose 不读 HTTP 缓存
+    // 头，这两个值就是全部的缓存语义——不要改成从响应头推导。
+    this.key =
+      key ??
+      createRemoteJWKSet(config.jwksUri, {
+        cacheMaxAge: 300_000,
+        cooldownDuration: 30_000,
+      });
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
@@ -112,14 +120,13 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
         scopes,
         expiresAt: payload.exp,
         resource: new URL(this.config.resourceId),
+        // 契约 v3 §3：email / name / avatar 属于 ID token，access token 不承载，
+        // 「资源服务器不得依赖」。即使签发方多带了，也不往下游传——传下去就会长出
+        // 依赖，等签发方按契约停发时再拆就是破坏性变更了。
         extra: {
           sub: subject,
           grant_id: grantId,
           ...(accountId ? { account_id: accountId } : {}),
-          ...(typeof payload.email === "string" ? { email: payload.email } : {}),
-          ...(typeof payload.email_verified === "boolean"
-            ? { email_verified: payload.email_verified }
-            : {}),
         },
       };
     } catch (error) {

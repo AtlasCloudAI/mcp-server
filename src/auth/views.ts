@@ -152,10 +152,9 @@ const scopeLabels: Record<string, string> = {
   openid: "Confirm your Atlas Cloud identity",
   email: "Read your verified account email",
   offline_access: "Stay connected using refresh tokens",
-  "atlas:models:read": "Browse the live Atlas Cloud model catalog",
-  "atlas:predictions:read": "Read generation status and results",
-  "atlas:billing:read": "Read balance and usage information",
-  "atlas:generation:write": "Start billable AI media generation jobs",
+  "tasks:read": "Read your task status and generated results",
+  "tasks:write": "Create billable tasks (image, video, audio generation and transcription)",
+  "billing:read": "Read your balance, usage, and spending details",
 };
 
 export function renderConsent(interaction: Interaction, csrfToken: string): string {
@@ -163,7 +162,7 @@ export function renderConsent(interaction: Interaction, csrfToken: string): stri
   const items = scopes.length > 0
     ? scopes.map((scope) => `<li>${escapeHtml(scopeLabels[scope] ?? scope)}</li>`).join("")
     : "<li>Use the permissions you previously approved</li>";
-  const billingNotice = scopes.includes("atlas:generation:write")
+  const billingNotice = scopes.includes("tasks:write")
     ? '<p class="notice">Generation calls may consume Atlas Cloud credits. ChatGPT will show tool details before invoking write operations.</p>'
     : "";
   return layout(`

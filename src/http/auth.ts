@@ -11,6 +11,24 @@ import type { HttpServerConfig } from "../config.js";
 
 const MAX_METADATA_BYTES = 64 * 1024;
 
+/** 协议层 scope：不属于任何资源，两套授权服务器都可能带，不该被当成「不支持的 scope」。 */
+const PROTOCOL_SCOPES = new Set(["openid", "email", "profile", "offline_access"]);
+
+/**
+ * 出现即拒绝的 claim。契约明确：带 scope 的令牌永不携带管理员身份，也不承载身份资料
+ * （那属于 ID token）。这里列的是常见写法，命中任何一个都当签发侧异常处理。
+ */
+const FORBIDDEN_CLAIMS = [
+  "admin",
+  "is_admin",
+  "isAdmin",
+  "superuser",
+  "is_superuser",
+  "is_staff",
+  "roles",
+  "role",
+] as const;
+
 function stringClaim(payload: JWTPayload, name: string): string | undefined {
   const value = payload[name];
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
@@ -45,12 +63,20 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
         audience: this.config.resourceId,
         algorithms: this.config.oauthAlgorithms,
         clockTolerance: this.config.oauthClockToleranceSeconds,
-        requiredClaims: ["sub", "exp", "iat", "grant_id"],
+        // grant_id 不在这里要求：它是本地 oidc-provider 的产物，Atlas 授权服务器的令牌
+        // 契约里没有这个 claim（只有 jti）。两套授权服务器都要能吃，所以只要求两边都签的。
+        requiredClaims: ["sub", "exp", "iat", "jti"],
       });
 
       const subject = stringClaim(payload, "sub");
       if (!subject || typeof payload.exp !== "number") {
         throw new InvalidTokenError("Access token is missing required claims");
+      }
+      // 带 scope 的令牌永不携带管理员身份。出现即当异常拒绝，而不是忽略——
+      // 忽略的话一旦上游签发逻辑出错，这里会静默放行一枚越权令牌。
+      const forbidden = FORBIDDEN_CLAIMS.find((claim) => payload[claim] !== undefined);
+      if (forbidden) {
+        throw new InvalidTokenError("Access token carries a forbidden claim");
       }
       const clientId =
         stringClaim(payload, "client_id") ??
@@ -59,16 +85,22 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
       if (!clientId) {
         throw new InvalidTokenError("Access token is missing client identity");
       }
-      const grantId = stringClaim(payload, "grant_id");
+      // 授权标识：本地 AS 给 grant_id，Atlas 给 jti。取到哪个都行，用于把一次授权的
+      // 请求串起来做审计与幂等，缺了才是异常。
+      const grantId = stringClaim(payload, "grant_id") ?? stringClaim(payload, "jti");
       if (!grantId) {
         throw new InvalidTokenError("Access token is missing grant identity");
       }
+      // account_id 是「这枚令牌唯一允许消费的账户」，按契约必须以它为准、忽略请求头里的
+      // 账户标识。这里先带进 AuthInfo，供下游消费与审计。
+      const accountId =
+        typeof payload.account_id === "number" || typeof payload.account_id === "string"
+          ? String(payload.account_id)
+          : undefined;
       const scopes = scopesFromPayload(payload);
       const unsupported = scopes.filter(
         (scope) => !this.config.scopesSupported.includes(scope) &&
-          scope !== "openid" &&
-          scope !== "email" &&
-          scope !== "profile"
+          !PROTOCOL_SCOPES.has(scope)
       );
       if (unsupported.length > 0) {
         throw new InvalidTokenError("Access token includes unsupported scopes");
@@ -83,6 +115,7 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
         extra: {
           sub: subject,
           grant_id: grantId,
+          ...(accountId ? { account_id: accountId } : {}),
           ...(typeof payload.email === "string" ? { email: payload.email } : {}),
           ...(typeof payload.email_verified === "boolean"
             ? { email_verified: payload.email_verified }
@@ -208,17 +241,19 @@ export async function fetchAndValidateAuthorizationServerMetadata(
         throw new Error("configured JWKS URI does not match authorization server metadata");
       }
       validateMetadataEndpoint("jwks_uri", metadata.jwks_uri, config);
+      // scope 公示只做「我们要用的资源 scope 在不在」这一项。openid / email 不再强制：
+      // 那是 ChatGPT 的 workspace 域限制才需要的（要配 userinfo + email_verified），
+      // Atlas 授权服务器既没有 userinfo 端点、ID token 也不含 email，强制会让启动直接失败。
       const advertisedScopes = new Set(metadata.scopes_supported ?? []);
-      const requiredScopes = [...config.scopesSupported, "openid", "email"];
-      if (requiredScopes.some((scope) => !advertisedScopes.has(scope))) {
+      if (metadata.scopes_supported && config.scopesSupported.some((scope) => !advertisedScopes.has(scope))) {
         throw new Error(
-          "authorization server metadata does not advertise all plugin, openid, and email scopes"
+          "authorization server metadata does not advertise the scopes this resource requires"
         );
       }
-      if (!metadata.userinfo_endpoint) {
-        throw new Error("authorization server metadata lacks userinfo_endpoint");
+      // userinfo 是可选的：公示了就校验它是不是安全端点，没公示不影响令牌校验。
+      if (metadata.userinfo_endpoint) {
+        validateMetadataEndpoint("userinfo_endpoint", metadata.userinfo_endpoint, config);
       }
-      validateMetadataEndpoint("userinfo_endpoint", metadata.userinfo_endpoint, config);
       if (metadata.registration_endpoint) {
         validateMetadataEndpoint(
           "registration_endpoint",

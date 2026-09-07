@@ -9,7 +9,7 @@ import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/p
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   loadHttpServerConfig,
-  type HttpServerConfig, ADVERTISED_SCOPES } from "./config.js";
+  type HttpServerConfig, ADVERTISED_SCOPES, resolveAdvertisedScopes } from "./config.js";
 import {
   createConfiguredCredentialResolver,
   CredentialResolutionError,
@@ -52,7 +52,7 @@ function protectedResourceMetadata(config: HttpServerConfig): Record<string, unk
     ],
     // v3 §4.3：只公示 tasks:read，写权限走 step-up。
     // v3 §8：不含 offline_access —— refresh token 是客户端与 AS 之间的事。
-    scopes_supported: [...ADVERTISED_SCOPES],
+    scopes_supported: resolveAdvertisedScopes(),
     bearer_methods_supported: ["header"],
     resource_name: "Atlas Cloud MCP Server",
     ...(config.resourceDocumentation

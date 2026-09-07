@@ -1,0 +1,97 @@
+{
+  "note": "Part of the Atlas access token contract. Signed with throwaway keys generated at vector-generation time; production keys are never used here. Each resource server vendors this file and runs it in its own CI. Regenerate with: go test ./console/backend/pkg/authzserver -run TestTokenContractVectors -update-vectors",
+  "jwks": {
+    "keys": [
+      {
+        "use": "sig",
+        "kty": "RSA",
+        "kid": "vectors-primary",
+        "alg": "RS256",
+        "n": "mzTFzsew_ssAlgrEKtNTKR1SIPLFud8y5_RglblaAnrXkmI95oM7d-wdW2LuKqv2Egg-foonBJz505I4nPt7dDkSTzcaZg7MZCkDDPAZGiJo0ebVzQ1oRAj-rbu8yWQfmuDMu9hBaMPa-MAd5_1NgkarUWJBdsDplHXmxdQaXZDTOHKqTT0Lktwk9SRcAuScigDdAPbnoNl6opjcX2Em2mPoUpJl_GQmLAnw_dzEVANZkBFFFTx2IlxIJ8WtPC87uTZVoMqGfQLGqEclY5vg0ITivqSLLwTyam60Qi5GUW-xgTs1NvTAUeh1O74CVAQfMHRnnRQxVPVQ3n-9K1enNQ",
+        "e": "AQAB"
+      },
+      {
+        "use": "sig",
+        "kty": "RSA",
+        "kid": "vectors-secondary",
+        "alg": "RS256",
+        "n": "v1lyzYWlkZL5_sEBMNOCWSa9dlGP7GJPsFyQpl5iVzBCqeGFfqojMv84N_17SeD38A8mwi6TU18Rk9tGwvCLaA-ORPOTu7mAEsUAD3poQvM-28Yd-7XASYmRqWJKuDROoJ51fZKjVQMOILbI7ts5xooFnSiybIG0KYJwFwBgYOSqSMlIn_jqwNupBeW-p1Ae4dmsgivvWhJgvZhuSNQpouGMkOX4uz8kT59gbFmXLfzFUf6J5g3ng5dE4_oD_wrmtHF5PM-frdz8M-Dtx0IxpmVgcYG48AcGQwnBRu4aCyU6991m4NU7aohudCWwILZWd1nH093tQZZC4fcjsG_GPw",
+        "e": "AQAB"
+      }
+    ]
+  },
+  "issuer": "https://console.atlascloud.ai",
+  "resource": "https://api.atlascloud.ai",
+  "required_scopes_for_baseline": [
+    "tasks:read",
+    "tasks:write"
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.bmmnmVS9pNcfLWoiJn874o7xvkzAJ2IZoc-Axd3v2ZT_YUroXSjOcJkOer4ZGE0SMmG1ic0Iug9hUyWMk7H865ig_qO-mw2DT1WD3vKI5_oYkM-eYByLbVHuwzddpSuTHQFjLqd4G8YGyw3OwXKfdfkF8z5zCgTxhqP6jz0Ooe7QM-BtR4L2NKdicvnxSQAe0rgsHdISTjZLk-0L_JO86PdTNkFff51_bsYEyxyDJfNtJiCaPxJMrIr-RfPc5-BrHqXiu2epyw2XHMC9Ib7zkKkmc6i1OyHwXxP4PfkNGEy7wpOwvUy-cEtHH6aNPftN2tPU2arzx2uK7pzejABnjA",
+      "expect": 200,
+      "reason": "A well-formed token must be accepted; if this one is rejected the rest of the suite proves nothing."
+    },
+    {
+      "name": "expired",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6MTc2NzIyOTIwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.AIwH5E7vwApbHbIyQHyl6qun4Bq8qnLcyZ8aro678PFWDdxtKXEq_76wXN68IKtFnkTHAWcTcPlIIn3BTYjfUL3SPBnTnUjgWdtEnKMT0y9rbCgQ4B_YiqorHKcQTAsup-0OdWSFA-tUdhmqj-Ie_DTZpnHxfoFSRFGtXolXSqFA4bsWyLeuEC8xMnpErvtFz1iyPL33BFde41UqI1TChx3TcImYFu958KOsD8O6UOfF6M3T_rKQRSrvDfCD-PfVQ4cnM0EBJ2qlD2AwevUWioIowu8uL1PSNfmNGsUfMpjBq4gaSDktYOJhjn85R7lzH2SeEgMAQLTViz0t_2Rnlg",
+      "expect": 401,
+      "reason": "exp is in the past. Clock skew of at most 60 seconds may be allowed."
+    },
+    {
+      "name": "wrong_issuer",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmV2aWwuZXhhbXBsZS5jb20iLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.hZG8tXPNIwOF1Z5GlWY3P8WGd488tnodFYS7pR8NZN67M63BZO_Yg33m_LkifF6jYiyoGhLubPE1UNMd-i-IfSMs6j8jk_YVwHWru42cEOM29A3fON4rV0VU-f6izJYGAOJfoIAdVkGF16MaMIIx6nt99EHJtBEeMc-ViPIpHW6CYOmomGVWapuPLH1InUU2zG72TOMzdbtnfBPPNuGBvrHuekb9Vc3BAHs8NRj_PitFLTq6VzyAISao_jHUX-HRUi62vGFHyD_MyycpkMxv9uLV8lp6KZYLkYKXFCaZYq8geqflFBKe2-0qReoTgSb-cHmyTzPA6Qd7RHBP84uVIA",
+      "expect": 401,
+      "reason": "iss must equal the authorization server's identifier verbatim."
+    },
+    {
+      "name": "wrong_audience",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL21jcC5hdGxhc2Nsb3VkLmFpL21jcCJdLCJjbGllbnRfaWQiOiJodHRwczovL2NoYXRncHQuY29tL29hdXRoL2NvZGV4L3ZlY3RvcnMvY2xpZW50Lmpzb24iLCJleHAiOjQwNzA5MDg4MDAsImdyYW50X2lkIjo3LCJpYXQiOjE3NjcyMjU2MDAsImlzcyI6Imh0dHBzOi8vY29uc29sZS5hdGxhc2Nsb3VkLmFpIiwianRpIjoidmVjdG9yLTAxMDIwMzA0Iiwicm9vdF9pZCI6InZlY3RvcnMtcm9vdCIsInNjb3BlIjoidGFza3M6cmVhZCB0YXNrczp3cml0ZSIsInN1YiI6IjEyMzQ1NiJ9.aiBSrYavuHgqEc35K_EKrC85V_ijFwEmvgMd4mYahDmzASrSFB1PVrWQNdtd9zkslIeyxnlcuM8xJpZgWe9BgBYK-oHxUfM-70GvPutkAGTBKyNhBtX0eMVO2NEduGs59lMZH45Z91_VAx0mLiOLqZQvFDMYkZiAar36wY5vxU8a02BHazdlVpTwgsrMmk-noz_yoSrsCfMWHViVmEKjFL5tsRPQwj5jdVz7zEO5q17LeEG13eF5_2H9sob4UmUVjRaKGGuGWSKF9GvsqhnLU4_fBUw5lhnnul1zMMYeNfcUw1zsgP1spFM0KBfgiKvOmFMdguyvTzSjeOuT-kL3pA",
+      "expect": 401,
+      "reason": "aud names a different resource server. A token is valid at exactly one resource."
+    },
+    {
+      "name": "alg_none",
+      "token": "eyJhbGciOiJub25lIiwidHlwIjoiYXQrand0In0.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.",
+      "expect": 401,
+      "reason": "The allowed algorithm set must be limited to RS256; alg from the token header must never be trusted."
+    },
+    {
+      "name": "alg_confusion_hmac_with_rsa_public_key",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.wbKS8jiguGWrU6uh2m67xHECCsKAI6Gj6snWCwGx67o",
+      "expect": 401,
+      "reason": "Signed HS256 using the RSA public key as the shared secret. Accepting it means anyone holding the public JWKS can mint tokens."
+    },
+    {
+      "name": "unknown_kid",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtbm90LXB1Ymxpc2hlZCIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.GWLuukYSoaxdu9nkFDxhf9ERCmlNFoQnyI9VTFUl5EK2Kg-EFRk10Mmn7Bo9R3Sx5RE_LHLK5eik1L6CIE4mfHHD616lMwsf_VN6bMuhc1zVDl32nb9E2t32eqZR34NSKsSEMiQ1Z4O0ZJhnZYymGJ1qTMpshFEXmO3dG3rbnKer1d2MiBpeVpF-3-GBDwuyLrG-IsJ1PZqhm_dODT7RqeFKVyJs3xpxwf2mylnbw956WyXFeji73ntW9hvgtcRku5sRL-XCFD6sfNmKH3hqn4HlIHJcfcI48dwx8UfV4VHaOcq4zpg-dHCvm7Bb5LkczGq5J6GFPkZQ025_OP5UhQ",
+      "expect": 401,
+      "reason": "kid is not in the JWKS. One throttled refresh is allowed; a still-missing kid must be rejected."
+    },
+    {
+      "name": "missing_kid_with_multiple_keys",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.LLPLKQCCYDmGjV5Ehjd0CSROQQ1uwkpnvKllMyZ10P_rLttCinU2MM3bI4TTOQKZlXIVrhT0-3WxQ4MECIX3tuPzEAXWIFnDL__1Ar1qqWeKjnH-4ZKMZ9FOTj9JUqf1qS5htWjQT74YLeeuTJn8xjigd8oE6FanoOfkFv4HWl8RnEQiyIGjFcJRnK68oPJkF9HKMhXm2KV92H88sZ-9B1ggTpDN2hl64OyBFljsSlcSxjvj_8hzkse48IpsHD-NbehUqU9pllK6ooG7qjrkVK3InpDazbN7nnG_x4Lii_MqnM16A1TrsC_cyEhnzHd5dwhR4r9X8VnSKSf8soIpZw",
+      "expect": 401,
+      "reason": "No kid and the JWKS holds more than one key, so no key can be selected without guessing."
+    },
+    {
+      "name": "carries_admin_claim",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2Iiwic3lzdGVtQWRtaW4iOnRydWV9.d-TY3TbyrRp3u_jBq6y28mRUhGnwDZiqQI7j0xf4qKxJpOEKCV9EYIbGSRe0rCowSmlTMUWTPfit6PrXvfLoheyUETrK6OYiz8QAMkHl_lPKjsUtaw_RZQVou0gEcLr1NlxaBRBLtiTRfsGfCb87uqmW0pHKUvFE7PtAEz6Udq2dFMHTmJlSz5aNNIB-GTuDXomQWZ1SrrmEk_9g9OfgRXMzbcTUu2VDv4JrW975ScPJ8bKtV-lfJNdtH-ps96N7blYK4ij131u3VFFizXRjlSqqpv5YguamzO7U6RJVnMMrUw1lhL3_UHgG2t7xekRPPFcnDof7JSG77TbYCobnuA",
+      "expect": 401,
+      "reason": "A scoped token never carries administrator identity. Its presence means the token did not come from this issuer's normal path."
+    },
+    {
+      "name": "insufficient_scope",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo3ODksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIiwic3ViIjoiMTIzNDU2In0.K31yngN7TgIEvlaD4obYmlWK4sPDKYMPuikCMUXwsm-oupi5vv2y6KGC1uTsSibs0kISS-Q42IIcTmIZNLF7k4z3ELM_aXw_OhFw2_1bIWV77ga15M3APVpSfePS0-GqwE1BrRBOs753gwqbxeDxJTuxGMM5bbBOWcT9MP0zNk530bGWDjbmufxJMzV1dHzaeOU8OTOND4fL566hVzX2-v31PgqsvHbboG9dVLDqtvSbD7bnKAvLaypdvj_SVSiWdehwF7IZh3ry6AT-46wQY4mmNLw-iGa3Z2ZhrkzR9IicuE_bkz2Pq1vz8HDGaLINtAkF8NN6Yuh90fuAgUpOeg",
+      "expect": 403,
+      "reason": "Endpoint requires tasks:write. Respond with WWW-Authenticate carrying error=insufficient_scope and every scope the operation needs."
+    },
+    {
+      "name": "account_not_owned_by_subject",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InZlY3RvcnMtcHJpbWFyeSIsInR5cCI6ImF0K2p3dCJ9.eyJhY2NvdW50X2lkIjo5OTk5OTksImF1ZCI6WyJodHRwczovL2FwaS5hdGxhc2Nsb3VkLmFpIl0sImNsaWVudF9pZCI6Imh0dHBzOi8vY2hhdGdwdC5jb20vb2F1dGgvY29kZXgvdmVjdG9ycy9jbGllbnQuanNvbiIsImV4cCI6NDA3MDkwODgwMCwiZ3JhbnRfaWQiOjcsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9jb25zb2xlLmF0bGFzY2xvdWQuYWkiLCJqdGkiOiJ2ZWN0b3ItMDEwMjAzMDQiLCJyb290X2lkIjoidmVjdG9ycy1yb290Iiwic2NvcGUiOiJ0YXNrczpyZWFkIHRhc2tzOndyaXRlIiwic3ViIjoiMTIzNDU2In0.Ue8_WVmwvWztU3EIgd1OUBWquah172apAbJ8QeZ_kTz8qlTbJZ4dAaBtHKlvjHLejmJl9IwA_tJlnJk8jNN2heZ-cQxx-3Alm12UYmEYWUjYVAyUt2nyomz0sdUtM2cZekguSnmpfykifN3bFkoySIv3NEEtRmoiQVAnqVE3wam88EE_eYUTsRCzoHNibffL5ioU9QtBYwxsUZsHQEShMYNFEiElvxS9k6AamvzoG9J9y0WZvEq9eKMTI_EQ6wZ-RB5dX_wLUJfYiK6vqnLBBzFMAA74fJijuKexHwZYSwR_sYa_Dwke-PSiw3QL-YUlpWVOfhLPL21PDgwGmD8fWA",
+      "expect": 403,
+      "reason": "account_id is not an account the subject belongs to. The token does not replace membership and status checks."
+    }
+  ]
+}

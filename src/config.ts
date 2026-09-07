@@ -28,6 +28,30 @@ export const REMOTE_SCOPES = [
  */
 export const ADVERTISED_SCOPES = ["tasks:read"] as const;
 
+/**
+ * 实际公示的 scope。默认就是 ADVERTISED_SCOPES，符合契约 §4.3。
+ *
+ * 之所以留一个 env 口子：step-up 要求客户端在收到 403 insufficient_scope 之后
+ * 主动发起二次授权。这是 MCP 客户端的可选行为，Codex 是否实现过我们没有实测过。
+ * 万一它不重新授权，用户会永久卡在 403，而现象和「我们这侧 scope 校验写错了」
+ * 一模一样。届时把三个 scope 都公示一次即可分辨：还是 403 就是我们的问题，
+ * 通了就说明客户端不做 step-up，该去跟契约方谈 §4.3 的可行性。
+ *
+ * 诊断用，不是常规配置——线上不要设置它。
+ */
+export function resolveAdvertisedScopes(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.MCP_ADVERTISED_SCOPES?.trim();
+  if (!raw) return [...ADVERTISED_SCOPES];
+  const requested = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = requested.filter((s) => !REMOTE_SCOPES.includes(s as never));
+  if (unknown.length > 0) {
+    throw new Error(
+      `MCP_ADVERTISED_SCOPES contains scopes outside the platform set: ${unknown.join(", ")}`
+    );
+  }
+  return requested;
+}
+
 export type ReleaseTier = "staging" | "production";
 export type CredentialMode =
   | "service-account"

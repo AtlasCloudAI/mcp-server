@@ -4,6 +4,7 @@ import { fetch, FormData, ProxyAgent, type Dispatcher } from "undici";
 import type { ZodTypeAny } from "zod";
 import {
   API_BASE,
+  GENERATION_API_BASE,
   LLM_API_BASE,
   PUBLIC_API_BASE,
   REQUEST_TIMEOUT_MS,
@@ -285,6 +286,14 @@ export function api<T>(
   options?: ApiRequestOptions
 ): Promise<T> {
   return request<T>(API_BASE, endpoint, options);
+}
+
+// 生成任务（提交 / 轮询 / 报价）：/api/v1 前缀，但走生成侧 origin。
+export function generationApi<T>(
+  endpoint: string,
+  options?: ApiRequestOptions
+): Promise<T> {
+  return request<T>(GENERATION_API_BASE, endpoint, options);
 }
 
 // LLM API (api.atlascloud.ai/v1)

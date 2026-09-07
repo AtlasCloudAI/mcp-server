@@ -18,16 +18,35 @@ const PROTOCOL_SCOPES = new Set(["openid", "email", "profile", "offline_access"]
  * 出现即拒绝的 claim。契约明确：带 scope 的令牌永不携带管理员身份，也不承载身份资料
  * （那属于 ID token）。这里列的是常见写法，命中任何一个都当签发侧异常处理。
  */
-const FORBIDDEN_CLAIMS = [
+/**
+ * 契约 §3：带 scope 的令牌永不携带管理员身份，出现即视为异常。
+ *
+ * 这里不能只列名字。官方测试向量用的是 `systemAdmin` 与 `root_id`——两个都不在
+ * 任何「常见管理员字段」清单里，一份手写枚举把它们放了过去。签发方换个写法
+ * （驼峰、加前缀、换同义词）就能绕过枚举，而这条判定的整个价值就在于不被绕过。
+ *
+ * 所以判据改成词根匹配：claim 名去掉分隔符、小写之后包含任一管理性词根即拒绝。
+ * 词根表是按官方向量校准过的，不要凭直觉往里加。`root` 就不能加：签发方的每一
+ * 枚令牌（含预期 200 的基线）都带 `root_id`，那是它的正常 claim，把 `root` 当词根
+ * 会把所有合法令牌一起拒掉。同理，签发方还会带 `grant_id` 这类契约 §3 没列出的
+ * claim——§10 要求资源服务器忽略未知 claim，只有管理性的才拒绝。
+ *
+ * 改这张表之后必须重跑 token-contract-vectors 那组用例。
+ */
+const ADMINISTRATIVE_WORDS = [
   "admin",
-  "is_admin",
-  "isAdmin",
   "superuser",
-  "is_superuser",
-  "is_staff",
-  "roles",
+  "sudo",
+  "staff",
   "role",
+  "privilege",
+  "impersonat",
 ] as const;
+
+function looksAdministrative(claim: string): boolean {
+  const normalized = claim.toLowerCase().replace(/[_\-.]/g, "");
+  return ADMINISTRATIVE_WORDS.some((word) => normalized.includes(word));
+}
 
 function stringClaim(payload: JWTPayload, name: string): string | undefined {
   const value = payload[name];
@@ -82,7 +101,7 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
       }
       // 带 scope 的令牌永不携带管理员身份。出现即当异常拒绝，而不是忽略——
       // 忽略的话一旦上游签发逻辑出错，这里会静默放行一枚越权令牌。
-      const forbidden = FORBIDDEN_CLAIMS.find((claim) => payload[claim] !== undefined);
+      const forbidden = Object.keys(payload).find(looksAdministrative);
       if (forbidden) {
         throw new InvalidTokenError("Access token carries a forbidden claim");
       }

@@ -89,8 +89,30 @@ function validatorForSchema(
 ): ValidateFunction {
   const cached = validatorCache.get(originalSchema);
   if (cached) return cached;
+  // required 里提到、但 properties 里没定义的字段，补一个「任意值」定义。
+  //
+  // 有些模型的 schema 是这个形状：required 含 `model`，properties 只列了业务参数。
+  // 校验时我们会把 model 注进去（见 validateModelParams），而下面又强制
+  // additionalProperties: false，于是那个 schema 自己要求的字段反被判成「不被接受
+  // 的额外属性」——报错会说 `model` 不被接受，而它恰恰是必填的，看起来像工具坏了。
+  // openai/gpt-image-2/text-to-image 就是这样，它的生成因此完全无法发起。
+  //
+  // 补 {} 而不是 { type: "string" }：这里的目的只是让字段合法存在，不是替上游
+  // 补全类型约束——猜错类型会把本来能过的请求拦下来。additionalProperties: false
+  // 仍然拦得住真正的拼写错误，因为那些名字不在 required 里。
+  const declaredProperties = (input.properties ?? {}) as Record<string, unknown>;
+  const requiredNames = Array.isArray(input.required) ? (input.required as string[]) : [];
+  const undeclaredRequired = requiredNames.filter((name) => !(name in declaredProperties));
   const validationRoot = {
     ...input,
+    ...(undeclaredRequired.length > 0
+      ? {
+          properties: {
+            ...declaredProperties,
+            ...Object.fromEntries(undeclaredRequired.map((name) => [name, {}])),
+          },
+        }
+      : {}),
     additionalProperties: false,
     ...(components ? { components } : {}),
   };

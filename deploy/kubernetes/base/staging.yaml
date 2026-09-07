@@ -130,18 +130,20 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: atlas-registry-secret
-      # 令牌校验要按 MCP_OAUTH_JWKS_URI 拉 JWKS，启动自检也要拉同一个 host 的 discovery，
-      # 而集群 DNS 解析不了这两个 dev ingress 域名（它们只在公司内网 DNS 里，公网无 A 记录）。
-      # 拉不到 JWKS 时令牌校验是 fail-closed 的，也就是每个请求都会 401；启动自检失败更会直接
-      # crashloop。所以把域名指到 ingress 网关，让流量绕回自己的 ingress。
-      # IP = higress-system/higress-gateway 的 ClusterIP，集群重建后需要重新取：
-      #   kubectl -n higress-system get svc higress-gateway -o jsonpath='{.spec.clusterIP}'
-      # 网关证书的 SAN 覆盖这两个域名，所以严格 TLS 校验也能过。
-      hostAliases:
-        - ip: 10.233.13.210
-          hostnames:
-            - atlascloud-auth.dev.atlascloud.ai
-            - atlascloud-mcp.dev.atlascloud.ai
+      # 这里曾经有一段 hostAliases，把 atlascloud-auth.dev / atlascloud-mcp.dev 指到
+      # higress-gateway 的 ClusterIP，因为集群 DNS 解析不了它们，而 JWKS 拉不到时令牌
+      # 校验 fail-closed（每个请求 401），启动自检失败还会 crashloop。
+      #
+      # 授权服务器换成 Atlas 自己的 console.dev.atlascloud.ai 之后不需要了：
+      #   - console.dev / api.dev 都在 CoreDNS 的 hosts 块里（→ 172.16.254.157），
+      #     用 `kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}'` 可查；
+      #   - 本服务从不请求自己的公开域名，atlascloud-mcp.dev 当初只是"顺带"写上的。
+      #
+      # 删掉它同时拆掉一颗定时炸弹：那个 ClusterIP 是硬编码的，higress 的 Service 一旦
+      # 重建，IP 变了就会全线 401，且 pod 重启即 crashloop——而 IP 变更不会有任何告警。
+      #
+      # 如果将来又要连一个集群 DNS 解析不到的授权服务器，优先往 CoreDNS 的 hosts 块加，
+      # 而不是在这里钉 IP。
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

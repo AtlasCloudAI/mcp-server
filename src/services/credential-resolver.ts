@@ -13,8 +13,18 @@ export class CredentialResolutionError extends Error {
   }
 }
 
+export interface ResolvedCredential {
+  subject: string;
+  apiKey: string;
+  /**
+   * 上游拒绝这份凭据时调用。只有令牌交换模式会给出它——那种模式下凭据是缓存的
+   * 短期令牌，被拒说明缓存该丢了；API key 模式没有可丢的东西。
+   */
+  onRejected?: () => void;
+}
+
 export interface AtlasCredentialResolver {
-  resolve(authInfo: AuthInfo): Promise<{ subject: string; apiKey: string }>;
+  resolve(authInfo: AuthInfo): Promise<ResolvedCredential>;
   ready?(): Promise<boolean>;
   close?(): Promise<void>;
 }
@@ -34,7 +44,7 @@ export class ConfiguredCredentialResolver implements AtlasCredentialResolver {
     private readonly exchanger?: TokenExchanger
   ) {}
 
-  async resolve(authInfo: AuthInfo): Promise<{ subject: string; apiKey: string }> {
+  async resolve(authInfo: AuthInfo): Promise<ResolvedCredential> {
     const subject = authSubject(authInfo);
 
     // 不用任何 API key：把客户端发来的这枚令牌换成面向模型 API 的令牌，直接当凭据用。
@@ -52,8 +62,13 @@ export class ConfiguredCredentialResolver implements AtlasCredentialResolver {
       const identity =
         typeof authInfo.extra?.grant_id === "string" ? authInfo.extra.grant_id : subject;
       try {
-        const exchanged = await this.exchanger.exchange(subjectToken, `${subject} ${identity}`);
-        return { subject, apiKey: exchanged.accessToken };
+        const cacheKey = `${subject} ${identity}`;
+        const exchanged = await this.exchanger.exchange(subjectToken, cacheKey);
+        return {
+          subject,
+          apiKey: exchanged.accessToken,
+          onRejected: () => this.exchanger?.invalidate(cacheKey),
+        };
       } catch (error) {
         if (error instanceof TokenExchangeError) {
           throw new CredentialResolutionError(error.message);

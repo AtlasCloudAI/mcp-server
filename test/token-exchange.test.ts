@@ -193,3 +193,25 @@ test("oauth-exchange 模式缺配置时，加载配置就报错", () => {
     /must be set together/
   );
 });
+
+test("上游 401 之后丢弃缓存，下一次重新交换（撤销授权能当场生效）", async () => {
+  const config = exchangeConfig();
+  const stub = stubExchange([
+    { body: { access_token: "before-revoke", expires_in: 900 } },
+    { body: { access_token: "after-reauth", expires_in: 900 } },
+  ]);
+  const exchanger = createTokenExchanger(config.tokenExchange!, stub.fetch);
+  const resolver = new ConfiguredCredentialResolver(config, undefined, exchanger);
+
+  const first = await resolver.resolve(authInfo("subject-token-abc"));
+  assert.equal(first.apiKey, "before-revoke");
+  // 不丢缓存的话，同一身份会一直拿到那枚已经被撤销的令牌直到它自然过期
+  assert.equal((await resolver.resolve(authInfo("subject-token-abc"))).apiKey, "before-revoke");
+
+  assert.equal(typeof first.onRejected, "function", "交换模式必须给出失效回调");
+  first.onRejected!();
+
+  const afterReject = await resolver.resolve(authInfo("subject-token-abc"));
+  assert.equal(afterReject.apiKey, "after-reauth");
+  assert.equal(stub.calls.length, 2, "只应在缓存被丢弃后多换一次");
+});

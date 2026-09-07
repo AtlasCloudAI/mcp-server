@@ -82,6 +82,17 @@ export const ATLAS_GENERATION_API_ORIGIN =
 
 export const API_BASE = `${ATLAS_API_ORIGIN}/api/v1`;
 export const LLM_API_BASE = `${ATLAS_GENERATION_API_ORIGIN}/v1`;
+/**
+ * 生成任务的提交、轮询与报价。
+ *
+ * 和 API_BASE 同样是 `/api/v1` 前缀，但落在生成侧的 origin：这几条路由
+ * （`/model/generateImage|generateVideo|generateAudio`、`/model/prediction/:id`、
+ * `/model/calculate`）由 aiproxy 提供，而 `/api/v1/models`、`/model/uploadMedia`
+ * 和 `/public/v1/*` 由 kubedl 提供。一个 host 后面按路径分工，所以单 origin
+ * 表达不了——指错了会拿到 404，而 404 在我们的错误映射里长得像"参数不对"，
+ * 排查会绕远路。
+ */
+export const GENERATION_API_BASE = `${ATLAS_GENERATION_API_ORIGIN}/api/v1`;
 // Public billing/usage endpoints (balance, usage, costs) use a separate base path
 export const PUBLIC_API_BASE = `${ATLAS_API_ORIGIN}/public/v1`;
 

@@ -1,5 +1,5 @@
 import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
-import { api } from "./api-client.js";
+import { generationApi } from "./api-client.js";
 import {
   fillRequiredDefaults,
   validateModelParams,
@@ -94,7 +94,7 @@ export async function prepareGeneration(
 export async function submitPreparedGeneration(
   prepared: PreparedGeneration
 ): Promise<SubmitResult> {
-  const response = await api<PredictionResponse>(prepared.endpoint, {
+  const response = await generationApi<PredictionResponse>(prepared.endpoint, {
     method: "POST",
     body: prepared.body,
     responseSchema: predictionResponseSchema,

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { llmApi, api } from "../services/api-client.js";
+import { llmApi, api , generationApi} from "../services/api-client.js";
 import { findModelByExactId } from "../services/doc-fetcher.js";
 import {
   formatGenerationPricing,
@@ -272,7 +272,7 @@ Examples:
     },
     async ({ prediction_id }) => {
       try {
-        const result = await api<PredictionResponse>(
+        const result = await generationApi<PredictionResponse>(
           `/model/prediction/${encodeURIComponent(prediction_id)}`,
           { responseSchema: predictionResponseSchema }
         );

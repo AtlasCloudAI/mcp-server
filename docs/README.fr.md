@@ -36,7 +36,7 @@
 - 💬 **LLM** (69) — DeepSeek V4 Pro 0813 · Grok 4.6 · DeepSeek V4 Flash Vision Exp · DeepSeek V4 Flash 0731
 - 🔊 **Audio (TTS · Musique · ASR)** (17) — Suno chirp-v4-5-all · Suno chirp-v4-5-plus · Suno chirp-auk · Suno chirp-fenix
 
-- 📚 **Explorer plus** — [les 427 modèles en ligne »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explorer plus** — [les 432 modèles en ligne »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **Modèles vidéo les plus récents** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

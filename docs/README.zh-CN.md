@@ -36,7 +36,7 @@
 - 💬 **大语言模型** (69) — DeepSeek V4 Pro 0813 · Grok 4.6 · DeepSeek V4 Flash Vision Exp · DeepSeek V4 Flash 0731
 - 🔊 **音频（TTS · 音乐 · 语音识别）** (17) — Suno chirp-v4-5-all · Suno chirp-v4-5-plus · Suno chirp-auk · Suno chirp-fenix
 
-- 📚 **探索更多** — [全部 427 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **探索更多** — [全部 432 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **最新视频模型** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3。

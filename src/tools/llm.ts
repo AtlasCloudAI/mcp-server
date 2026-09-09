@@ -8,6 +8,12 @@ import {
   verifyGenerationConfirmation,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
+import {
+  buildImagePreviews,
+  classifyOutput,
+  playbackGuidance,
+  type OutputKind,
+} from "../services/media-preview.js";
 import { handleError } from "../utils/error-handler.js";
 import type { ChatCompletionResponse } from "../types.js";
 import {
@@ -287,15 +293,21 @@ Examples:
 
         const outputs = result.data?.outputs || result.data?.output;
         const outputUrls = Array.isArray(outputs) ? outputs : outputs ? [outputs] : [];
+        const kinds = new Set<OutputKind>(outputUrls.map(classifyOutput));
 
         if (outputUrls.length > 0) {
           lines.push("## Output\n");
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
-          lines.push(
-            `\nYou can ask me to download these files to your local machine, or open the URLs directly in your browser.`
-          );
+          const guidance = playbackGuidance(kinds);
+          if (guidance) {
+            lines.push(`\n${guidance}`);
+          } else {
+            lines.push(
+              `\nYou can ask me to download these files to your local machine, or open the URLs directly in your browser.`
+            );
+          }
         }
 
         if (result.data?.status && !["completed", "succeeded", "failed"].includes(result.data.status)) {
@@ -319,7 +331,12 @@ Examples:
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
           },
-          content: [{ type: "text", text: lines.join("\n") }],
+          content: [
+            { type: "text", text: lines.join("\n") },
+            // Appended after the text so a client that renders only the first
+            // block still shows the URLs and the status.
+            ...(await buildImagePreviews(outputUrls)),
+          ],
         };
       } catch (error) {
         return {

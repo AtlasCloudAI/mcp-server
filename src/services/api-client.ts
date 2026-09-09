@@ -388,28 +388,56 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   }
 }
 
-// Fetch external resources (schema, readme, etc.) with retry
-export async function fetchExternal(
+// The shared gate for every outbound fetch to a host we do not own. Kept in one
+// place because both callers below are, in effect, "take a URL that arrived in a
+// response body and go fetch it" — the exact shape an SSRF wants. Plain https on
+// 443, no embedded credentials, no redirects (enforced at the call), and the host
+// has to be on a list someone configured.
+//
+// `allowedHostsEnv` differs per caller: schema/readme fetches only ever go to our
+// docs host, while media previews go to whichever bucket host the platform put in
+// the prediction result, so they get their own list.
+function assertFetchableExternalUrl(
   url: string,
-  options: { fetcher?: typeof fetch; dispatcher?: Dispatcher } = {}
-): Promise<unknown> {
+  allowedHostsEnv: string,
+  fallbackHosts: string
+): URL {
   const parsedUrl = new URL(url);
-  const configuredHosts = (process.env.ATLASCLOUD_EXTERNAL_RESOURCE_HOSTS ??
-    "static.atlascloud.ai")
+  const configuredHosts = (process.env[allowedHostsEnv] ?? fallbackHosts)
     .split(",")
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
+  const hostname = parsedUrl.hostname.toLowerCase();
+  // A leading dot means "this domain and anything under it". Media buckets are
+  // named per environment (atlas-media-dev, atlas-img-dev, …) so pinning exact
+  // hostnames would need a config change for every new bucket.
+  const hostAllowed = configuredHosts.some((allowed) =>
+    allowed.startsWith(".") ? hostname.endsWith(allowed) : hostname === allowed
+  );
   if (
     parsedUrl.protocol !== "https:" ||
     parsedUrl.username !== "" ||
     parsedUrl.password !== "" ||
     (parsedUrl.port !== "" && parsedUrl.port !== "443") ||
-    !configuredHosts.includes(parsedUrl.hostname.toLowerCase())
+    !hostAllowed
   ) {
     throw new ApiRequestError(
       `External resource host is not allowed: ${parsedUrl.hostname}`
     );
   }
+  return parsedUrl;
+}
+
+// Fetch external resources (schema, readme, etc.) with retry
+export async function fetchExternal(
+  url: string,
+  options: { fetcher?: typeof fetch; dispatcher?: Dispatcher } = {}
+): Promise<unknown> {
+  const parsedUrl = assertFetchableExternalUrl(
+    url,
+    "ATLASCLOUD_EXTERNAL_RESOURCE_HOSTS",
+    "static.atlascloud.ai"
+  );
 
   let lastError: unknown;
   const fetcher = options.fetcher ?? fetch;
@@ -463,4 +491,59 @@ export async function fetchExternal(
   }
 
   throw lastError;
+}
+
+// Fetch a media object as bytes. Separate from fetchExternal because that one
+// decodes to text: running an image through TextDecoder corrupts it.
+//
+// No retry loop here. A preview is decoration — if the first attempt does not
+// land, the caller drops the picture and still returns the URL, and retrying
+// would only make a slow tool call slower.
+export async function fetchExternalBinary(
+  url: string,
+  options: {
+    maxBytes?: number;
+    timeoutMs?: number;
+    fetcher?: typeof fetch;
+    dispatcher?: Dispatcher;
+  } = {}
+): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+  assertFetchableExternalUrl(
+    url,
+    "MCP_MEDIA_PREVIEW_HOSTS",
+    ".aliyuncs.com,.atlascloud.ai"
+  );
+
+  const maxBytes = options.maxBytes ?? 1_500_000;
+  const fetcher = options.fetcher ?? fetch;
+  const dispatcher = options.dispatcher ?? proxyDispatcher;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
+
+  try {
+    const response = await fetcher(url, {
+      signal: controller.signal,
+      redirect: "error",
+      ...(dispatcher ? { dispatcher } : {}),
+    });
+    if (!response.ok) {
+      throw new ApiRequestError(
+        `Failed to fetch media from ${new URL(url).hostname}: ${response.status}`,
+        response.status
+      );
+    }
+    // Checked twice on purpose: the header is a claim, byteLength is the fact.
+    // Without the header check we would pull the whole object before rejecting it.
+    const declaredLength = Number(response.headers.get("content-length") ?? 0);
+    if (declaredLength > maxBytes) {
+      throw new ApiRequestError(`Media exceeds the ${maxBytes} byte preview limit`, 413);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) {
+      throw new ApiRequestError(`Media exceeds the ${maxBytes} byte preview limit`, 413);
+    }
+    return { bytes, contentType: response.headers.get("content-type") };
+  } finally {
+    clearTimeout(timer);
+  }
 }

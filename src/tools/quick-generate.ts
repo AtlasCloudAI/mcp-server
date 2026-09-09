@@ -10,6 +10,11 @@ import {
 } from "../services/generation-confirmation.js";
 import { handleError } from "../utils/error-handler.js";
 import {
+  autoSubmitNotice,
+  evaluateSpend,
+  type SpendDecision,
+} from "../services/spend-policy.js";
+import {
   validateModelParams,
   formatValidationError,
 } from "../utils/schema-validator.js";
@@ -190,7 +195,7 @@ Covers all generation tasks: text-to-image, image editing, 3D (image/text-to-3D)
 
 Parameters are validated against the model's schema BEFORE submitting. If extra_params contains fields the model does not accept (or wrong values), the tool returns a precise error and does NOT spend credits.
 
-Billing confirmation is mandatory. The first call MUST omit confirmation_token and only returns the resolved model, current pricing metadata, validated request, and an opaque confirmation token; it does not submit or spend credits. Show that exact quote to the user and stop. Only after a new user message explicitly confirms may you repeat the call with the same idempotency_key, unchanged arguments, and confirmation_token.
+Billing is gated by cost, not by ceremony. Call once, omitting confirmation_token. The server quotes the request against the live catalog: under the spend limit it submits immediately and the result tells you what was charged — report that amount to the user. At or above the limit, or whenever the platform will not give a firm quote, it returns a quote and an opaque confirmation_token without spending anything; show that exact quote and stop, and only after a new user message explicitly confirms it may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
 
 IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image / atlas_generate_video / atlas_generate_audio with the exact model ID instead. Do NOT invent extra_params - only pass parameters you know the model accepts (check atlas_get_model_info).
 
@@ -324,7 +329,13 @@ Returns:
         };
 
         // Step 4: Quote without submitting, or verify the prior quote.
+        // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
+        // 问过价了，再问一遍等于每次生成多一个来回。
+        let spend: SpendDecision | null = null;
         if (!confirmation_token) {
+          spend = await evaluateSpend(requestBody);
+        }
+        if (spend && !spend.autoSubmit) {
           const confirmation = issueGenerationConfirmation(
             "atlas_quick_generate",
             idempotency_key,
@@ -348,13 +359,17 @@ Returns:
             }],
           };
         }
-        verifyGenerationConfirmation(
-          confirmation_token,
-          "atlas_quick_generate",
-          idempotency_key,
-          confirmedRequest,
-          foundModel.price
-        );
+        // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
+        // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
+        if (confirmation_token) {
+          verifyGenerationConfirmation(
+            confirmation_token,
+            "atlas_quick_generate",
+            idempotency_key,
+            confirmedRequest,
+            foundModel.price
+          );
+        }
 
         // Step 5: Submit generation exactly once after confirmation.
         const endpoint = ENDPOINTS[type];
@@ -395,6 +410,10 @@ Returns:
               ? "10-60 seconds"
               : "1-5 minutes";
         lines.push(`${type} generation submitted successfully.\n`);
+        if (spend) {
+          const notice = autoSubmitNotice(spend);
+          if (notice) lines.push(notice);
+        }
         lines.push(
           `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`
         );

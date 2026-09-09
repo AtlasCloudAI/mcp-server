@@ -12,6 +12,11 @@ import {
 import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
 import {
+  autoSubmitNotice,
+  evaluateSpend,
+  type SpendDecision,
+} from "../services/spend-policy.js";
+import {
   generationOutputSchema,
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
@@ -31,7 +36,7 @@ This covers both TTS/voice models and music/song models. The live catalog determ
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing confirmation is mandatory and happens in two calls. The first call MUST omit confirmation_token and returns a quote without spending credits. Show the exact resolved model and current pricing to the user and stop. Only after a new user message explicitly confirms may you repeat the call with the same idempotency_key, unchanged arguments, and confirmation_token.
+Billing is gated by cost, not by ceremony. Call once, omitting confirmation_token. The server quotes the request against the live catalog: under the spend limit it submits immediately and the result tells you what was charged — report that amount to the user. At or above the limit, or whenever the platform will not give a firm quote, it returns a quote and an opaque confirmation_token without spending anything; show that exact quote and stop, and only after a new user message explicitly confirms it may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -75,7 +80,13 @@ Returns:
           resolved_model: prepared.model.model,
           request_body: prepared.body,
         };
+        // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
+        // 问过价了，再问一遍等于每次生成多一个来回。
+        let spend: SpendDecision | null = null;
         if (!confirmation_token) {
+          spend = await evaluateSpend(prepared.body);
+        }
+        if (spend && !spend.autoSubmit) {
           const confirmation = issueGenerationConfirmation(
             "atlas_generate_audio",
             idempotency_key,
@@ -99,13 +110,17 @@ Returns:
             }],
           };
         }
-        verifyGenerationConfirmation(
-          confirmation_token,
-          "atlas_generate_audio",
-          idempotency_key,
-          confirmedRequest,
-          prepared.model.price
-        );
+        // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
+        // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
+        if (confirmation_token) {
+          verifyGenerationConfirmation(
+            confirmation_token,
+            "atlas_generate_audio",
+            idempotency_key,
+            confirmedRequest,
+            prepared.model.price
+          );
+        }
         const result = await executeIdempotently(
           "atlas_generate_audio",
           { idempotency_key, ...confirmedRequest },
@@ -132,7 +147,9 @@ Returns:
               text:
                 `Audio generation submitted successfully.\n\n` +
                 `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
-                `- **Prediction ID**: \`${result.predictionId}\`\n\n` +
+                `- **Prediction ID**: \`${result.predictionId}\`\n` +
+                (spend ? `${autoSubmitNotice(spend)}\n` : "") +
+                `\n` +
                 `The audio is being generated. Use \`atlas_get_prediction\` with this ID to check the result.\n` +
                 `Audio generation usually takes 10-60 seconds.`,
             },
@@ -163,7 +180,7 @@ IMPORTANT: The "model" parameter requires an exact current speech-to-text model 
 
 The audio must already be reachable through an HTTPS URL. This remote OpenAI plugin does not expose a local-file upload tool. If the user only has a local file, ask them to upload it through an approved Atlas Cloud or customer-controlled HTTPS location before continuing; do not invent or call atlas_upload_media.
 
-Billing confirmation is mandatory and happens in two calls. The first call MUST omit confirmation_token and returns a quote without spending credits. Show the exact resolved model and current pricing to the user and stop. Only after a new user message explicitly confirms may you repeat the call with the same idempotency_key, unchanged arguments, and confirmation_token.
+Billing is gated by cost, not by ceremony. Call once, omitting confirmation_token. The server quotes the request against the live catalog: under the spend limit it submits immediately and the result tells you what was charged — report that amount to the user. At or above the limit, or whenever the platform will not give a firm quote, it returns a quote and an opaque confirmation_token without spending anything; show that exact quote and stop, and only after a new user message explicitly confirms it may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
 
 Args:
   - model (string, required): The exact speech-to-text model ID.
@@ -199,7 +216,13 @@ Returns:
           resolved_model: prepared.model.model,
           request_body: prepared.body,
         };
+        // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
+        // 问过价了，再问一遍等于每次生成多一个来回。
+        let spend: SpendDecision | null = null;
         if (!confirmation_token) {
+          spend = await evaluateSpend(prepared.body);
+        }
+        if (spend && !spend.autoSubmit) {
           const confirmation = issueGenerationConfirmation(
             "atlas_transcribe_audio",
             idempotency_key,
@@ -223,13 +246,17 @@ Returns:
             }],
           };
         }
-        verifyGenerationConfirmation(
-          confirmation_token,
-          "atlas_transcribe_audio",
-          idempotency_key,
-          confirmedRequest,
-          prepared.model.price
-        );
+        // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
+        // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
+        if (confirmation_token) {
+          verifyGenerationConfirmation(
+            confirmation_token,
+            "atlas_transcribe_audio",
+            idempotency_key,
+            confirmedRequest,
+            prepared.model.price
+          );
+        }
         const result = await executeIdempotently(
           "atlas_transcribe_audio",
           { idempotency_key, ...confirmedRequest },
@@ -256,7 +283,9 @@ Returns:
               text:
                 `Transcription submitted successfully.\n\n` +
                 `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
-                `- **Prediction ID**: \`${result.predictionId}\`\n\n` +
+                `- **Prediction ID**: \`${result.predictionId}\`\n` +
+                (spend ? `${autoSubmitNotice(spend)}\n` : "") +
+                `\n` +
                 `The audio is being transcribed. Use \`atlas_get_prediction\` with this ID to get the text.\n` +
                 `Transcription usually takes 10-60 seconds.`,
             },

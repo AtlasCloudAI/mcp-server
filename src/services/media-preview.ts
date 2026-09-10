@@ -87,6 +87,26 @@ export function withResizeParams(url: string): string | null {
   }
 }
 
+// Diagnostics for a path that fails open. Every failure here is silent by
+// design — the generation still succeeds — which is exactly why it has to say
+// something: a picture that never appears looks identical to a picture that was
+// never attempted, and the difference took a long time to find once.
+//
+// Object URLs can carry a signature in the query, so only the host and path are
+// logged, never the query string.
+function redactUrl(url: string): string {
+  try {
+    const { host, pathname } = new URL(url);
+    return `${host}${pathname}`;
+  } catch {
+    return "<unparseable url>";
+  }
+}
+
+function logPreview(message: string): void {
+  console.error(`[media-preview] ${message}`);
+}
+
 function mimeFor(contentType: string | null, url: string): string | null {
   if (contentType) {
     const bare = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -114,19 +134,37 @@ export async function buildImagePreview(url: string): Promise<ImagePreviewBlock 
   );
 
   for (const candidate of candidates) {
+    const resized = candidate !== url;
     try {
       const { bytes, contentType } = await fetchExternalBinary(candidate);
       const mimeType = mimeFor(contentType, url);
-      if (!mimeType || bytes.byteLength === 0) continue;
+      if (!mimeType) {
+        logPreview(
+          `skip ${redactUrl(url)}: content-type ${contentType ?? "<none>"} is not an image`
+        );
+        continue;
+      }
+      if (bytes.byteLength === 0) {
+        logPreview(`skip ${redactUrl(url)}: empty body`);
+        continue;
+      }
+      logPreview(
+        `ok ${redactUrl(url)} (${resized ? "resized" : "original"}, ${bytes.byteLength}B, ${mimeType})`
+      );
       return {
         type: "image",
         data: Buffer.from(bytes).toString("base64"),
         mimeType,
       };
-    } catch {
+    } catch (error) {
+      logPreview(
+        `fail ${redactUrl(url)} (${resized ? "resized" : "original"}): ` +
+          (error instanceof Error ? error.message : String(error))
+      );
       continue;
     }
   }
+  logPreview(`no preview for ${redactUrl(url)} after ${candidates.length} attempt(s)`);
   return null;
 }
 
@@ -134,9 +172,14 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
   if (!previewsEnabled()) return [];
   const limit = maxPreviews();
   if (limit === 0) return [];
-  const targets = urls.filter((url) => classifyOutput(url) === "image").slice(0, limit);
+  const images = urls.filter((url) => classifyOutput(url) === "image");
+  const targets = images.slice(0, limit);
   const settled = await Promise.all(targets.map((url) => buildImagePreview(url)));
-  return settled.filter((block): block is ImagePreviewBlock => block !== null);
+  const blocks = settled.filter((block): block is ImagePreviewBlock => block !== null);
+  logPreview(
+    `${urls.length} output(s), ${images.length} image(s), attempted ${targets.length}, attached ${blocks.length}`
+  );
+  return blocks;
 }
 
 /**

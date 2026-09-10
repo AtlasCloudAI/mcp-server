@@ -111,3 +111,28 @@ test("只对图片类输出取预览", async (t) => {
   ]);
   assert.deepEqual(blocks, []);
 });
+
+// 同步返回的模型（结果就在提交响应里）曾经被当成待轮询任务，结果 URL 被丢掉，
+// 于是图片块永远不会产生——线上表现就是「生成完成但图显示不出来」。
+test("已完成的产出会同时给出 URL 文本与图片块位", async (t) => {
+  const previewHosts = process.env.MCP_MEDIA_PREVIEW_HOSTS;
+  t.after(() => {
+    if (previewHosts === undefined) delete process.env.MCP_MEDIA_PREVIEW_HOSTS;
+    else process.env.MCP_MEDIA_PREVIEW_HOSTS = previewHosts;
+  });
+  process.env.MCP_MEDIA_PREVIEW_HOSTS = "nothing.invalid"; // 取图必失败，只验文本结构
+
+  const { completedOutputContent } = await import("../src/services/media-preview.js");
+  const result = await completedOutputContent([
+    "https://b.oss-us-west-1.aliyuncs.com/images/a.png",
+    "https://b.oss-us-west-1.aliyuncs.com/videos/b.mp4",
+  ]);
+
+  assert.match(result.text, /## Output/);
+  assert.match(result.text, /1\. https:\/\/b\.oss-us-west-1\.aliyuncs\.com\/images\/a\.png/);
+  assert.match(result.text, /2\. .*b\.mp4/);
+  // 混了视频就要带上下载指引
+  assert.match(result.text, /cannot be displayed/i);
+  // 取图失败时块为空，但绝不抛错
+  assert.deepEqual(result.blocks, []);
+});

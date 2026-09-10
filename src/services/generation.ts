@@ -12,7 +12,7 @@ import {
 } from "../response-schemas.js";
 
 export type SubmitResult =
-  | { ok: true; predictionId: string; model: Model }
+  | { ok: true; predictionId: string; model: Model; outputs: string[] }
   | { ok: false; message: string };
 
 export interface PreparedGeneration {
@@ -108,7 +108,15 @@ export async function submitPreparedGeneration(
     };
   }
 
-  return { ok: true, predictionId, model: prepared.model };
+  // Some models answer synchronously: the finished URLs are already in the
+  // submit response, and there is no queue to poll. Dropping them here is what
+  // made a completed image look unfinished — the caller was told to poll a
+  // prediction that had nothing left to report, and the result never reached
+  // the conversation.
+  const finished = response.data?.outputs ?? response.data?.output;
+  const outputs = Array.isArray(finished) ? finished : finished ? [finished] : [];
+
+  return { ok: true, predictionId, model: prepared.model, outputs };
 }
 
 export async function submitGeneration(

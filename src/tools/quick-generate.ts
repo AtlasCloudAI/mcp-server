@@ -10,6 +10,9 @@ import {
 } from "../services/generation-confirmation.js";
 import { handleError } from "../utils/error-handler.js";
 import {
+  completedOutputContent,
+} from "../services/media-preview.js";
+import {
   autoSubmitNotice,
   evaluateSpend,
   type SpendDecision,
@@ -409,7 +412,15 @@ Returns:
             : type === "Audio"
               ? "10-60 seconds"
               : "1-5 minutes";
-        lines.push(`${type} generation submitted successfully.\n`);
+        // 同步完成的模型结果就在提交响应里，别再让模型去轮询一个已经结束的任务。
+        const settled = response.data?.outputs ?? response.data?.output;
+        const outputs = Array.isArray(settled) ? settled : settled ? [settled] : [];
+        const finished =
+          outputs.length > 0 ? await completedOutputContent(outputs) : null;
+
+        lines.push(
+          `${type} generation ${finished ? "completed" : "submitted successfully"}.\n`
+        );
         if (spend) {
           const notice = autoSubmitNotice(spend);
           if (notice) lines.push(notice);
@@ -417,19 +428,26 @@ Returns:
         lines.push(
           `- **Model**: ${foundModel.displayName} (\`${foundModel.model}\`)`
         );
-        lines.push(`- **Prediction ID**: \`${predictionId}\`\n`);
-        lines.push(
-          `The ${type.toLowerCase()} is being generated. Use \`atlas_get_prediction\` with this ID to check the result.`
-        );
-        lines.push(`${type} generation typically takes ${waitTime}.`);
+        if (finished) {
+          lines.push("");
+          lines.push(finished.text);
+        } else {
+          lines.push(`- **Prediction ID**: \`${predictionId}\`\n`);
+          lines.push(
+            `The ${type.toLowerCase()} is being generated. Use \`atlas_get_prediction\` with this ID to check the result.`
+          );
+          lines.push(`${type} generation typically takes ${waitTime}.`);
+        }
 
         return {
-          structuredContent: generationStructuredContent(
-            predictionId,
-            foundModel,
-            kind
-          ),
-          content: [{ type: "text", text: lines.join("\n") }],
+          structuredContent: {
+            ...generationStructuredContent(predictionId, foundModel, kind),
+            ...(finished ? { status: "completed" as const, outputs } : {}),
+          },
+          content: [
+            { type: "text", text: lines.join("\n") },
+            ...(finished ? finished.blocks : []),
+          ],
         };
       } catch (error) {
         return {

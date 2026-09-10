@@ -116,6 +116,15 @@ export async function submitPreparedGeneration(
   const finished = response.data?.outputs ?? response.data?.output;
   const outputs = Array.isArray(finished) ? finished : finished ? [finished] : [];
 
+  // Which branch a model takes is not documented anywhere and differs per model,
+  // so record it: "submitted but nothing shown" and "finished but nothing shown"
+  // are different bugs and used to look the same from outside.
+  console.error(
+    `[generation] ${prepared.model.model} ${
+      outputs.length > 0 ? `returned ${outputs.length} output(s) synchronously` : "queued for polling"
+    } (status=${response.data?.status ?? "unknown"})`
+  );
+
   return { ok: true, predictionId, model: prepared.model, outputs };
 }
 

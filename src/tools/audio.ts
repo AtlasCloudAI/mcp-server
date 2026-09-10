@@ -12,6 +12,9 @@ import {
 import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
 import {
+  completedOutputContent,
+} from "../services/media-preview.js";
+import {
   autoSubmitNotice,
   evaluateSpend,
   type SpendDecision,
@@ -135,24 +138,38 @@ Returns:
           };
         }
 
+        // 同步完成的模型（结果已在提交响应里）不该被当成待轮询任务：
+        // 直接给出结果与图片块，模型不必再多打一次接口，用户也立刻看到图。
+        const finished =
+          result.outputs.length > 0 ? await completedOutputContent(result.outputs) : null;
+
         return {
-          structuredContent: generationStructuredContent(
+          structuredContent: {
+            ...generationStructuredContent(
             result.predictionId,
             result.model,
             "audio"
-          ),
+            ),
+            ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
+          },
           content: [
             {
               type: "text",
-              text:
+              text: finished
+                ? `Audio generation completed.\n\n` +
+                  `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
+                  (spend ? `${autoSubmitNotice(spend)}\n` : "") +
+                  `\n` + finished.text
+                :
                 `Audio generation submitted successfully.\n\n` +
                 `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
                 `- **Prediction ID**: \`${result.predictionId}\`\n` +
                 (spend ? `${autoSubmitNotice(spend)}\n` : "") +
                 `\n` +
                 `The audio is being generated. Use \`atlas_get_prediction\` with this ID to check the result.\n` +
-                `Audio generation usually takes 10-60 seconds.`,
+                `Audio generation usually takes 10-60 seconds.`
             },
+            ...(finished ? finished.blocks : []),
           ],
         };
       } catch (error) {
@@ -271,24 +288,38 @@ Returns:
           };
         }
 
+        // 同步完成的模型（结果已在提交响应里）不该被当成待轮询任务：
+        // 直接给出结果与图片块，模型不必再多打一次接口，用户也立刻看到图。
+        const finished =
+          result.outputs.length > 0 ? await completedOutputContent(result.outputs) : null;
+
         return {
-          structuredContent: generationStructuredContent(
+          structuredContent: {
+            ...generationStructuredContent(
             result.predictionId,
             result.model,
             "transcription"
-          ),
+            ),
+            ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
+          },
           content: [
             {
               type: "text",
-              text:
+              text: finished
+                ? `Transcription completed.\n\n` +
+                  `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
+                  (spend ? `${autoSubmitNotice(spend)}\n` : "") +
+                  `\n` + finished.text
+                :
                 `Transcription submitted successfully.\n\n` +
                 `- **Model**: ${result.model.displayName} (\`${result.model.model}\`)\n` +
                 `- **Prediction ID**: \`${result.predictionId}\`\n` +
                 (spend ? `${autoSubmitNotice(spend)}\n` : "") +
                 `\n` +
                 `The audio is being transcribed. Use \`atlas_get_prediction\` with this ID to get the text.\n` +
-                `Transcription usually takes 10-60 seconds.`,
+                `Transcription usually takes 10-60 seconds.`
             },
+            ...(finished ? finished.blocks : []),
           ],
         };
       } catch (error) {

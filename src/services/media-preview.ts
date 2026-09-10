@@ -165,3 +165,24 @@ export function playbackGuidance(kinds: Set<OutputKind>): string | null {
   }
   return notes.length > 0 ? notes.join("\n") : null;
 }
+
+/**
+ * The extra content for a generation that came back already finished.
+ *
+ * Some models answer synchronously — the URLs are in the submit response and
+ * there is no queue to poll. Those results used to be dropped on the floor,
+ * so the caller was told to poll a prediction that had nothing left to say and
+ * the picture never reached the conversation. This builds what the polling path
+ * would have built: the URLs as text, the playback guidance for what cannot be
+ * displayed, and the image blocks themselves.
+ */
+export async function completedOutputContent(urls: string[]): Promise<{
+  text: string;
+  blocks: ImagePreviewBlock[];
+}> {
+  const lines = ["## Output\n"];
+  urls.forEach((url, index) => lines.push(`${index + 1}. ${url}`));
+  const guidance = playbackGuidance(new Set(urls.map(classifyOutput)));
+  if (guidance) lines.push(`\n${guidance}`);
+  return { text: lines.join("\n"), blocks: await buildImagePreviews(urls) };
+}

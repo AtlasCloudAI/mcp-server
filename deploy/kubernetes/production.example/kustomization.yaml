@@ -17,6 +17,7 @@ patches:
 
 images:
   - name: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin
-    # ↓ 换成我们交付的发布镜像标签。留着占位符会 ImagePullBackOff——
-    #   这是故意的，比静默跑一个 dev 构建安全。
-    newTag: REPLACE_WITH_RELEASE_TAG
+    # v2.1.0，由 CI 从 commit 1e871aa 构建（run 34582166659）。
+    # 按 digest 固定而不是按标签：标签可以被重新推覆盖，digest 不能。
+    # 换版本时同时更新上面这行注释，否则没人知道跑的是哪一版。
+    digest: sha256:79470348a1ecd8dda2cdf1f568b665c30f059fc7f2301c28ec10218cac3439da

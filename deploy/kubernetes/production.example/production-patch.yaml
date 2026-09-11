@@ -8,128 +8,96 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
           env:
+            # ---- 发布档位 ----
             - name: PLUGIN_RELEASE_TIER
               value: production
+
+            # ---- 本服务的对外身份 ----
+            # 这三个值必须两两一致：MCP_PUBLIC_URL 就是资源标识，
+            # 而 MCP_OAUTH_AUDIENCE 必须和生产授权服务器里登记的资源标识逐字符相同。
             - name: MCP_PUBLIC_URL
               value: https://mcp.atlascloud.ai/mcp
-            - name: MCP_OAUTH_ISSUER
-              value: https://mcp-auth.atlascloud.ai
-            - name: MCP_OAUTH_JWKS_URI
-              value: https://mcp-auth.atlascloud.ai/jwks
-            - name: MCP_OAUTH_ENDPOINT_HOSTS
-              value: mcp-auth.atlascloud.ai
             - name: MCP_OAUTH_AUDIENCE
               value: https://mcp.atlascloud.ai/mcp
             - name: MCP_ALLOWED_HOSTS
               value: mcp.atlascloud.ai
+
+            # ---- 授权服务器（官网生产 OIDC，已在线）----
+            # 这几个值已用 https://auth.atlascloud.ai/.well-known/oauth-authorization-server
+            # 核对过：端点都在根路径，不是 /api/v1/oidc/*。
+            # 启动自检会拿 MCP_OAUTH_JWKS_URI 和上面这份元数据对账，写错则 Pod 永不就绪。
+            - name: MCP_OAUTH_ISSUER
+              value: https://auth.atlascloud.ai
+            - name: MCP_OAUTH_JWKS_URI
+              value: https://auth.atlascloud.ai/jwks
+            - name: MCP_OAUTH_ENDPOINT_HOSTS
+              value: auth.atlascloud.ai
+
+            # ---- 凭据模式：令牌交换 ----
+            # 服务端不保存任何用户 API key。每个请求把调用者自己的 OAuth 令牌
+            # 换成一枚面向模型 API 的令牌，所以生成费用记在调用者自己的账户上。
             - name: MCP_CREDENTIAL_MODE
-              value: redis-subject-map
-            - name: MCP_CREDENTIAL_REDIS_PREFIX
-              value: atlascloud:openai-plugin:credential
-            - name: MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              value: oauth-exchange
+            - name: MCP_TOKEN_EXCHANGE_URL
+              value: https://auth.atlascloud.ai/token
+            - name: MCP_TOKEN_EXCHANGE_RESOURCE
+              value: https://api.atlascloud.ai
+            # ↓ 由生产授权服务器管理员登记 token-exchange 客户端后提供
+            - name: MCP_TOKEN_EXCHANGE_CLIENT_ID
+              value: REPLACE_WITH_PRODUCTION_CLIENT_ID
+            - name: MCP_TOKEN_EXCHANGE_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: credential-encryption-keys-json
-            - name: MCP_GENERATION_CONFIRMATION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: generation-confirmation-secret
+                  name: atlas-mcp-token-exchange
+                  key: client-secret
+
+            # ---- 上游 ----
+            # 同集群优先走内网：省一跳公网和一次 TLS，也绕开网关的路径白名单。
+            # 拿不到内网地址就都填 https://api.atlascloud.ai（公网可用，只是慢一点）。
+            - name: ATLASCLOUD_API_BASE_URL
+              value: REPLACE_WITH_BACKEND_BASE_URL
+            - name: ATLASCLOUD_GENERATION_API_BASE_URL
+              value: REPLACE_WITH_AIPROXY_BASE_URL
+
+            # ---- 下面两项在 oauth-exchange 模式下是死配置，删掉 ----
+            # subject-map 架构的遗留：服务端不再保存用户凭据，
+            # 既没有要映射的 key，也没有要加密的东西。
             - name: MCP_ATLAS_SUBJECT_KEYS_JSON
               $patch: delete
-          readinessProbe:
-            httpGet:
-              httpHeaders:
-                - name: Host
-                  value: mcp.atlascloud.ai
-          livenessProbe:
-            httpGet:
-              httpHeaders:
-                - name: Host
-                  value: mcp.atlascloud.ai
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: atlascloud-openai-auth
-  namespace: mcp-servers
-spec:
-  template:
-    spec:
-      containers:
-        - name: auth
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
-          env:
-            - name: PLUGIN_RELEASE_TIER
-              value: production
-            - name: OIDC_ISSUER_URL
-              value: https://mcp-auth.atlascloud.ai
-            - name: OIDC_MCP_RESOURCE
-              value: https://mcp.atlascloud.ai/mcp
-            - name: AUTH_ALLOWED_HOSTS
-              value: mcp-auth.atlascloud.ai
-            - name: AUTH_IDENTITY_MODE
-              value: upstream-oidc
-            # 生产暂不开 CIMD：现网 ChatGPT 客户端是 DCR 注册的，而 ChatGPT 的顶层客户端
-            # 文档声明 private_key_jwt（我们还没支持）。先在 dev 验完 Codex 的 CIMD 连接、
-            # 确认 ChatGPT 在 CIMD 被拒后仍会退回 DCR，再打开这个开关。
-            - name: AUTH_CLIENT_ID_METADATA_ENABLED
-              value: "false"
-            - name: AUTH_UPSTREAM_ISSUER_URL
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: auth-upstream-issuer-url
-            - name: AUTH_UPSTREAM_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: auth-upstream-client-id
-            - name: AUTH_UPSTREAM_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: auth-upstream-client-secret
-            - name: AUTH_UPSTREAM_SCOPES
-              value: openid,email,profile
-            - name: AUTH_UPSTREAM_ENDPOINT_HOSTS
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: auth-upstream-endpoint-hosts
-            - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
-              value: "600"
-            - name: AUTH_REFRESH_TOKEN_TTL_SECONDS
-              value: "7776000"
-            - name: AUTH_CREDENTIAL_REDIS_PREFIX
-              value: atlascloud:openai-plugin:credential
-            - name: AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON
-              valueFrom:
-                secretKeyRef:
-                  name: atlascloud-openai-plugin
-                  key: credential-encryption-keys-json
-            - name: OIDC_USERS_JSON
+            - name: MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON
               $patch: delete
+
+          # 探针要带上生产 Host，否则会被 MCP_ALLOWED_HOSTS 拦掉，
+          # 表现为 Pod 一直不就绪、但日志里看不出原因。
           readinessProbe:
             httpGet:
               httpHeaders:
                 - name: Host
-                  value: mcp-auth.atlascloud.ai
+                  value: mcp.atlascloud.ai
           livenessProbe:
             httpGet:
               httpHeaders:
                 - name: Host
-                  value: mcp-auth.atlascloud.ai
+                  value: mcp.atlascloud.ai
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: atlascloud-openai-plugin
   namespace: mcp-servers
+  annotations:
+    # 网关类型决定注解写法。若生产用的不是 higress/nginx-ingress，
+    # 这四条要换成对应网关的等价写法——超时必须给够，MCP 是流式长连接，
+    # 默认 60s 会把生成中的请求掐断。
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: 256k
+    cert-manager.io/cluster-issuer: letsencrypt-dns01
 spec:
+  # 只有一个 host。dev 上那个 atlascloud-auth.dev.atlascloud.ai
+  # 是自建授权页，已被官网 OIDC 取代，生产不要复刻。
   rules:
     - host: mcp.atlascloud.ai
       http:
@@ -141,18 +109,7 @@ spec:
                 name: atlascloud-openai-mcp
                 port:
                   number: 80
-    - host: mcp-auth.atlascloud.ai
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: atlascloud-openai-auth
-                port:
-                  number: 80
   tls:
     - hosts:
         - mcp.atlascloud.ai
-        - mcp-auth.atlascloud.ai
-      secretName: atlascloud-openai-plugin-production-tls
+      secretName: atlascloud-mcp-production-tls

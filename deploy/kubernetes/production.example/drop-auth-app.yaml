@@ -1,0 +1,21 @@
+# 自建授权服务器（atlascloud-openai-auth）不部署到生产。
+#
+# 它的作用是在官网还没有 OIDC 的时候，自己当一个授权服务器给插件用。
+# 现在 auth.atlascloud.ai 已经上线并支持 token-exchange，这个应用就多余了。
+# dev 上那个副本 24 小时内零请求，可以一起下掉。
+#
+# 多部署一份的代价不只是浪费：它会多一个域名、多一张证书、多一份
+# 需要轮换的 upstream client secret，还多一条能签发令牌的路径。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlascloud-openai-auth
+  namespace: mcp-servers
+$patch: delete

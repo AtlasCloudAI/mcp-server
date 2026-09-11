@@ -1,5 +1,36 @@
 # Atlas Cloud OpenAI Plugin deployment
 
+> ## Current architecture — read this before anything below
+>
+> Identity moved to the **Atlas Cloud website's own OIDC provider**
+> (`auth.atlascloud.ai`, and `auth.dev.atlascloud.ai` on dev). The self-hosted
+> authorization server in this repo (`atlascloud-openai-auth`) is **no longer
+> used** and is not deployed to production.
+>
+> Credentials use `MCP_CREDENTIAL_MODE=oauth-exchange`: every request trades the
+> caller's own OAuth token for an API-facing token (RFC 8693), so generation is
+> billed to the caller's own Atlas account and **the server stores no user
+> credential at all**.
+>
+> What that changes versus the sections further down:
+>
+> | | Old (`redis-subject-map` + self-hosted auth) | Current (`oauth-exchange`) |
+> |---|---|---|
+> | Deployments | 2 (`-mcp`, `-auth`) | 1 (`-mcp`) |
+> | Public hosts | 2 | 1 |
+> | Secret keys needed | 7+ | 3 (`redis-url`, `generation-confirmation-secret`, `openai-challenge-token`) plus `client-secret` in a separate Secret |
+> | What Redis holds | encrypted user API keys | **idempotency keys only** — exchanged tokens live in process memory (`src/services/token-exchange.ts`), never on disk |
+> | `credential-encryption-keys-json` | required, >=2 keys | **unused**; the production overlay deletes it |
+>
+> Because Redis no longer holds anything derived from user credentials, it does
+> not need to be a dedicated instance and a managed Redis is fine.
+>
+> **Production deploy: use `production.example/`.** Everything from
+> "Public production identity and credential profile" onward that mentions
+> `mcp-auth.atlascloud.ai`, `AUTH_*`, `OIDC_*`, `redis-subject-map`, or the
+> reviewer password table describes the retired architecture and is kept only
+> for history.
+
 The staging base deploys the remote MCP resource server, OAuth 2.1 authorization server, a dedicated persistent Redis instance, and two HTTPS hosts in the existing `mcp-servers` namespace.
 
 The manifest intentionally does not contain a Kubernetes Secret. Create `mcp-servers/atlascloud-openai-plugin` out of band with these keys before applying it:
@@ -177,95 +208,73 @@ behavior after a rollout.
 
 The `*.dev.atlascloud.ai` DNS wildcard makes this a real public HTTPS staging deployment, not the final production hostname. Promote only after the domain owner provisions the non-`dev` DNS records and the same checks pass there.
 
-## Public production identity and credential profile
+## Public production configuration (current)
 
-Public production must use an established upstream OIDC provider for identity
-and per-user encrypted Atlas credential linking. It must not reuse the static
-reviewer password table, the plaintext subject-map JSON, or a shared service
-account key.
-
-Required non-secret settings for the proposed production hosts are:
+Rendered by `production.example/`. Everything below is what the overlay sets;
+only the four `REPLACE_WITH_*` placeholders need filling in.
 
 ```text
 NODE_ENV=production
 PLUGIN_RELEASE_TIER=production
 
 MCP_PUBLIC_URL=https://mcp.atlascloud.ai/mcp
-MCP_OAUTH_ISSUER=https://mcp-auth.atlascloud.ai
-MCP_OAUTH_JWKS_URI=https://mcp-auth.atlascloud.ai/jwks
-MCP_OAUTH_ENDPOINT_HOSTS=mcp-auth.atlascloud.ai
 MCP_OAUTH_AUDIENCE=https://mcp.atlascloud.ai/mcp
 MCP_ALLOWED_HOSTS=mcp.atlascloud.ai
-MCP_CREDENTIAL_MODE=redis-subject-map
-MCP_CREDENTIAL_REDIS_PREFIX=atlascloud:openai-plugin:credential
+
+MCP_OAUTH_ISSUER=https://auth.atlascloud.ai
+MCP_OAUTH_JWKS_URI=https://auth.atlascloud.ai/jwks
+MCP_OAUTH_ENDPOINT_HOSTS=auth.atlascloud.ai
+MCP_OAUTH_ALGORITHMS=RS256
+
+MCP_CREDENTIAL_MODE=oauth-exchange
+MCP_TOKEN_EXCHANGE_URL=https://auth.atlascloud.ai/token
+MCP_TOKEN_EXCHANGE_RESOURCE=https://api.atlascloud.ai
+MCP_TOKEN_EXCHANGE_CLIENT_ID=<registered production token-exchange client>
+
+ATLASCLOUD_API_BASE_URL=<production backend internal origin, or https://api.atlascloud.ai>
+ATLASCLOUD_GENERATION_API_BASE_URL=<production aiproxy internal origin, or https://api.atlascloud.ai>
+
 MCP_IDEMPOTENCY_BACKEND=redis
-MCP_GENERATION_CONFIRMATION_TTL_SECONDS=600
-
-OIDC_ISSUER_URL=https://mcp-auth.atlascloud.ai
-OIDC_MCP_RESOURCE=https://mcp.atlascloud.ai/mcp
-AUTH_ALLOWED_HOSTS=mcp-auth.atlascloud.ai
-AUTH_IDENTITY_MODE=upstream-oidc
-AUTH_UPSTREAM_ISSUER_URL=<approved Atlas identity issuer origin>
-AUTH_UPSTREAM_CLIENT_ID=<registered confidential client ID>
-AUTH_UPSTREAM_SCOPES=openid,email,profile
-AUTH_UPSTREAM_ENDPOINT_HOSTS=<comma-separated exact hosts used by discovery, token, and JWKS endpoints>
-AUTH_CREDENTIAL_REDIS_PREFIX=atlascloud:openai-plugin:credential
-AUTH_CLIENT_ID_METADATA_ENABLED=false
+MCP_ALLOWED_ORIGINS=https://chatgpt.com,https://chat.openai.com,https://platform.openai.com
+MCP_TRUST_PROXY=1
 ```
 
-`AUTH_CLIENT_ID_METADATA_ENABLED` controls Client ID Metadata Documents (CIMD),
-which OpenAI prefers over dynamic client registration: the `client_id` is the
-client's own HTTPS metadata document URL, fetched on demand instead of stored.
-Codex publishes a stable document at `https://chatgpt.com/oauth/codex/client.json`
-and needs no registration once this is on. Two more knobs come with it:
+The three OAuth endpoint values were verified against the live document at
+`https://auth.atlascloud.ai/.well-known/oauth-authorization-server`: the
+endpoints sit at the **root** path, not under `/api/v1/oidc/`. Startup
+reconciles `MCP_OAUTH_JWKS_URI` against that document, so a wrong path leaves
+the Pod permanently unready instead of serving bad tokens.
 
-- `AUTH_CLIENT_ID_METADATA_HOSTS` (default `chatgpt.com`): the only hosts whose
-  documents may be fetched. The fetch is triggered by unauthenticated
-  authorization requests, so an empty allowlist would be an arbitrary-URL
-  server-side fetch surface.
-- `AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT` (default `false`): ChatGPT's
-  top-level document declares `private_key_jwt`, so its CIMD surface only works
-  with this on. Turning it on also advertises `private_key_jwt` at the token
-  endpoint, which moves ChatGPT off the DCR path it is verified on — keep it off
-  until that surface is deliberately migrated.
+`MCP_OAUTH_AUDIENCE` must match the resource identifier registered in the
+production authorization server character for character.
 
-Production keeps CIMD off until Codex is verified against it on dev.
+### Secrets for the current architecture
 
-Register this exact upstream callback URL with the identity provider:
+`mcp-servers/atlascloud-openai-plugin`:
 
-```text
-https://mcp-auth.atlascloud.ai/upstream/callback
-```
-
-`docs/UPSTREAM_OIDC_REQUIREMENTS.md` states every rule the provider must
-satisfy. Confirm a candidate issuer before requesting DNS, secrets, or a
-deployment window; the check needs no build step, client secret, or cluster
-access:
-
-```bash
-node scripts/check-upstream-oidc.mjs https://issuer.example.com
-```
-
-It prints one `PASS`/`FAIL` line per rule plus the exact
-`AUTH_UPSTREAM_ENDPOINT_HOSTS` value implied by the discovery document, and
-exits non-zero on failure. `email_verified: true` in the ID token is the one
-mandatory behavior discovery cannot prove; confirm it with the provider
-directly.
-
-Create these additional Kubernetes Secret keys out of band:
-
+- `redis-url`: `redis://:<password>@<host>:6379`. A production release rejects a
+  password-less URL. Holds idempotency keys only.
 - `generation-confirmation-secret`: at least 32 random bytes, shared by every
-  MCP replica so a quote issued by one replica can be confirmed through another
-- `auth-upstream-issuer-url`: approved OIDC issuer origin
-- `auth-upstream-client-id`: registered confidential client ID
-- `auth-upstream-client-secret`: at least 32 characters
-- `auth-upstream-endpoint-hosts`: comma-separated exact public hosts used by
-  the approved issuer's authorization, token, and JWKS endpoints; it must
-  include the issuer host
-- `credential-encryption-keys-json`: an ordered JSON keyring containing at
-  least two distinct 32-byte base64url AES keys; inject the identical value as
-  both `AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON` and
-  `MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON`
+  replica so a quote issued by one can be confirmed through another.
+- `openai-challenge-token`: the portal verification token.
+
+`mcp-servers/atlas-mcp-token-exchange`:
+
+- `client-secret`: the plaintext secret of the registered token-exchange client.
+  The authorization server stores only a bcrypt hash, so it cannot be recovered
+  later — capture it at registration time.
+
+`redis-password` is still read by the Redis StatefulSet in `base/staging.yaml`
+when you use the bundled Redis rather than a managed one.
+
+### Retired: self-hosted authorization server
+
+Everything from here to the end of this file describes the retired
+`atlascloud-openai-auth` application — the local reviewer password table, DCR
+callback policy, upstream-OIDC wiring, and `credential-encryption-keys-json`.
+`production.example/drop-auth-app.yaml` removes that Deployment and Service, so
+none of it applies to a production deploy. It is kept for history and for the
+dev environment while that copy is still running.
 
 ### Optional: link the Atlas key without asking the user
 

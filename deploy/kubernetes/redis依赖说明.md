@@ -5,6 +5,10 @@
 **一句话结论：极小。跑了 30 天实测占 1.51 MB、265 个键。单实例够用，
 也可以用现成的共享 Redis。唯一不能将就的一条是淘汰策略必须 `noeviction`。**
 
+> 本文讲的是**要开一个什么样的 Redis**。
+> MCP 侧怎么连它（`MCP_REDIS_URL` 等 4 个变量）在
+> [`production.env.example`](./production.env.example) 的第 6 节。
+
 ---
 
 ## 用来干什么

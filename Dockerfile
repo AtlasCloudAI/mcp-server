@@ -20,5 +20,9 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 
 USER node
+# 3000 = 远端 MCP 服务（PORT，这是唯一需要接进 Service 的端口）。
+# 3001 = 自建授权服务器（AUTH_PORT），同一个镜像里的另一个程序，
+#        入口是 dist/auth.js。官网 OIDC 上线后它已停用，生产不部署——
+#        所以部署时只需要暴露 3000。
 EXPOSE 3000 3001
 CMD ["node", "dist/http.js"]

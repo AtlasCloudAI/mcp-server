@@ -78,7 +78,16 @@ test("public production release requires Redis-encrypted per-subject credentials
   staticMap.MCP_ATLAS_SUBJECT_KEYS_JSON = JSON.stringify({ reviewer: "atlas-test-key" });
   assert.throws(
     () => loadHttpServerConfig(staticMap),
-    /production release requires MCP_CREDENTIAL_MODE=redis-subject-map/
+    /production release requires MCP_CREDENTIAL_MODE=oauth-exchange or redis-subject-map/
+  );
+
+  // 共享服务账号更要拦住：它会把所有人的生成都记到同一个账户上。
+  const sharedAccount = publicReleaseEnv();
+  sharedAccount.MCP_CREDENTIAL_MODE = "service-account";
+  sharedAccount.ATLASCLOUD_API_KEY = "atlas-test-key";
+  assert.throws(
+    () => loadHttpServerConfig(sharedAccount),
+    /production release requires MCP_CREDENTIAL_MODE=oauth-exchange or redis-subject-map/
   );
 
   const devHostname = publicReleaseEnv();
@@ -86,6 +95,32 @@ test("public production release requires Redis-encrypted per-subject credentials
   assert.throws(
     () => loadHttpServerConfig(devHostname),
     /production release cannot use a development or staging hostname/
+  );
+});
+
+test("public production release accepts oauth-exchange without a credential keyring", () => {
+  const env = productionEnv();
+  env.PLUGIN_RELEASE_TIER = "production";
+  env.MCP_CREDENTIAL_MODE = "oauth-exchange";
+  env.MCP_REDIS_URL = "redis://:secret@redis.example.com:6379";
+  env.MCP_TOKEN_EXCHANGE_URL = "https://auth.example.com/token";
+  env.MCP_TOKEN_EXCHANGE_CLIENT_ID = "atlas-mcp-server";
+  env.MCP_TOKEN_EXCHANGE_CLIENT_SECRET = "token-exchange-secret";
+  env.MCP_TOKEN_EXCHANGE_RESOURCE = "https://api.example.com";
+  delete env.ATLASCLOUD_API_KEY;
+  // 这个模式不落任何凭据，所以刻意不给钥匙串——旧门禁在这里会误报。
+  delete env.MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON;
+
+  const config = loadHttpServerConfig(env);
+  assert.equal(config.releaseTier, "production");
+  assert.equal(config.credentialMode, "oauth-exchange");
+  assert.equal(config.tokenExchange?.resource, "https://api.example.com");
+
+  // 但带密码的 Redis 仍然是硬要求（幂等键要存活过重启）。
+  const noPassword = { ...env, MCP_REDIS_URL: "redis://redis.example.com:6379" };
+  assert.throws(
+    () => loadHttpServerConfig(noPassword),
+    /production release requires a password-protected Redis URL/
   );
 });
 

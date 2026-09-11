@@ -1,6 +1,22 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
+# 生产 overlay。用法见 deploy/kubernetes/README.md。
+#
+# 这份 overlay 是「自包含」的：它把每一个生产要用的环境变量都完整写出来，
+# 不依赖 base/staging.yaml 里的值是否为最新——base 目前仍留着旧的
+# subject-map 架构，直接继承会起不来。
+
 resources:
   - ../base
+
 patches:
   - path: production-patch.yaml
+  # 自建授权页已被官网 OIDC（auth.atlascloud.ai）取代，生产不部署。
+  - path: drop-auth-app.yaml
+
+images:
+  - name: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin
+    # ↓ 换成我们交付的发布镜像标签。留着占位符会 ImagePullBackOff——
+    #   这是故意的，比静默跑一个 dev 构建安全。
+    newTag: REPLACE_WITH_RELEASE_TAG

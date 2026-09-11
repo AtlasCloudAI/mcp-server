@@ -314,9 +314,16 @@ export function loadHttpServerConfig(
     ) {
       throw new Error("A production release cannot use a development or staging hostname");
     }
-    if (env.MCP_CREDENTIAL_MODE !== "redis-subject-map") {
+    // 生产的要求是「每个调用者用自己的身份计费」，满足这一点的有两种模式：
+    // oauth-exchange（把调用者的令牌换成面向 API 的令牌，服务端不存任何凭据）
+    // 和 redis-subject-map（存加密后的用户 key）。service-account 是一把共享 key、
+    // subject-map 是写死在 env 里的静态映射，两者都会把账单记到错误的人头上。
+    if (
+      env.MCP_CREDENTIAL_MODE !== "oauth-exchange" &&
+      env.MCP_CREDENTIAL_MODE !== "redis-subject-map"
+    ) {
       throw new Error(
-        "A production release requires MCP_CREDENTIAL_MODE=redis-subject-map"
+        "A production release requires MCP_CREDENTIAL_MODE=oauth-exchange or redis-subject-map"
       );
     }
   }
@@ -370,7 +377,13 @@ export function loadHttpServerConfig(
       "MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON is required when MCP_CREDENTIAL_MODE=redis-subject-map"
     );
   }
-  if (env.PLUGIN_RELEASE_TIER === "production" && credentialEncryptionKeys.length < 2) {
+  // 只有 redis-subject-map 会把凭据加密落 Redis，所以只有它需要可轮换的钥匙串。
+  // oauth-exchange 不存凭据（换来的令牌只在进程内存里），这个要求对它没有意义。
+  if (
+    env.PLUGIN_RELEASE_TIER === "production" &&
+    env.MCP_CREDENTIAL_MODE === "redis-subject-map" &&
+    credentialEncryptionKeys.length < 2
+  ) {
     throw new Error("A production release requires at least two credential encryption keys for rotation");
   }
 

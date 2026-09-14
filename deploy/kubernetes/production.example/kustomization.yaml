@@ -17,7 +17,7 @@ patches:
 
 images:
   - name: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin
-    # v2.4.1，由 CI 从 commit 719b037 构建（run 34828025291）。
+    # v2.5.0，由 CI 从 commit c12edcc 构建（run 34836426675）。
     # 按 digest 固定而不是按标签：标签可以被重新推覆盖，digest 不能。
     # 换版本时同时更新上面这行注释，否则没人知道跑的是哪一版。
-    digest: sha256:22d4e3101c29e54efd80b91afc2913eb6e385ab41ea8b4fb1d66923262b9fb5c
+    digest: sha256:65b0c1a9234649aa9e0692150a85966ce2fedd05fd515687ea9fb87af2f2426c

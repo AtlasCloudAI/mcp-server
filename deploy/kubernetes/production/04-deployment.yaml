@@ -49,7 +49,7 @@ spec:
             - node
             - dist/http.js
           # ⚠️ 环境相关：镜像仓库地址 / tag 随环境调整
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin:v2.4.1
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin:v2.5.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000

@@ -1,0 +1,57 @@
+# Ingress
+#
+# ⚠️ 方向说明：这里把外部流量接到 MCP 自己的 Service，【不是】 backend。
+#    MCP 是一个独立服务，不是 backend 的某个路径。
+#    MCP 调 backend / aiproxy 是它自己发起的出站请求，走 ConfigMap 里的
+#    ATLASCLOUD_API_BASE_URL 和 ATLASCLOUD_GENERATION_API_BASE_URL，
+#    和这条 Ingress 无关，不需要在这里配任何转发。
+#
+#    dev 上出现过一条从网关控制台建的路由，host 写的是 MCP 的域名、
+#    destination 却指向 backend:9099 —— 那样配的症状是：能连上、不报 525，
+#    但 /.well-known/oauth-protected-resource 返回 backend 的 404，
+#    看起来像 MCP 有 bug，实际是路由指错了。
+#
+# ⚠️ 域名：下面用的是 atlascloud-mcp.atlascloud.ai，和 01-configmap.yaml 一致。
+#    这个名字目前【没有 DNS 记录】，要先加。
+#    若改用已有记录的 mcp.atlascloud.ai，这里、ConfigMap 三处
+#    （MCP_PUBLIC_URL / MCP_ALLOWED_HOSTS / MCP_OAUTH_AUDIENCE）
+#    和 04-deployment.yaml 两处探针 Host 要一起改。
+#
+# ⚠️ 注解按 nginx-ingress / higress 写。若生产网关是别的，换成等价写法，
+#    但三个超时和 body 上限必须落实。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-mcp
+  namespace: atlas-mcp
+  labels:
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/name: atlas-mcp
+  annotations:
+    # MCP 是流式长连接。默认 60 秒会把正在生成的请求掐断——
+    # 症状是用户那边生成到一半突然断开，日志里看不出原因。
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: 256k
+    # 若集群有 cert-manager，取消注释让它自动签证书；
+    # 走 Cloudflare Origin Certificate 就删掉这行，改为手工建好 TLS Secret。
+    # cert-manager.io/cluster-issuer: letsencrypt-dns01
+spec:
+  # ingressClassName: higress      # ← 按生产集群实际网关填
+  rules:
+    - host: atlascloud-mcp.atlascloud.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # ↓ 这里必须是 MCP 自己的 Service，不是 backend
+                name: atlas-mcp
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - atlascloud-mcp.atlascloud.ai
+      secretName: atlas-mcp-tls

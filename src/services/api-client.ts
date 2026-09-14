@@ -511,7 +511,10 @@ export async function fetchExternalBinary(
   assertFetchableExternalUrl(
     url,
     "MCP_MEDIA_PREVIEW_HOSTS",
-    ".aliyuncs.com,.atlascloud.ai"
+    // volces.com 是火山引擎 TOS：字节系模型（seedream、seedance）的产出直接落在
+    // 那里，不经过我们自己的 OSS。漏掉它的后果是这些模型永远只给下载链接，
+    // 而且因为预览是 fail-open 的，看起来和「没做预览功能」一模一样。
+    ".aliyuncs.com,.atlascloud.ai,.volces.com"
   );
 
   const maxBytes = options.maxBytes ?? 1_500_000;

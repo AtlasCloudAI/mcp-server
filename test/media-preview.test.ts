@@ -40,6 +40,30 @@ test("缩略参数保留原有 query，且不覆盖已有的 x-oss-process", () 
   );
 });
 
+test("缩放参数按存储厂商分派：阿里云用 x-oss-process，火山用 x-tos-process", () => {
+  // 字节系模型（seedream、seedance）的产出直接落在火山 TOS 上。
+  // 这里如果发 x-oss-process，TOS 会把它当成无关查询参数忽略，
+  // 于是原图整张下载、撞上体积闸、预览静默消失 —— 正是线上出现过的症状。
+  const tos = withResizeParams(
+    "https://ark-acg-ap-southeast-1.tos-ap-southeast-1.volces.com/i/a.png?Expires=1"
+  );
+  assert.ok(tos);
+  const parsedTos = new URL(tos);
+  assert.equal(parsedTos.searchParams.get("Expires"), "1");
+  assert.match(parsedTos.searchParams.get("x-tos-process") ?? "", /^image\/resize,l_\d+\//);
+  assert.equal(parsedTos.searchParams.get("x-oss-process"), null);
+
+  // 已经带了 TOS 处理参数的同样不再套一层。
+  assert.equal(
+    withResizeParams("https://x.tos-cn-beijing.volces.com/i/a.png?x-tos-process=image/info"),
+    null
+  );
+
+  // 认不出厂商的主机不瞎加参数：加了也不生效，只会让签名 URL 变长。
+  // 这种情况交给体积闸兜底。
+  assert.equal(withResizeParams("https://cdn.example.com/i/a.png"), null);
+});
+
 test("视频给的是下载指引，不是「在浏览器里打开」", () => {
   const text = playbackGuidance(new Set(["video" as const]));
   assert.ok(text);

@@ -72,13 +72,32 @@ export function maxPreviews(): number {
 // Aliyun OSS resizes on read, which is the difference between a 4 MB PNG and a
 // ~100 KB JPEG in the response. `l_<n>` bounds the long edge, so portrait and
 // landscape both come back bounded without us knowing the aspect ratio.
+/**
+ * 读时缩放的参数名按存储厂商分派。
+ *
+ * 两家的图片处理语法相同，但参数名不同：阿里云 OSS 用 `x-oss-process`，
+ * 火山引擎 TOS 用 `x-tos-process`。给错了不会报错——对方当成无关查询参数忽略，
+ * 于是原图整张下载，2048×2048 的 PNG 轻松超过 1.5MB 的抓取上限，
+ * 预览再次静默消失。所以这里必须按主机分派，不能只挑一个发。
+ */
+function resizeParamName(hostname: string): string | null {
+  const host = hostname.toLowerCase();
+  if (host.endsWith(".aliyuncs.com")) return "x-oss-process";
+  if (host.endsWith(".volces.com")) return "x-tos-process";
+  // 我们自己的域名后面可能是任一家，两个都试没有意义——不加参数，
+  // 让体积闸去兜底。
+  return null;
+}
+
 export function withResizeParams(url: string): string | null {
   try {
     const parsed = new URL(url);
-    if (parsed.searchParams.has("x-oss-process")) return null;
+    const param = resizeParamName(parsed.hostname);
+    if (!param) return null;
+    if (parsed.searchParams.has(param)) return null;
     const edge = intEnv("MCP_MEDIA_PREVIEW_EDGE", 1024, 256, 2048);
     parsed.searchParams.set(
-      "x-oss-process",
+      param,
       `image/resize,l_${edge}/format,jpg/quality,q_80`
     );
     return parsed.toString();

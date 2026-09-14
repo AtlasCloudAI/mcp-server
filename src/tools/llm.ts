@@ -250,9 +250,9 @@ Use this after submitting a generation request to check if the result is ready.
 
 If the status is still "processing" or "starting", wait a moment and try again.
 
-When the result is ready (status is "completed" or "succeeded"), the output URLs will be returned. You should then:
-1. Show the output URLs to the user
-2. Ask the user if they want to download the file to their local machine (you can use curl or wget to download it)
+When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and any image is also attached as an image block. You should then:
+1. Let the attached image speak for itself - do not re-render it as a markdown image. These object URLs are hotlink-protected, so a copy loaded from the chat returns 403 and shows up as a broken image beside the one that worked.
+2. State each URL once as plain text, and offer to download it (curl or wget send no Referer and therefore work).
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -294,18 +294,24 @@ Examples:
         const outputs = result.data?.outputs || result.data?.output;
         const outputUrls = Array.isArray(outputs) ? outputs : outputs ? [outputs] : [];
         const kinds = new Set<OutputKind>(outputUrls.map(classifyOutput));
+        // 先建块：提示语要根据「用户是否已经看到图」给出相反的指引。
+        const previewBlocks = await buildImagePreviews(outputUrls);
 
         if (outputUrls.length > 0) {
           lines.push("## Output\n");
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
-          const guidance = playbackGuidance(kinds);
+          const guidance = playbackGuidance(kinds, previewBlocks.length);
           if (guidance) {
             lines.push(`\n${guidance}`);
           } else {
             lines.push(
-              `\nYou can ask me to download these files to your local machine, or open the URLs directly in your browser.`
+              `\nAsk me to save these to the working directory ` +
+                `(\`curl -L -o <name> '<url>'\`) if you want them locally. ` +
+                `Opening the URL straight from the chat can come back 403: ` +
+                `some output buckets reject requests that carry a Referer, ` +
+                `and a download has none.`
             );
           }
         }
@@ -335,7 +341,7 @@ Examples:
             { type: "text", text: lines.join("\n") },
             // Appended after the text so a client that renders only the first
             // block still shows the URLs and the status.
-            ...(await buildImagePreviews(outputUrls)),
+            ...previewBlocks,
           ],
         };
       } catch (error) {

@@ -235,8 +235,21 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
  * file where the user is working is the one thing that actually helps, so say so
  * instead of leaving the model to hand over a link and stop.
  */
-export function playbackGuidance(kinds: Set<OutputKind>): string | null {
+export function playbackGuidance(
+  kinds: Set<OutputKind>,
+  // 已经附上的图片块数量。>0 时用户已经看到图了，再贴一次链接只会多一个破图。
+  attachedImages = 0
+): string | null {
   const notes: string[] = [];
+  if (attachedImages > 0) {
+    notes.push(
+      "The image is already attached to this result as an image block, so the user can " +
+        "see it. Do not render it again as a markdown image or an inline preview: these " +
+        "object URLs are hotlink-protected and a second copy loaded from the chat comes " +
+        "back 403, which the user sees as a broken image next to the one that worked. " +
+        "State the URL once as plain text, and only because they may want to download it."
+    );
+  }
   if (kinds.has("video")) {
     notes.push(
       "Video cannot be displayed in this conversation. Offer to save it to the user's " +
@@ -267,9 +280,12 @@ export async function completedOutputContent(urls: string[]): Promise<{
   text: string;
   blocks: ImagePreviewBlock[];
 }> {
+  // 先把图片块建出来，提示语才知道用户到底看没看到图 ——
+  // 「已经附上了」和「一张都没附上」该给模型的指引是相反的。
+  const blocks = await buildImagePreviews(urls);
   const lines = ["## Output\n"];
   urls.forEach((url, index) => lines.push(`${index + 1}. ${url}`));
-  const guidance = playbackGuidance(new Set(urls.map(classifyOutput)));
+  const guidance = playbackGuidance(new Set(urls.map(classifyOutput)), blocks.length);
   if (guidance) lines.push(`\n${guidance}`);
-  return { text: lines.join("\n"), blocks: await buildImagePreviews(urls) };
+  return { text: lines.join("\n"), blocks };
 }

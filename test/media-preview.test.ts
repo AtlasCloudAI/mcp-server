@@ -93,6 +93,20 @@ test("缩放参数按存储厂商分派：阿里云用 x-oss-process，火山用
   assert.equal(withResizeParams("https://cdn.example.com/i/a.png"), null);
 });
 
+test("已经附上图片块时，提示模型不要再贴一次链接", () => {
+  // 线上实测：atlas-media 桶开了防盗链，只放行 atlascloud.ai 自己的域名。
+  // 服务端抓取不带 Referer 所以拿得到图；模型若在总结里再写一次
+  // ![](url)，客户端带着 chatgpt.com 的 Referer 去拉就是 403，
+  // 用户看到的是「一张好图 + 一个破图」。
+  const withPreview = playbackGuidance(new Set(["image" as const]), 1);
+  assert.ok(withPreview, "附了图片块就该给指引");
+  assert.match(withPreview, /already attached/i);
+  assert.match(withPreview, /403/);
+
+  // 一张都没附上时不该说这些 —— 那时候链接是用户唯一的出路。
+  assert.equal(playbackGuidance(new Set(["image" as const]), 0), null);
+});
+
 test("视频给的是下载指引，不是「在浏览器里打开」", () => {
   const text = playbackGuidance(new Set(["video" as const]));
   assert.ok(text);

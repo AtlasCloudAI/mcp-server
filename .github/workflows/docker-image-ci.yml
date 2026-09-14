@@ -1,0 +1,119 @@
+# 构建发布镜像并推到 registry.atlascloud.ai。
+#
+# 只有两个触发方式，都要求对本仓有写权限——公开仓库里外部 PR 永远拿不到下面的凭据：
+#   - push 一个 vX.Y.Z 标签（正式发布走这条）
+#   - 手动 workflow_dispatch 填版本号（标签已存在但 CI 没触发时补构建）
+#
+# 这个 workflow 只构建和推送，不部署。部署是运维按 deploy/kubernetes/README.md 走
+# kustomize，把这里产出的标签填进 production overlay。
+
+name: Docker Image Build CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号，形如 v2.2.0"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  docker_build:
+    # 用 GitHub 托管 runner，不要换成自建那台：机房出网 DNS 丢包严重，
+    # 登录 registry.atlascloud.ai 时解析 dockerauth-*.aliyuncs.com 会反复
+    # i/o timeout，构建连续失败（2026-08 运维确认，官网那条 workflow 同因换的）。
+    # 本 job 只需要公网（npm + 阿里云 registry），不碰内网。
+    runs-on: ubuntu-latest
+
+    # 绑定 production 环境：registry 凭据只存在这个环境里，
+    # 本仓是公开仓，这样 sync-models 之类的其它 workflow 读不到它们。
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate the release tag
+        id: tag
+        env:
+          # 经 env 注入再由 shell 展开，不把表达式直接拼进脚本
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          value="${INPUT_VERSION:-$REF_NAME}"
+          # 标签会进镜像引用和 k8s 清单，所以只收 vX.Y.Z——
+          # 之前手工构建出的 20260910-preview-logs 这类日期串无法对应到一次提交。
+          if ! printf '%s' "$value" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::版本号必须形如 v2.2.0 或 v2.2.0-rc.1，收到的是 '${value}'"
+            exit 1
+          fi
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
+
+      - name: Release tag must match package.json
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "$TAG" ]; then
+            echo "::error::package.json 是 ${pkg}，标签是 ${TAG}。先把 package.json 的 version 改成 ${TAG#v}、提交、再打标签。"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Log in to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ vars.DOCKER_REGISTRY }}/vcv-dg/atlascloud-mcp-openai-plugin:${{ steps.tag.outputs.value }}
+
+      - name: Record the image reference
+        env:
+          REGISTRY: ${{ vars.DOCKER_REGISTRY }}
+          TAG: ${{ steps.tag.outputs.value }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          # 写进运行摘要，运维直接从这里复制，不用再去 registry 里翻。
+          {
+            echo "## 发布镜像"
+            echo
+            echo "填进 \`deploy/kubernetes/production.example/kustomization.yaml\` 的 \`newTag\`："
+            echo
+            echo '```text'
+            echo "${TAG}"
+            echo '```'
+            echo
+            echo "完整引用（按 digest 固定，推荐用于生产）："
+            echo
+            echo '```text'
+            echo "${REGISTRY}/vcv-dg/atlascloud-mcp-openai-plugin@${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

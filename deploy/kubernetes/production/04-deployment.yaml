@@ -1,0 +1,135 @@
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-mcp
+  namespace: atlas-mcp
+  labels:
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/name: atlas-mcp
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mcp
+      app.kubernetes.io/name: atlas-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: mcp
+        app.kubernetes.io/name: atlas-mcp
+    spec:
+      automountServiceAccountToken: false
+      # ⚠️ 环境相关：hostAliases 无法由 ConfigMap 注入，切环境时需手动改 IP/域名
+      # hostAliases:
+      #   - ip: 10.233.13.210
+      #     hostnames:
+      #       - auth.atlascloud.ai
+      #       - mcp.atlascloud.ai
+      imagePullSecrets:
+        - name: atlas-registry-secret
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: mcp
+          args:
+            - node
+            - dist/http.js
+          # ⚠️ 环境相关：镜像仓库地址 / tag 随环境调整
+          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin:v2.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+              protocol: TCP
+          envFrom:
+            # 一次性注入 ConfigMap 中的全部地址 / 账号标识配置
+            - configMapRef:
+                name: atlas-mcp-config
+          env:
+            # ---- 仅敏感项走 Secret ----
+            - name: MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: credential-encryption-keys-json
+            - name: MCP_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: redis-url
+            - name: MCP_GENERATION_CONFIRMATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: generation-confirmation-secret
+            - name: OPENAI_APPS_CHALLENGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: openai-challenge-token
+            - name: MCP_TOKEN_EXCHANGE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-mcp-token-exchange
+                  key: client-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+              # ⚠️ 环境相关：探针 Host 头需与 MCP_ALLOWED_HOSTS 保持一致
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-mcp.atlascloud.ai
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              scheme: HTTP
+              httpHeaders:
+                - name: Host
+                  value: atlascloud-mcp.atlascloud.ai
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi

@@ -1,0 +1,41 @@
+# ConfigMap：地址 / 域名 / 账号标识等环境相关配置（非敏感）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atlas-mcp-config
+  namespace: atlas-mcp
+data:
+  # ---- 对外服务地址 ----
+  MCP_PUBLIC_URL: "https://atlascloud-mcp.atlascloud.ai/mcp"
+  MCP_ALLOWED_HOSTS: "atlascloud-mcp.atlascloud.ai"
+  MCP_OAUTH_AUDIENCE: "https://atlascloud-mcp.atlascloud.ai/mcp"
+
+  # ---- Auth 认证服务地址 ----
+  MCP_OAUTH_ISSUER: "https://auth.atlascloud.ai"
+  MCP_OAUTH_JWKS_URI: "https://auth.atlascloud.ai/jwks"
+  MCP_OAUTH_ENDPOINT_HOSTS: "auth.atlascloud.ai"
+  MCP_TOKEN_EXCHANGE_URL: "https://auth.atlascloud.ai/token"
+
+  # ---- OAuth 客户端（账号标识，非敏感；密钥在 Secret 中）----
+  MCP_TOKEN_EXCHANGE_CLIENT_ID: "atlas-mcp-server"
+  MCP_TOKEN_EXCHANGE_RESOURCE: "https://api.atlascloud.ai"
+  MCP_OAUTH_ALGORITHMS: "RS256"
+
+  # ---- 后端 API 地址（集群内 Service DNS）----
+  ATLASCLOUD_API_BASE_URL: "http://backend.atlascloud.svc.cluster.local:9099"
+  ATLASCLOUD_GENERATION_API_BASE_URL: "http://aiproxy-service.atlascloud.svc.cluster.local"
+
+  # ---- 跨域白名单 ----
+  MCP_ALLOWED_ORIGINS: "https://chatgpt.com,https://chat.openai.com,https://platform.openai.com"
+
+  # ---- 凭证存储模式（Redis 连接串在 Secret 中）----
+  MCP_CREDENTIAL_MODE: "oauth-exchange"
+  MCP_CREDENTIAL_REDIS_PREFIX: "atlascloud:openai-plugin:credential"
+  MCP_IDEMPOTENCY_BACKEND: "redis"
+
+  # ---- 运行参数 ----
+  NODE_ENV: "production"
+  PLUGIN_RELEASE_TIER: "staging"
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  MCP_TRUST_PROXY: "1"

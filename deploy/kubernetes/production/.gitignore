@@ -1,0 +1,6 @@
+# 真实凭据永远不进这个仓库——它是公开的。
+# 只有 *.example.yaml 会被提交；填好真值的那份留在本地或密钥管理里。
+02-secrets.yaml
+registry-secret.yaml
+*-secret.yaml
+!*.example.yaml

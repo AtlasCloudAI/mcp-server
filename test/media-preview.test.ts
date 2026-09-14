@@ -40,6 +40,35 @@ test("缩略参数保留原有 query，且不覆盖已有的 x-oss-process", () 
   );
 });
 
+test("没有扩展名的产出 URL 也要尝试预览，判据是 Content-Type 不是后缀", async () => {
+  // 线上真实日志：「1 output(s), 0 image(s), attempted 0, attached 0」——
+  // 有产出却一次都没试，因为签名 URL 没有 .png 后缀被归成了 other。
+  const fetched: string[] = [];
+  const fakeFetch = (async (input: string | URL) => {
+    fetched.push(String(input));
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/png", "content-length": "3" },
+    });
+  }) as unknown as typeof fetch;
+
+  const previous = process.env.MCP_MEDIA_PREVIEW_HOSTS;
+  process.env.MCP_MEDIA_PREVIEW_HOSTS = ".aliyuncs.com";
+  try {
+    const block = await buildImagePreview(
+      "https://b.oss-cn-hangzhou.aliyuncs.com/generations/abc123?Expires=1",
+      { fetcher: fakeFetch }
+    );
+    assert.ok(block, "没有扩展名不该直接放弃");
+    assert.equal(block.type, "image");
+    assert.equal(block.mimeType, "image/png");
+    assert.ok(fetched.length > 0, "应该真的发起过抓取");
+  } finally {
+    if (previous === undefined) delete process.env.MCP_MEDIA_PREVIEW_HOSTS;
+    else process.env.MCP_MEDIA_PREVIEW_HOSTS = previous;
+  }
+});
+
 test("缩放参数按存储厂商分派：阿里云用 x-oss-process，火山用 x-tos-process", () => {
   // 字节系模型（seedream、seedance）的产出直接落在火山 TOS 上。
   // 这里如果发 x-oss-process，TOS 会把它当成无关查询参数忽略，

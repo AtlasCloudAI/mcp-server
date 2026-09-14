@@ -251,8 +251,8 @@ Use this after submitting a generation request to check if the result is ready.
 If the status is still "processing" or "starting", wait a moment and try again.
 
 When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and any image is also attached as an image block. You should then:
-1. Let the attached image speak for itself - do not re-render it as a markdown image. These object URLs are hotlink-protected, so a copy loaded from the chat returns 403 and shows up as a broken image beside the one that worked.
-2. State each URL once as plain text, and offer to download it (curl or wget send no Referer and therefore work).
+1. Present the image to the user. Any image is also attached as an image block; whether that block is displayed is up to the client, so do not assume the user has already seen it.
+2. Give the URL, and offer to download it (curl or wget send no Referer, so they work even on buckets that refuse a click from the chat).
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -302,7 +302,7 @@ Examples:
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
-          const guidance = playbackGuidance(kinds, previewBlocks.length);
+          const guidance = playbackGuidance(kinds);
           if (guidance) {
             lines.push(`\n${guidance}`);
           } else {

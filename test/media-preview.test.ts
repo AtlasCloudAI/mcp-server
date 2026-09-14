@@ -93,11 +93,19 @@ test("缩放参数按存储厂商分派：阿里云用 x-oss-process，火山用
   assert.equal(withResizeParams("https://cdn.example.com/i/a.png"), null);
 });
 
-test("提示语不替客户端决定图片该不该呈现", () => {
-  // 曾经这里会在附上图片块时叫模型「别再渲染一次」。线上实测的后果是
-  // 模型照做、一张图都不给 —— 比原先「一张好图旁边一个破图」更糟。
-  // 服务端看不到客户端会不会显示图片块，这个判断就不该由它来下。
-  assert.equal(playbackGuidance(new Set(["image" as const])), null);
+test("图片走「下载到本地再展示」，理由是下载不带 Referer", () => {
+  // atlas-media 桶实测：带 chatgpt.com 的 Referer 403，不带 206。
+  // 直接调 Atlas API 的那条 skill 路径一直好用，正是因为它把文件存到了本地。
+  const note = playbackGuidance(new Set(["image" as const]));
+  assert.ok(note);
+  assert.match(note, /curl -L -o/);
+  assert.match(note, /403/);
+  // 不能写文件的客户端要有退路，不能只剩一个打不开的链接。
+  assert.match(note, /cannot write files/i);
+
+  // 这里【不】断言「叫模型别渲染图片块」—— 2.4.1 那么写过，
+  // 线上结果是模型什么都不给。呈现是客户端的事，服务端不下这个判断。
+  assert.doesNotMatch(note, /do not render|already seen/i);
 });
 
 test("视频给的是下载指引，不是「在浏览器里打开」", () => {
@@ -107,7 +115,8 @@ test("视频给的是下载指引，不是「在浏览器里打开」", () => {
   assert.match(text, /curl -L -o/);
   assert.match(text, /cannot be displayed/i);
 
-  assert.equal(playbackGuidance(new Set(["image" as const])), null);
+  // 图片的指引归上一个测试管（现在也要下载，理由不同：防盗链）。
+  // 这里只确认「什么产出都没有」时不硬塞一段话。
   assert.equal(playbackGuidance(new Set()), null);
 });
 

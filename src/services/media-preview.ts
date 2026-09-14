@@ -246,6 +246,16 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
  */
 export function playbackGuidance(kinds: Set<OutputKind>): string | null {
   const notes: string[] = [];
+  if (kinds.has("image")) {
+    notes.push(
+      "Save the image into the user's working directory and show them that local file: " +
+        "`curl -L -o <descriptive-name>.png '<url>'`. Downloading is what makes it " +
+        "viewable — these object URLs are hotlink-protected, so a request carrying a " +
+        "Referer (which is what a click from this chat sends) can come back 403, while a " +
+        "download sends none. Skip the download only if you cannot write files; then give " +
+        "the URL and say it may not open directly."
+    );
+  }
   if (kinds.has("video")) {
     notes.push(
       "Video cannot be displayed in this conversation. Offer to save it to the user's " +

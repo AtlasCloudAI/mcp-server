@@ -21,6 +21,10 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "flac", "aac", "ogg", "m4a", "op
 
 export type OutputKind = "image" | "video" | "audio" | "other";
 
+type BinaryFetcher = NonNullable<
+  Parameters<typeof fetchExternalBinary>[1]
+>["fetcher"];
+
 export interface ImagePreviewBlock {
   type: "image";
   data: string;
@@ -145,7 +149,13 @@ function mimeFor(contentType: string | null, url: string): string | null {
  * that has image processing switched off, an object larger than the cap — none
  * of those should turn a successful generation into a failed tool call.
  */
-export async function buildImagePreview(url: string): Promise<ImagePreviewBlock | null> {
+export async function buildImagePreview(
+  url: string,
+  // 测试注入用。生产路径不传，走 fetchExternalBinary 自己的默认实现。
+  // 类型从 fetchExternalBinary 推导：那边引的是 undici 的 fetch，
+  // 这边直接写 typeof fetch 会解析到全局那个，两者不兼容。
+  options: { fetcher?: BinaryFetcher } = {}
+): Promise<ImagePreviewBlock | null> {
   // Resized first. If the bucket has no image processing the request 400s, and
   // the original is still worth trying — it just costs more context.
   const candidates = [withResizeParams(url), url].filter(
@@ -155,7 +165,9 @@ export async function buildImagePreview(url: string): Promise<ImagePreviewBlock 
   for (const candidate of candidates) {
     const resized = candidate !== url;
     try {
-      const { bytes, contentType } = await fetchExternalBinary(candidate);
+      const { bytes, contentType } = await fetchExternalBinary(candidate, {
+        fetcher: options.fetcher,
+      });
       const mimeType = mimeFor(contentType, url);
       if (!mimeType) {
         logPreview(
@@ -191,12 +203,25 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
   if (!previewsEnabled()) return [];
   const limit = maxPreviews();
   if (limit === 0) return [];
-  const images = urls.filter((url) => classifyOutput(url) === "image");
-  const targets = images.slice(0, limit);
+  // 后缀只是线索，不是判据。签名过的对象 URL 经常没有扩展名
+  // （".../generations/abc123?Expires=…"），按后缀筛会把它归成 other 直接丢掉 ——
+  // 表现就是「有产出、0 张图、尝试 0 次」，而这恰恰是线上真实发生过的一行日志。
+  //
+  // 所以认得出是图片的、以及认不出类型的，都当候选试一次；真正的判据是抓回来的
+  // Content-Type，buildImagePreview 里那道闸会把不是图片的挡掉。
+  // 认得出是视频/音频的不试 —— 那是确定的非图片，省一次无谓的抓取。
+  const byExtension = urls.filter((url) => classifyOutput(url) === "image");
+  const candidates = urls.filter((url) => {
+    const kind = classifyOutput(url);
+    return kind === "image" || kind === "other";
+  });
+  const targets = candidates.slice(0, limit);
   const settled = await Promise.all(targets.map((url) => buildImagePreview(url)));
   const blocks = settled.filter((block): block is ImagePreviewBlock => block !== null);
   logPreview(
-    `${urls.length} output(s), ${images.length} image(s), attempted ${targets.length}, attached ${blocks.length}`
+    `${urls.length} output(s), ${candidates.length} candidate(s) ` +
+      `(${byExtension.length} by extension), attempted ${targets.length}, ` +
+      `attached ${blocks.length}`
   );
   return blocks;
 }

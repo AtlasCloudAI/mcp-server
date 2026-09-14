@@ -1,6 +1,6 @@
 {
   "name": "atlascloud-mcp",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Secure local and remote MCP server for Atlas Cloud AI media generation, model discovery, prediction status, and billing data.",
   "type": "module",
   "main": "dist/index.js",

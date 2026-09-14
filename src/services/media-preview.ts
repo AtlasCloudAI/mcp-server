@@ -253,14 +253,17 @@ export function playbackGuidance(
   if (kinds.has("video")) {
     notes.push(
       "Video cannot be displayed in this conversation. Offer to save it to the user's " +
-        "working directory (`curl -L -o <name>.mp4 '<url>'`) so they can open it locally — " +
-        "opening the URL in a browser downloads the file rather than playing it."
+        "working directory (`curl -L -o <name>.mp4 '<url>'`) so they can open it locally. " +
+        "Do not tell them to open the URL in a browser: some output buckets are " +
+        "hotlink-protected and refuse a request that carries a Referer, so a click from " +
+        "the chat can come back 403. A download sends none and always works."
     );
   }
   if (kinds.has("other")) {
     notes.push(
       "Some outputs are not images, video or audio (for example 3D assets such as GLB or " +
-        "OBJ). Offer to download those to the user's working directory as well."
+        "OBJ). Offer to download those to the user's working directory as well — " +
+        "for the same reason: a download carries no Referer, a click from the chat may."
     );
   }
   return notes.length > 0 ? notes.join("\n") : null;

@@ -6,7 +6,18 @@ import { TOOL_POLICIES, REMOTE_TOOL_NAMES } from "../src/tool-policy.js";
 import { SERVER_VERSION } from "../src/version.js";
 
 const OUT = process.argv[2];
-const SCHEMA_URL = "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json";
+
+// 门户和 OpenAI 自己发布的 schema 在这个地址上互相矛盾：
+//   - 门户上传校验报错要求 .../apps-sdk/schemas/chatgpt-app-submission.v1.json
+//   - 但该地址 301 跳到 .../plugins/schemas/...，而那份文档里 $schema 的 const
+//     写的正是 plugins 那个地址
+// 默认按门户的报错来（那才是实际挡住提交的一方）。哪天门户改口，
+// 加第二个参数 plugins 重新生成即可：
+//   npx tsx scripts/generate-app-submission.ts <出口文件> plugins
+const SCHEMA_URL =
+  process.argv[3] === "plugins"
+    ? "https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json"
+    : "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json";
 
 // 三条 justification 从策略事实源派生：不手写，避免和代码漂
 function justify(name: string) {

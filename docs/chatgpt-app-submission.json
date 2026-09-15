@@ -1,0 +1,274 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "Atlas Cloud",
+    "subtitle": "Image, video & audio in chat",
+    "description": "Browse the live Atlas Cloud model catalog and run image, video, audio and transcription jobs straight from chat. You sign in once in the browser with your Atlas account, so there is no API key to copy or paste and generation is billed to your own balance. Small jobs run straight away; an expensive job returns a quote and waits for your explicit confirmation before anything is charged. Also bundles the Atlas Cloud API integration guide and prompt-craft skills for building Atlas into your own project.",
+    "category": "PRODUCTIVITY",
+    "developer_name": "Atlas Cloud",
+    "website_url": "https://www.atlascloud.ai/",
+    "privacy_policy_url": "https://www.atlascloud.ai/privacy",
+    "logo_url": "https://raw.githubusercontent.com/AtlasCloudAI/atlas-cloud-plugin/v0.6.0/plugins/atlas-cloud/assets/app-icon.svg"
+  },
+  "remote_mcp": {
+    "mcp_server_url": "https://mcp.atlascloud.ai/mcp",
+    "resource_metadata_url": "https://mcp.atlascloud.ai/.well-known/oauth-protected-resource",
+    "authorization_server": "https://auth.atlascloud.ai",
+    "client_registration": "CIMD",
+    "pkce_method": "S256",
+    "token_exchange_grant": "urn:ietf:params:oauth:grant-type:token-exchange",
+    "scopes_advertised": [
+      "tasks:read"
+    ],
+    "auto_submit_limit_usd": 1
+  },
+  "tools": {
+    "atlas_search_docs": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads the bounded Atlas model catalog and documentation without changing account or public state. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": null
+    },
+    "atlas_list_models": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Lists the bounded Atlas model catalog and does not mutate any state. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": null
+    },
+    "atlas_get_model_info": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads one model's catalog metadata, schema, and documentation without mutation. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": null
+    },
+    "atlas_generate_image": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Creates a billable external generation task and asset; a stable idempotency key prevents duplicate effects. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    },
+    "atlas_generate_video": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Creates a billable external generation task and asset; a stable idempotency key prevents duplicate effects. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    },
+    "atlas_generate_audio": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Creates a billable external audio task and asset; a stable idempotency key prevents duplicate effects. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    },
+    "atlas_transcribe_audio": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Creates a billable external transcription task; a stable idempotency key prevents duplicate effects. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    },
+    "atlas_get_prediction": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads a specific Atlas prediction and does not alter task or asset state. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "tasks:read"
+    },
+    "atlas_get_balance": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads the authenticated Atlas account balance without mutation. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "billing:read"
+    },
+    "atlas_get_model_usage": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads bounded usage records for the authenticated Atlas account without mutation. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "billing:read"
+    },
+    "atlas_get_model_costs": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads bounded cost records for the authenticated Atlas account without mutation. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "billing:read"
+    },
+    "atlas_quick_generate": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Resolves exactly one model before creating a billable external task; a stable idempotency key prevents duplicates. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Connection and authorization smoke test. A read-only catalog call confirms the OAuth sign-in completed and the MCP session is live. No charge.",
+      "user_prompt": "List the image generation models available on Atlas Cloud",
+      "tools_triggered": "atlas_list_models",
+      "expected_output": "A list of image models with model IDs and capability labels. $0 charged."
+    },
+    {
+      "description": "Model detail lookup. Returns the full input schema, enums, defaults and pricing for one model. No charge.",
+      "user_prompt": "Show me the parameters and pricing for bytedance/seedream-v5.0-lite",
+      "tools_triggered": "atlas_get_model_info",
+      "expected_output": "Input schema with enum values and defaults, plus per-generation pricing. $0 charged."
+    },
+    {
+      "description": "Low-cost generation under the spend limit submits directly without a confirmation round-trip, reports the actual charge, and saves the image locally so it renders inline.",
+      "user_prompt": "Use seedream to generate a 512x512 image of an orange cat sitting on a windowsill",
+      "tools_triggered": "atlas_generate_image",
+      "expected_output": "No confirmation prompt, because the quote of USD 0.0315 is under the USD 1 auto-submit limit. The image is shown in the conversation and the actual charge is stated."
+    },
+    {
+      "description": "Billing attribution. The balance returned belongs to the signed-in user's own Atlas account, demonstrating per-user billing rather than a shared service account. No charge.",
+      "user_prompt": "Check my Atlas account balance",
+      "tools_triggered": "atlas_get_balance",
+      "expected_output": "The authenticated user's own balance. $0 charged."
+    },
+    {
+      "description": "Asynchronous result retrieval using the prediction ID from the previous generation. No charge.",
+      "user_prompt": "Use atlas_get_prediction to check the result of the task you just submitted",
+      "tools_triggered": "atlas_get_prediction",
+      "expected_output": "status: completed with the output URL. $0 charged."
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Unknown model ID is rejected before submission. The ID is validated against the live catalog; nothing is submitted and nothing is charged.",
+      "user_prompt": "Generate an image with openai/this-model-does-not-exist",
+      "tools_triggered": "atlas_generate_image",
+      "expected_output": "A clear 'model not found' error. No prediction ID, $0 charged."
+    },
+    {
+      "description": "Missing required parameter fails schema validation before submission; the error names the missing field. Nothing is charged.",
+      "user_prompt": "Generate an image with seedream but do not give it any prompt",
+      "tools_triggered": "atlas_generate_image",
+      "expected_output": "Validation error naming the missing required field. No prediction ID, $0 charged."
+    },
+    {
+      "description": "Generation at or above the auto-submit limit (USD 1 in production) stops at a quote. The server returns the price and a confirmation token and charges nothing; only an explicit user confirmation in a later turn may submit. The model cannot bypass this, and words like continue or retry are not treated as consent.",
+      "user_prompt": "Generate a 10-second 1080p video with seedance",
+      "tools_triggered": "atlas_generate_video",
+      "expected_output": "A quote of roughly USD 5.94 (above the USD 1 limit) plus a confirmation_token, and no prediction ID. $0 is charged unless the reviewer explicitly confirms in a following message."
+    }
+  ],
+  "source_snapshot": {
+    "repository": "https://github.com/AtlasCloudAI/mcp-server",
+    "branch": "combo/oauth-exchange-20260907",
+    "server_version": "2.5.0",
+    "remote_tool_count": 12,
+    "note": "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_chat and atlas_upload_media, which are not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
+    "plugin_repository": "https://github.com/AtlasCloudAI/atlas-cloud-plugin",
+    "plugin_version": "0.6.0",
+    "skills": [
+      "media-generation",
+      "seedance-skill",
+      "universal-video-prompt-skill"
+    ]
+  }
+}

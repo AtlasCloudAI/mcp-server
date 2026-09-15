@@ -9,6 +9,10 @@
     "atlascloud-mcp-http": "dist/http.js",
     "atlascloud-mcp-auth": "dist/auth.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "start": "node dist/index.js",
     "start:http": "node dist/http.js",

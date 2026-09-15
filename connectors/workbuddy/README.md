@@ -20,12 +20,46 @@ connectors/workbuddy/
 
 stdio 模式暴露 **14 个工具**，比远程多 `atlas_chat` 和 `atlas_upload_media`。
 
-### 上线前必须先做的一件事
+### 上线路径：先测后放，别一步到生产
 
 `mcp.json` 钉的是 `atlascloud-mcp@2.5.0`，**这个版本还没发到 npm**。
-npm 上最新是 `1.7.0`（2026-08-27 发布，是 main 分支那套旧服务，不是本分支）。
+npm 上最新是 `1.7.0`（2026-08-27 发布，是 main 分支那套旧服务，不是本分支），
+近 30 天有 3078 次下载。直接把 `latest` 翻到 2.5.0，等于给这些人换了个服务。
 
-不发这个版本，连接器装上去会拉到 1.7.0，行为完全不对。
+平台侧没有沙箱可用。连接器状态只有草稿 / 审核中 / 待发布 / 已发布 / 已驳回 /
+强制下架 / 已下架，没有测试态，所以绕不开 npm。按下面三步走。
+
+#### 第 1 步　本地冒烟，不碰 npm
+
+用 `mcp.local.json.调试用`（把里面的绝对路径改成你本机的），临时替换 `mcp.json`
+打包上传，**存草稿不要提审**。这一步只验三件事：WorkBuddy 的凭证表单弹不弹、
+环境变量注不注得进去、工具列表是不是 14 个。只在你自己这台机器上通。
+
+#### 第 2 步　发预发布版，验真实安装路径
+
+```bash
+npm version 2.5.0-beta.1 --no-git-tag-version
+npm run build && npm test
+npm publish --tag next          # ← --tag next 不能省
+```
+
+**`--tag next` 必须带。** 不带的话 npm 会把它设成 `latest`，那 3078 次下载就全
+拉到预发布版了。带了之后 `latest` 仍然是 1.7.0，只有显式写版本号的人才拿得到。
+
+然后把 `mcp.json` 里的版本改成 `atlascloud-mcp@2.5.0-beta.1`，重新打包上传草稿，
+走一遍真实安装路径：WorkBuddy 托管 Node 20 → npx 从 npm 拉包 → 注入 key → 起进程。
+
+#### 第 3 步　转正并提审
+
+测通之后把版本改回 `2.5.0`，`npm publish`（这次不带 `--tag`，正式接管 `latest`），
+`mcp.json` 钉回 `atlascloud-mcp@2.5.0`，重新打包提交审核。
+
+#### 发包前已经堵掉的坑
+
+`package.json` 原本没有 `files` 字段，`npm pack` 会把 `deploy/kubernetes/` 的生产
+清单、`test/`、`scripts/`、`.github/workflows/` 一起推到公共 npm 上，302 个文件。
+现已加上 `files: ["dist","README.md"]`，降到 158 个。打出的 tarball 已实测装上能跑，
+14 个工具。
 
 ## 为什么没用 OAuth（和 Codex 体验一致的那套）
 

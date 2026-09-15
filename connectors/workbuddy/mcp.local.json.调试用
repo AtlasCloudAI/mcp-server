@@ -1,0 +1,14 @@
+{
+  "_说明": "纯本地冒烟用，完全不碰 npm。把下面的绝对路径换成你本机 mcp-server-autolink 的 dist/index.js，然后临时改名为 mcp.json 打包上传（存草稿，别提审）。只能在你自己这台机器上连通，用来验 WorkBuddy 的表单、环境变量注入和工具列表这三件事是否正常。验完记得换回来。",
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/Users/zby/atlascloud/mcp-server-autolink/dist/index.js"],
+      "env": {
+        "ATLASCLOUD_API_KEY": "${ATLASCLOUD_API_KEY}"
+      },
+      "timeout": 30000
+    }
+  }
+}

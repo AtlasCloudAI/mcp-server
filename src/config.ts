@@ -129,7 +129,14 @@ const envSchema = z.object({
   MCP_TRUST_PROXY: z.string().default("0"),
   MCP_PREAUTH_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(10000).default(120),
   MCP_SUBJECT_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(10000).default(60),
-  OPENAI_APPS_CHALLENGE_TOKEN: z.string().min(1).max(1024).optional(),
+  // 挑战值按原文回给 OpenAI，多一个换行都算不匹配。运维多半是从门户复制粘贴到
+  // Secret 里的，YAML 块标量和复制操作都容易带上尾随空白，所以在入口就裁掉。
+  OPENAI_APPS_CHALLENGE_TOKEN: z
+    .string()
+    .max(1024)
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, "must not be blank")
+    .optional(),
   MCP_RESOURCE_DOCUMENTATION: z.string().url().optional(),
   MCP_CREDENTIAL_MODE: z
     .enum(["service-account", "subject-map", "redis-subject-map", "oauth-exchange"])

@@ -148,6 +148,20 @@ test("production rejects missing challenge token", () => {
   assert.throws(() => loadHttpServerConfig(env), /CHALLENGE_TOKEN is required/);
 });
 
+test("the challenge token is served without the whitespace a paste may carry", () => {
+  const env = productionEnv();
+  env.OPENAI_APPS_CHALLENGE_TOKEN = "  Jaf-portal-value\n";
+  // 门户比对的是原文。粘贴进 Secret 时带上的换行和空格必须在入口就消失，
+  // 否则域名验证会以一个肉眼看不出差别的理由失败。
+  assert.equal(loadHttpServerConfig(env).challengeToken, "Jaf-portal-value");
+});
+
+test("a challenge token that is only whitespace counts as missing", () => {
+  const env = productionEnv();
+  env.OPENAI_APPS_CHALLENGE_TOKEN = "   ";
+  assert.throws(() => loadHttpServerConfig(env), /must not be blank|CHALLENGE_TOKEN is required/);
+});
+
 test("production rejects missing generation confirmation secret", () => {
   const env = productionEnv();
   delete env.MCP_GENERATION_CONFIRMATION_SECRET;

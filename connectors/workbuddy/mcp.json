@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "atlascloud-mcp@2.5.0"],
+      "runtime": { "type": "node", "version": "20" },
+      "npmRegistries": [
+        "https://registry.npmmirror.com",
+        "https://registry.npmjs.org"
+      ],
+      "env": {
+        "ATLASCLOUD_API_KEY": "${ATLASCLOUD_API_KEY}"
+      },
+      "timeout": 30000
+    }
+  }
+}

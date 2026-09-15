@@ -1,0 +1,27 @@
+{
+  "name": "Atlas Cloud",
+  "name_zh": "Atlas Cloud 媒体生成",
+  "name_en": "Atlas Cloud",
+  "description": "Generate images, video, audio and transcriptions with 300+ AI models.",
+  "description_zh": "用自然语言调用 300+ 个 AI 模型，生成图片、视频、音频和转写，费用记在你自己的 Atlas 账户上。",
+  "description_en": "Call 300+ AI models in natural language to generate images, video, audio and transcriptions, billed to your own Atlas account.",
+  "source": "atlas-cloud",
+  "type": "mcp",
+  "version": "2.5.0",
+  "auth_mode": "token",
+  "minWorkbuddyVersion": "5.0.0",
+  "examples_zh": [
+    "列出 Atlas Cloud 上的图片生成模型",
+    "用 seedream 生成一张 512x512 的图，内容是一只橘猫坐在窗台上",
+    "用 seedance 生成一个 5 秒的海浪日落视频",
+    "查一下我的 Atlas 账户余额",
+    "把这段录音转成文字"
+  ],
+  "examples_en": [
+    "List the image generation models on Atlas Cloud",
+    "Use seedream to generate a 512x512 image of an orange cat on a windowsill",
+    "Generate a 5-second video of ocean waves at sunset with seedance",
+    "Check my Atlas account balance",
+    "Transcribe this audio recording"
+  ]
+}

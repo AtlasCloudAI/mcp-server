@@ -3,8 +3,14 @@
     "atlas-cloud": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "atlascloud-mcp@2.5.0"],
-      "runtime": { "type": "node", "version": "20" },
+      "args": [
+        "-y",
+        "atlascloud-mcp@2.5.0"
+      ],
+      "runtime": {
+        "type": "node",
+        "version": ">=20.18.1"
+      },
       "npmRegistries": [
         "https://registry.npmmirror.com",
         "https://registry.npmjs.org"

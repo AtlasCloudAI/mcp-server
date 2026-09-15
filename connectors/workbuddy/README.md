@@ -29,11 +29,26 @@ npm 上最新是 `1.7.0`（2026-08-27 发布，是 main 分支那套旧服务，
 平台侧没有沙箱可用。连接器状态只有草稿 / 审核中 / 待发布 / 已发布 / 已驳回 /
 强制下架 / 已下架，没有测试态，所以绕不开 npm。按下面三步走。
 
-#### 第 1 步　本地冒烟，不碰 npm
+#### 第 1 步　挂进本机客户端，不碰 npm 也不碰平台
 
-用 `mcp.local.json.调试用`（把里面的绝对路径改成你本机的），临时替换 `mcp.json`
-打包上传，**存草稿不要提审**。这一步只验三件事：WorkBuddy 的凭证表单弹不弹、
-环境变量注不注得进去、工具列表是不是 14 个。只在你自己这台机器上通。
+WorkBuddy 客户端把所有连接器的 MCP 配置汇总在 `~/.workbuddy/connectors/default/mcp.json`，
+键名是 `connector:<source>`。往里加一条指向本机构建产物的 stdio 配置就能直接测：
+
+```bash
+npm run build                                   # 在仓库根目录
+./connectors/workbuddy/本地挂载.sh <你的 API Key>
+# 完全退出 WorkBuddy（cmd+Q）再重开
+./connectors/workbuddy/本地挂载.sh --revert     # 测完还原
+```
+
+脚本会先备份再改，`--revert` 逐字节还原。API Key 会明文落在那个文件里，测完记得还原。
+
+客户端里也有「自定义连接器」面板（`连接器管理 → 自定义连接器`），效果一样，
+走 UI 更直观。企业管理员可以禁用这个入口，你是超管所以能放开。
+
+**这一步只能测 MCP 工具，测不了 Skill。** 本地 `~/.workbuddy/skills/` 是空的，
+市场里 228 个连接器的元信息一个都没落本地（`connector-meta.json` 本地 0 个），
+说明名称、描述、Skill 的装载都由服务端下发。Skill 要验，只能走平台包那条路。
 
 #### 第 2 步　发预发布版，验真实安装路径
 
@@ -53,6 +68,12 @@ npm publish --tag next          # ← --tag next 不能省
 
 测通之后把版本改回 `2.5.0`，`npm publish`（这次不带 `--tag`，正式接管 `latest`），
 `mcp.json` 钉回 `atlascloud-mcp@2.5.0`，重新打包提交审核。
+
+#### 顺带验到的两件事
+
+官方连接器就是这么写的，我们的格式没跑偏。`ai-hive` 的 `mcp.json` 是
+`npx -y <包名>@latest` 加 `runtime: {type: "node"}`，和我们第 2 步要提交的形状一致；
+228 个连接器里 49 个用 `token-schema.json`，自填凭证是条成熟路子不是偏门。
 
 #### 发包前已经堵掉的坑
 

@@ -21,7 +21,7 @@ function justify(name: string) {
       ? `Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.`
       : `Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.`,
     destructive_justification: a.destructiveHint
-      ? `Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (USD 1 in production, MCP_AUTOSUBMIT_MAX_USD) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. In practice images and short low-resolution clips run straight away, and every full-resolution video stops for confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice.`
+      ? `Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (MCP_AUTOSUBMIT_MAX_USD, USD 20 by default) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. The gate fails closed: a quote that cannot be obtained, or that the platform marks partial, also requires confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice.`
       : `Alters no state; repeated calls return the same information at no charge.`,
   };
 }
@@ -70,7 +70,7 @@ const doc = {
     pkce_method: "S256",
     token_exchange_grant: "urn:ietf:params:oauth:grant-type:token-exchange",
     scopes_advertised: ["tasks:read"],
-    auto_submit_limit_usd: 1,
+    auto_submit_limit_usd: 20,
   },
   tools,
   test_cases: [
@@ -85,7 +85,7 @@ const doc = {
     { description: "Low-cost generation under the spend limit submits directly without a confirmation round-trip, reports the actual charge, and saves the image locally so it renders inline.",
       user_prompt: "Use seedream to generate a 512x512 image of an orange cat sitting on a windowsill",
       tools_triggered: "atlas_generate_image",
-      expected_output: "No confirmation prompt, because the quote of USD 0.0315 is under the USD 1 auto-submit limit. The image is shown in the conversation and the actual charge is stated." },
+      expected_output: "No confirmation prompt, because the quote of USD 0.0315 is far under the USD 20 auto-submit limit. The image is shown in the conversation and the actual charge is stated." },
     { description: "Billing attribution. The balance returned belongs to the signed-in user's own Atlas account, demonstrating per-user billing rather than a shared service account. No charge.",
       user_prompt: "Check my Atlas account balance",
       tools_triggered: "atlas_get_balance",
@@ -104,10 +104,10 @@ const doc = {
       user_prompt: "Generate an image with seedream but do not give it any prompt",
       tools_triggered: "atlas_generate_image",
       expected_output: "Validation error naming the missing required field. No prediction ID, $0 charged." },
-    { description: "Generation at or above the auto-submit limit (USD 1 in production) stops at a quote. The server returns the price and a confirmation token and charges nothing; only an explicit user confirmation in a later turn may submit. The model cannot bypass this, and words like continue or retry are not treated as consent.",
-      user_prompt: "Generate a 10-second 1080p video with seedance",
+    { description: "Generation at or above the auto-submit limit (USD 20) stops at a quote. The server prices the request against the live catalog, returns the price plus a confirmation token, and charges nothing; only an explicit user confirmation in a later turn may submit. The model cannot bypass this, and words like continue or retry are not treated as consent. The model and parameters are spelled out on purpose so the quote is deterministic rather than left to the model's choice of resolution.",
+      user_prompt: "Use bytedance/seedance-2.5/text-to-video with resolution 4k-esr and duration 25 to generate a video of ocean waves at sunset",
       tools_triggered: "atlas_generate_video",
-      expected_output: "A quote of roughly USD 5.94 (above the USD 1 limit) plus a confirmation_token, and no prediction ID. $0 is charged unless the reviewer explicitly confirms in a following message." },
+      expected_output: "A quote of roughly USD 42.59 (above the USD 20 limit) plus a confirmation_token, and no prediction ID. $0 is charged unless the reviewer explicitly confirms in a following message." },
   ],
   source_snapshot: {
     repository: "https://github.com/AtlasCloudAI/mcp-server",

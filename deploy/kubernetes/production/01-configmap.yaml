@@ -33,13 +33,6 @@ data:
   MCP_CREDENTIAL_REDIS_PREFIX: "atlascloud:openai-plugin:credential"
   MCP_IDEMPOTENCY_BACKEND: "redis"
 
-  # ---- 计费闸门 ----
-  # 报价低于该金额直接提交并报出实际扣费；达到或超过则只返回报价 + confirmation
-  # token，必须用户在新一轮对话里明确确认才提交。图片（约 $0.03）和 480p 短片
-  # 直接跑，任何 1080p 视频（约 $5.9 起）都会先停下来报价。
-  # 留空则取代码默认值 20，对个人账户余额而言过高。
-  MCP_AUTOSUBMIT_MAX_USD: "1"
-
   # ---- 运行参数 ----
   NODE_ENV: "production"
   PLUGIN_RELEASE_TIER: "staging"

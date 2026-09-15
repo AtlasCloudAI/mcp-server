@@ -29,26 +29,42 @@ npm 上最新是 `1.7.0`（2026-08-27 发布，是 main 分支那套旧服务，
 平台侧没有沙箱可用。连接器状态只有草稿 / 审核中 / 待发布 / 已发布 / 已驳回 /
 强制下架 / 已下架，没有测试态，所以绕不开 npm。按下面三步走。
 
-#### 第 1 步　挂进本机客户端，不碰 npm 也不碰平台
+#### 第 1 步　在客户端里手动加，不碰 npm 也不碰平台
 
-WorkBuddy 客户端把所有连接器的 MCP 配置汇总在 `~/.workbuddy/connectors/default/mcp.json`，
-键名是 `connector:<source>`。往里加一条指向本机构建产物的 stdio 配置就能直接测：
+**必须用客户端的界面加，改配置文件没用 —— 这条已经实测过。**
 
-```bash
-npm run build                                   # 在仓库根目录
-./connectors/workbuddy/本地挂载.sh <你的 API Key>
-# 完全退出 WorkBuddy（cmd+Q）再重开
-./connectors/workbuddy/本地挂载.sh --revert     # 测完还原
+`~/.workbuddy/connectors/default/mcp.json` 看着像入口，里面有 192 条连接器配置，
+键名是 `connector:<source>`。往里加一条指向本机 `dist/index.js` 的 stdio 配置、
+重启客户端之后，**这条会被 app 原样抹掉**，文件退回 192 条。原因在 app 代码里写着：
+`connectors/default/` 是匿名态（`userId='default'`）目录，登录后连接器状态走
+`connector-states.v3.json` 加密存储，这份 mcp.json 每次启动由服务端配置重新生成。
+
+正确入口在客户端界面，两个地方：
+
+| 要测什么 | 路径 |
+|---|---|
+| MCP 工具 | 市场 → 连接器 tab → **自定义连接器** |
+| Skill | 市场 → 技能 tab → **添加技能** |
+
+另有 `设置 → 插件 → MCP 服务器`（文案 `plugins.mcpServersDesc`：「MCP 伺服器提供額外的
+工具和功能擴充套件」），也是一条可试的入口。
+
+两个入口都受企业策略管控（`connectorPanel.customConnectorDisabled`「企业管理员已禁止
+新增自定义连接器」、`GET_SKILL_UPLOAD_POLICY`）。你是超管，被挡的话自己放开。
+
+填 MCP 配置时用这份，指向本机构建产物，不依赖 npm：
+
+```json
+{
+  "type": "stdio",
+  "command": "node",
+  "args": ["/Users/zby/atlascloud/mcp-server-autolink/dist/index.js"],
+  "env": { "ATLASCLOUD_API_KEY": "<你的 key>" },
+  "timeout": 30000
+}
 ```
 
-脚本会先备份再改，`--revert` 逐字节还原。API Key 会明文落在那个文件里，测完记得还原。
-
-客户端里也有「自定义连接器」面板（`连接器管理 → 自定义连接器`），效果一样，
-走 UI 更直观。企业管理员可以禁用这个入口，你是超管所以能放开。
-
-**这一步只能测 MCP 工具，测不了 Skill。** 本地 `~/.workbuddy/skills/` 是空的，
-市场里 228 个连接器的元信息一个都没落本地（`connector-meta.json` 本地 0 个），
-说明名称、描述、Skill 的装载都由服务端下发。Skill 要验，只能走平台包那条路。
+跑之前先在仓库根目录 `npm run build`。连上之后应该能看到 14 个工具。
 
 #### 第 2 步　发预发布版，验真实安装路径
 

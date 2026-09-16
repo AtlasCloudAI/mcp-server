@@ -43,18 +43,41 @@ WorkBuddy 内置的 OAuth 客户端按 **RFC 7591 动态客户端注册**工作�
 而 `/jwks`、`/authorize`、`/token`、`/.well-known/*` 正常 ——
 说明 `auth.atlascloud.ai` 外面有一层路径白名单，应用改完不放行照样打不通。
 
-## 三、要做的三件事
+## 三、代码在哪
 
-### 1. 开放动态客户端注册
+授权服务器在 **`AtlasCloudTeam/kubedl`**，分支 `master`：
 
-**端点路径随意**，不必叫 `/oauth/register`。WorkBuddy 从发现文档里读
-`registration_endpoint`，填什么它就打什么。所以只要：
+```
+console/backend/pkg/authzserver/          授权服务器本体
+  metadata.go        发现文档字段（registration_endpoint 就缺在这里）
+  registry.go        客户端注册表：配置登记 + 元数据文档两个来源
+  flow.go / storage.go / strategy.go
+console/backend/pkg/routers/api/oidc.go   HTTP 端点挂载
+```
 
-- 在 `/.well-known/openid-configuration` 与
-  `/.well-known/oauth-authorization-server` 里公布 `registration_endpoint`
-- 该端点接受未鉴权的 `POST`（`initialAccessToken` 不强制）
+> ⚠️ 仓库里还有一条 `feat/oidc-provider` 分支（2026-08-18，`console/backend/pkg/oidcprovider/`），
+> **那是未合并的旧实现，不是生产代码**，别照它改。
 
-**请求形状**（WorkBuddy 实际会发的，公开原生客户端）：
+### 现在不声明注册端点是有意为之
+
+`metadata.go` 里写着：
+
+> 刻意不声明 `registration_endpoint`：客户端的选用优先级是
+> 预注册 → 元数据文档 → 动态注册，声明了元数据文档就不会走到动态注册。
+
+这个判断对**遵循 MCP 规范的客户端**成立，ChatGPT 和 Codex 就是这么走的。
+但 **WorkBuddy 不实现元数据文档（CIMD），它只做动态注册**，所以落不到这条优先级链上，
+直接卡死在第一步。这是要改的原因，不是原设计错了。
+
+## 四、要做的四件事
+
+### 1. 公布并实现 `registration_endpoint`
+
+- `metadata.go` 的 `Metadata` 结构加字段并在 `Metadata()` 里填值
+- `oidc.go` 挂一个 `POST` 路由
+- **端点路径随意**，WorkBuddy 从发现文档里读，现有端点一个都不用改名
+
+WorkBuddy 会发的请求（公开原生客户端）：
 
 ```json
 {
@@ -63,60 +86,46 @@ WorkBuddy 内置的 OAuth 客户端按 **RFC 7591 动态客户端注册**工作�
   "token_endpoint_auth_method": "none",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "redirect_uris": ["workbuddy://workbuddy/mcp/connector%3Aatlas-cloud/oauth/callback"]
+  "redirect_uris": ["http://127.0.0.1:{随机端口}/oauth/callback"]
 }
 ```
 
-**响应硬要求**：`201` + JSON，**除 `client_id` 外必须原样回显 `redirect_uris`**。
-这是 WorkBuddy 文档明写的，不回显它的流程会直接中断。
+响应硬要求：`201` + JSON，**除 `client_id` 外必须原样回显 `redirect_uris`**，
+否则 WorkBuddy 流程直接中断。**不要签发 `client_secret`**。
 
-```json
-{
-  "client_id": "…",
-  "redirect_uris": ["workbuddy://workbuddy/mcp/connector%3Aatlas-cloud/oauth/callback"],
-  "token_endpoint_auth_method": "none",
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"]
-}
-```
+注册是未鉴权入口，建议按 IP 限流（`ratelimit.go` 已有现成设施）。
 
-注意 **不要签发 client_secret**，这是公开客户端，安全性靠 PKCE。
-注册是未鉴权入口，建议按 IP 限流。
+### 2. `clientRegistry` 加第三个来源
 
-### 2. 回调地址白名单加两种形状
+现在 `registry.go` 的注释写明客户端有两个来源：配置登记的第一方客户端启动时全量加载，
+元数据文档 URL 标识的第三方客户端按需抓取。动态注册产生的客户端是第三种，
+需要落库并在多副本间共享，`Lookup` 走 DB 那一路。
 
-WorkBuddy 优先用私有协议；被拒时**自动回退一次**到环回地址：
+### 3. 回环回调按 RFC 8252 §7.3 匹配
 
-```
-workbuddy://workbuddy/mcp/connector%3Aatlas-cloud/oauth/callback
-http://127.0.0.1:{随机端口}/oauth/callback
-```
+WorkBuddy 每次用随机端口，注册和授权用的是同一个具体地址，
+但如果复用客户端就会出现端口不一致。RFC 8252 §7.3 明确要求：
+**回环重定向地址在匹配时必须忽略端口**。
 
-三个坑：
+这不是放宽安全策略，是原生应用场景下规范要求的做法。
+其余部分（scheme + host + path）仍然精确匹配，开放重定向的担心不成立。
 
-- `%3A` 是 `:` 的转义。规范要求 redirect_uri **按字符串精确匹配**，
-  不要先解码再比，否则匹配不上
-- 环回端口每次随机，不能钉死端口号；按「协议 + 主机 + 路径」匹配，端口放开
-- 路径是 `/oauth/callback`，和 ChatGPT 的 `/connector/oauth/{id}`、
-  Codex 的 `/callback/{12位随机串}` 都不是一个形状，不能复用现有规则
+### 4. 边缘网关放行注册路径
 
-私有协议那条如果实现成本高，只放行环回那条也能跑通（WorkBuddy 会自动回退），
-但会多一次失败往返。
+`auth.atlascloud.ai` 外面有一层路径白名单，把注册端点的路径加进去。
+判据：`/healthz`、`/me` 是应用里真实存在的路由，在生产同样 404。
 
-### 3. 边缘网关放行注册路径
+## 五、明确不用做的
 
-把 `registration_endpoint` 的路径加进 `auth.atlascloud.ai` 的白名单。
+| 项 | 为什么不用做 |
+|---|---|
+| 支持公开客户端 | **已支持**。`registry.go` 有 `Public` 标志，只有非公开客户端才要求 `SecretHash` |
+| PKCE S256 | 已支持并已在发现文档里声明 |
+| 支持 `workbuddy://` 私有协议回调 | **不必**。WorkBuddy 私有协议被拒后会自动回退一次到回环地址，只多一次失败往返 |
+| 改现有端点路径 | 不必，WorkBuddy 从发现文档读 |
+| 动 MCP server / 生产镜像 / K8s 清单 | 完全无关 |
 
-## 四、其余要求，现状已满足，无需改动
-
-- PKCE `S256` 必须支持 —— 已支持
-- 授权码一次性、有效期约 10 分钟
-- `access_token` 建议 1 小时；`refresh_token` 不少于 30 天，
-  过期后 WorkBuddy 会引导用户重新授权
-- 全部端点 HTTPS，错误按 OAuth 2.1 标准格式
-- `token_endpoint` 要接受 `token_endpoint_auth_method: none` 的公开客户端
-
-## 五、验收命令（改完照着跑，三条全过即可）
+## 六、验收命令（改完照着跑，三条全过即可）
 
 ```bash
 # 1. 发现文档公布了注册端点
@@ -132,7 +141,7 @@ curl -s -X POST "$REG" -H 'Content-Type: application/json' -d '{
   "token_endpoint_auth_method":"none",
   "grant_types":["authorization_code","refresh_token"],
   "response_types":["code"],
-  "redirect_uris":["workbuddy://workbuddy/mcp/connector%3Aatlas-cloud/oauth/callback"]
+  "redirect_uris":["http://127.0.0.1:51888/oauth/callback"]
 }' | python3 -m json.tool
 # 期望：有 client_id，且 redirect_uris 原样回显；没有 client_secret
 
@@ -140,12 +149,12 @@ curl -s -X POST "$REG" -H 'Content-Type: application/json' -d '{
 #    把 <CLIENT_ID> 换成上一步的值
 curl -s -o /dev/null -w '%{http_code}\n' \
   "https://auth.atlascloud.ai/authorize?client_id=<CLIENT_ID>&response_type=code\
-&redirect_uri=workbuddy%3A%2F%2Fworkbuddy%2Fmcp%2Fconnector%253Aatlas-cloud%2Foauth%2Fcallback\
+&redirect_uri=http%3A%2F%2F127.0.0.1%3A51888%2Foauth%2Fcallback\
 &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=tasks%3Aread"
 # 期望：302 跳登录页（现在是 401 invalid_client）
 ```
 
-## 六、我方已就绪的部分
+## 七、我方已就绪的部分
 
 MCP server 侧不用任何改动，发现链路已经通：
 
@@ -159,7 +168,7 @@ https://mcp.atlascloud.ai/.well-known/oauth-protected-resource
 拿到用户令牌后，MCP server 用 RFC 8693 令牌交换换成面向 API 的令牌，
 这条链路生产已跑通（Codex 就在用），与本次改造无关。
 
-## 七、不做的替代路线
+## 八、不做的替代路线
 
 WorkBuddy 也支持 `auth_mode: server-side` / `gateway`，由它云端托管 OAuth，
 我方不用改 OIDC，但要和腾讯 WorkBuddy 团队谈接入 —— 商务路径不是技术路径。
@@ -174,3 +183,4 @@ WorkBuddy 也支持 `auth_mode: server-side` / `gateway`，由它云端托管 OA
 
 - WorkBuddy 连接器规范：https://open.workbuddy.cn/docs/connector （见「MCP OAuth 流程」一节）
 - RFC 7591 动态客户端注册：https://www.rfc-editor.org/rfc/rfc7591
+- RFC 8252 §7.3 原生应用回环回调（端口必须忽略）：https://www.rfc-editor.org/rfc/rfc8252#section-7.3

@@ -3,44 +3,41 @@
 面向腾讯 WorkBuddy 开放平台的连接器包。规范见
 <https://open.workbuddy.cn/docs/connector>，提交入口 <https://open.workbuddy.cn/connector/publish>。
 
-## 当前方案：云端托管 OAuth（`auth_mode: server-side`）
+## 当前方案：标准 MCP OAuth（`auth_mode` 省略）
 
 ```
 connectors/workbuddy/
-├── connector-meta.json   必须，auth_mode: server-side
+├── connector-meta.json   必须，不声明 auth_mode = 走标准 MCP OAuth
 ├── mcp.json              必须，直连生产远程服务
 ├── icon.svg              必须
 └── skills/               三个 skill
 ```
 
-用户点「连接」→ WorkBuddy 服务端用预注册的 `client_id` 发起授权 → 浏览器跳
-`auth.atlascloud.ai` 用官网账号登录 → 回跳后 WorkBuddy 持有令牌 →
-桌面端带 Bearer 调 `https://mcp.atlascloud.ai/mcp`。**不装任何本地进程，不发 npm。**
+用户点「连接」→ 桌面端发现 PRM 与授权服务器元数据 → 动态注册客户端 →
+浏览器跳 `auth.atlascloud.ai` 授权 → 带 Bearer 调 `https://mcp.atlascloud.ai/mcp`。
+**不装本地进程，不发 npm，也不需要和腾讯做任何沟通。**
 
 远程档位暴露 **12 个工具**，比 stdio 少 `atlas_chat` 和 `atlas_upload_media`。
 
-### 为什么是托管模式而不是动态注册
+### 唯一卡点：授权服务器要实现动态注册
 
-WorkBuddy 桌面端内置官方 MCP TypeScript SDK 的 OAuth 实现。实测其打包代码：
+WorkBuddy 桌面端内置官方 MCP TypeScript SDK。实测其打包代码：`registerClient()` 在
+`metadata.registration_endpoint` 缺失时抛 `Incompatible auth server`，且搜不到任何
+`clientIdMetadataDocument` 代码路径 —— 它不实现 CIMD，我们现有的 CIMD 通道对它无效。
 
-- `registerClient()` 在 `metadata.registration_endpoint` 缺失时直接抛
-  `Incompatible auth server: does not support dynamic client registration`
-- 搜不到任何 `clientIdMetadataDocument` 代码路径，即**它的 SDK 版本不支持 CIMD**，
-  `client_id_metadata_document_supported` 只作为元数据 schema 的可选字段存在
-- 但 `clientInformation()` 有值时**整个跳过注册**
+这不是特例。市场缓存 236 个连接器里 142 个是远程且不自填凭证，抽查五个第三方
+（Canva、千图网、八爪鱼、FastMoss、分贝通）授权服务器**全部**提供动态注册端点。
+把分贝通和我们逐项对照，差距只有 `registration_endpoint` 一行。
 
-而平台按连接器下发 `oauth_client_id`、`oauth_redirect_url`、`oauth_app_name`
-（`GET /console/as/connector/user/`），授权走 WorkBuddy 自己的后端
-（`POST /v2/as/connector/oauth/{name}/start` 等）。这条路就是把 `clientInformation()`
-喂饱，因此不需要我方实现 RFC 7591。
+详见 `OAuth改造需求-给后端.md`，含验收命令与对照样板。
 
-我方成本从「新增注册端点 + 客户端落库」降到「加一条客户端配置」，
-详见 `OAuth改造需求-给后端.md`。
+### 走过的弯路
 
-### 前置依赖
-
-要 WorkBuddy 团队给 `oauth_redirect_url` 与 `client_id`，申请函见
-`给WorkBuddy团队-申请托管OAuth接入.md`。拿到后后端加一条配置即可。
+一度判断要走 `auth_mode: server-side` 云端托管 OAuth，理由是平台按连接器下发
+`oauth_client_id` / `oauth_redirect_url`。后来发现桌面端把这条路硬限制在
+`.mcp.it.woa.com` 等域名加两个内部企业 ID，用例全是腾讯自家产品，对外部开发者不适用。
+据此写过一封向腾讯索取回调地址的申请信，已删除 —— 动态注册模式下客户端自带 redirect_uri，
+不需要向平台索取任何参数。
 
 ## 曾经评估过的备选：用户自填 Token
 

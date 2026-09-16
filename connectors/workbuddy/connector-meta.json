@@ -8,8 +8,8 @@
   "source": "atlas-cloud",
   "type": "mcp",
   "version": "2.5.0",
-  "auth_mode": "token",
-  "minWorkbuddyVersion": "5.0.0",
+  "auth_mode": "server-side",
+  "minWorkbuddyVersion": "4.24.0",
   "examples_zh": [
     "列出 Atlas Cloud 上的图片生成模型",
     "用 seedream 生成一张 512x512 的图，内容是一只橘猫坐在窗台上",

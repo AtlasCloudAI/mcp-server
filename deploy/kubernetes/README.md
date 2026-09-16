@@ -18,7 +18,7 @@
 > |---|---|---|
 > | Deployments | 2 (`-mcp`, `-auth`) | 1 (`-mcp`) |
 > | Public hosts | 2 | 1 |
-> | Secret keys needed | 7+ | 3 (`redis-url`, `generation-confirmation-secret`, `openai-challenge-ticket`) plus `client-secret` in a separate Secret |
+> | Secret keys needed | 7+ | 3 (`redis-url`, `generation-confirmation-secret`, `openai-challenge-token`) plus `client-secret` in a separate Secret |
 > | What Redis holds | encrypted user API keys | **idempotency keys only** — exchanged tokens live in process memory (`src/services/token-exchange.ts`), never on disk |
 > | `credential-encryption-keys-json` | required, >=2 keys | **unused**; the production overlay deletes it |
 >
@@ -37,7 +37,7 @@ The manifest intentionally does not contain a Kubernetes Secret. Create `mcp-ser
 
 - `redis-password`
 - `redis-url`
-- `openai-challenge-ticket`
+- `openai-challenge-token`
 - `oidc-jwks-json`
 - `oidc-cookie-keys-json`
 - `oidc-users-json`
@@ -256,7 +256,7 @@ production authorization server character for character.
   password-less URL. Holds idempotency keys only.
 - `generation-confirmation-secret`: at least 32 random bytes, shared by every
   replica so a quote issued by one can be confirmed through another.
-- `openai-challenge-ticket`: the portal verification token.
+- `openai-challenge-token`: the portal verification token.
 
 `mcp-servers/atlas-mcp-token-exchange`:
 

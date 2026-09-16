@@ -206,7 +206,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: atlascloud-openai-plugin
-                  key: openai-challenge-ticket
+                  key: openai-challenge-token
             - name: MCP_ATLAS_SUBJECT_KEYS_JSON
               valueFrom:
                 secretKeyRef:

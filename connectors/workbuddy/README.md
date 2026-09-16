@@ -118,7 +118,16 @@ WorkBuddy 内置的 OAuth 管理器要求 **RFC 7591 动态客户端注册**。�
 WorkBuddy 要的两种都不匹配：私有协议 `workbuddy://workbuddy/mcp/connector%3A<source>/oauth/callback`
 协议就不对；回退的 `http://127.0.0.1:{port}/oauth/callback` 路径也对不上那条正则。
 
-要打通，授权服务需要改三处：
+**改造点不在本仓。** `auth.atlascloud.ai` 是官网生产 OIDC，随后端一起上线；
+本仓 `src/auth/` 那个自建授权服务器生产**不部署**（见 `deploy/kubernetes/生产部署手册.md`
+的入口表）。所以 `src/auth/app.ts` 里 `registration: { enabled: true }` 和 `/reg` 路由
+虽然都在，对生产没有任何作用。
+
+判据：`/healthz` 和 `/me` 是应用里真实存在的路由，在 `auth.atlascloud.ai` 上同样 404，
+而 `/jwks`、`/authorize`、`/token` 正常 —— 说明那些 404 来自边缘路径白名单，
+且生产跑的不是这份代码（代码里 enabled 的 `revocation`/`userinfo` 端点也没公布）。
+
+完整的改造清单见同目录 `OAuth改造需求-给后端.md`，要点是授权服务需要改三处：
 
 1. 挂出动态注册端点，并在 AS 元数据里公布 `registration_endpoint`。
    校验逻辑 `validateDynamicClientRegistration()` 已经写好了，但目前没有任何调用方，是死代码。

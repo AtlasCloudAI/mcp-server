@@ -26,13 +26,23 @@ https://mcp.atlascloud.ai/.well-known/oauth-protected-resource
 | 公开客户端 / 机密客户端 | 都支持 |
 | 资源指示符（RFC 8707） | 支持 |
 
-## 需要贵方提供
+## 需要贵方提供的只有一个参数
 
-1. **回调地址**（`oauth_redirect_url`）——我们登记到白名单后授权才会成功
-2. 希望使用的 **`client_id`**，以及是否需要我们签发 `client_secret`
-3. `oauth_app_name` 的填写要求
+**回调地址（`oauth_redirect_url`）。** 我们按 OAuth 规范做精确字符串匹配，
+所以需要贵方给出准确值，猜不得。
 
-拿到 1、2 之后我们当天就能完成客户端登记。
+`client_id` 与 `client_secret` **由我们签发**（我们是授权服务提供方），
+拿到回调地址后当天发给贵方，贵方填入连接器的 `oauth_client_id` 即可。
+是否需要 `client_secret` 请一并告知——公开客户端可以只用 `client_id` 加 PKCE。
+
+另外想确认两件事：
+
+1. `oauth_app_name` 的填写要求
+2. **OAuth 应用是在连接器过审后配置，还是草稿阶段就能配？**
+   如果草稿阶段可以，我们希望先联调通过再提交审核；如果必须过审后配，
+   我们会先提交，并请贵方在审核时知悉授权链路尚未联调。
+
+我们的连接器草稿已在开放平台建好，`source` 是 `atlas-cloud`。
 
 ## 为什么不走动态注册
 

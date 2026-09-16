@@ -26,9 +26,9 @@ WorkBuddy 支持两种 OAuth 接入：
 
 | 字段 | 值 |
 |---|---|
-| `client_id` | WorkBuddy 指定（待对方给） |
-| `client_secret` | 若对方要求机密客户端则签发；公开客户端则留空 |
-| `redirect_uris` | WorkBuddy 的 `oauth_redirect_url`（待对方给，固定 HTTPS 地址） |
+| `client_id` | **我方签发**（我们是提供方，像 GitHub 发 client_id 给接入方），建议 `workbuddy-connector` |
+| `client_secret` | 我方签发；若对方接受公开客户端则留空，靠 PKCE |
+| `redirect_uris` | **唯一需要等对方的字段**，WorkBuddy 的固定 HTTPS 回调地址。规范要求精确字符串匹配，不能猜也不能用通配 |
 | 授权类型 | `authorization_code` + `refresh_token` |
 | scope | `tasks:read` |
 | 资源 | `https://mcp.atlascloud.ai/mcp` |
@@ -48,7 +48,10 @@ PKCE `S256`、`authorization_code` + `refresh_token`、公开与机密客户端�
 
 ## 前置依赖
 
-要等 WorkBuddy 团队给出 `oauth_redirect_url` 与 `client_id`。
+只等 WorkBuddy 团队给出 `oauth_redirect_url` 一个参数。`client_id` 我方签发，不必等。
+
+**提前配置没有意义**：缺了正确的 redirect_uri，这条客户端登记跑不通任何流程，
+提前加一次、拿到地址再改一次，等于多一次发布。等地址到了一次配完即可。
 申请函见同目录 `给WorkBuddy团队-申请托管OAuth接入.md`。
 
 ## 验收

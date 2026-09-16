@@ -42,7 +42,15 @@ https://mcp.atlascloud.ai/.well-known/oauth-protected-resource
    如果草稿阶段可以，我们希望先联调通过再提交审核；如果必须过审后配，
    我们会先提交，并请贵方在审核时知悉授权链路尚未联调。
 
-我们的连接器草稿已在开放平台建好，`source` 是 `atlas-cloud`。
+我们的连接器草稿已在开放平台建好：
+
+| 项 | 值 |
+|---|---|
+| 连接器 ID | `oc_630b5b5c9e689e22` |
+| `source` | `atlas-cloud` |
+| 名称 | Atlas Cloud 媒体生成 |
+| 版本 | 2.5.0 |
+| 状态 | 草稿（未提交审核，等授权链路联调通过再提） |
 
 ## 为什么不走动态注册
 

@@ -80,7 +80,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: atlascloud-openai-plugin
-                  key: openai-challenge-token
+                  key: openai-challenge-ticket
             - name: MCP_TOKEN_EXCHANGE_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

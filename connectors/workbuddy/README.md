@@ -144,3 +144,20 @@ cd connectors/workbuddy && zip -r ../../atlas-cloud-workbuddy.zip . -x '.*'
 
 限制 20MB，本包约 600KB。上传后平台自动解包并生成连接器 ID，再提交审核，
 审核通过进连接器市场，后续更新重新提交，通常 10~15 分钟同步生效。
+
+## 技能单独走技能市场
+
+连接器包里的 `skills/` 会随连接器一起装。但连接器要等 npm 那步，技能可以先单独上：
+市场 → 技能 tab → 右上角「添加技能」，传 zip。
+
+```bash
+./connectors/workbuddy/打技能包.sh          # 输出到 connectors/workbuddy/dist-skills/
+```
+
+每个技能一个 zip，顶层是 `{skill-name}/SKILL.md`。官方必填 frontmatter 是
+`description`、`description_zh`、`description_en`、`version`、`author`，这五个原先
+全缺（skill 是从 Codex 插件仓搬过来的，那边不要求），已补齐。
+`category` 官方没给枚举值，字段表里也不是必填，故意没加，免得填错值解析失败。
+
+解析失败时官方让对照「技能基础结构」「子资源目录说明」自查，实在不行发
+openworkbuddy@tencent.com 或进开放平台首页的社群。

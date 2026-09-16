@@ -6,6 +6,12 @@ description: >-
   Use for consistent people, products, objects, food, or scenes; storyboard-to-
   video; reference-to-video; first-and-last-frame image-to-video; extensions;
   and Atlas Cloud media generation.
+display_name: "Seedance 视频分镜"
+display_name_en: "Seedance Storyboard to Video"
+description_zh: "用 Seedream 出分镜、Seedance 出片，做人物/产品/场景一致的可控视频，支持参考图生视频、首尾帧和续写。"
+description_en: "Storyboard with Seedream and shoot with Seedance for controllable video with consistent people, products and scenes, including reference-to-video, first-and-last-frame and extensions."
+version: 2.5.0
+author: Atlas Cloud
 ---
 
 # Seedance 2.5 Skill

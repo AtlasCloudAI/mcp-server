@@ -1,6 +1,12 @@
 ---
 name: media-generation
 description: "Quickly call 300+ AI image generation, video generation, audio (TTS, music, speech-to-text), 3D generation, and LLM models through a unified API. Use this skill when the user needs to integrate AI image generation (e.g., Flux, Seedream, DALL-E), AI video generation (e.g., Kling, Sora, Seedance), call LLM APIs (OpenAI-compatible format), generate speech/TTS or music (e.g., Seed Audio, Suno), transcribe audio to text (ASR), or turn images/text into 3D assets into their project. Also covers model discovery and keyword search, uploading local images/media files, one-step quick generation, and configuring ATLASCLOUD_API_KEY. Even if the user doesn't explicitly mention Atlas Cloud, this skill should be considered whenever AI media generation API integration development is involved."
+display_name: "Atlas Cloud 媒体生成"
+display_name_en: "Atlas Cloud Media Generation"
+description_zh: "用自然语言调用 Atlas Cloud 上 300+ 个模型，生成图片、视频、语音、音乐和 3D，并可查模型目录、参数与价格。"
+description_en: "Call 300+ Atlas Cloud models in natural language to generate images, video, speech, music and 3D, and to browse the catalog, parameters and pricing."
+version: 2.5.0
+author: Atlas Cloud
 ---
 
 # Atlas Cloud API Integration Guide

@@ -14,6 +14,11 @@ WorkBuddy（腾讯）连接器要接一键登录，需要官网 OIDC 加 **RFC 7
 1. **注册端点 + 发现文档加字段**。端点本身不复杂。
 2. **注册出来的客户端要落库**，跨副本可见，且在 refresh_token 有效期内一直有效（刷新令牌时 token 端点要校验 client_id）。**这件才是主体，可能要建表。**
 
+   **这张表会持续长，设计时要带回收。** WorkBuddy 不是注册一次就长期复用：
+   它 `connect()` 时若发现本地没有 refresh_token，会先作废已注册的 client 再重新注册。
+   也就是说每次「重新授权」都会新增一行，同一个用户同一个连接器会攒出多条。
+   建议加 `last_used_at` 并对长期未用的做过期清理，否则是一张无界表。
+
 协议能力那一层已经全齐，一个字不用动：PKCE S256、`authorization_code` + `refresh_token`、公开客户端（`token_endpoint_auth_methods_supported` 含 `none`）、资源指示符。
 
 拿一家已在 WorkBuddy 上架的友商逐项对照，**公示的能力差距只有一行**：
@@ -79,6 +84,25 @@ shouldUseUrlBasedClientId = supportsUrlBasedClientId && provider.clientMetadataU
 回到「用户自己粘 Atlas API Key」的模式，后端完全不动。代价是要把
 `atlascloud-mcp` 的新版发到 npm（包 owner 目前只有 mikewangatlas），
 而且丢掉「不用贴 key」这个产品主张。不推荐，但如果这季度排不进来，这条能上线。
+
+## 一个已经验证过的前置，不用你们操心
+
+我们的资源元数据只公示 `tasks:read`，但 7 个生成工具要 `tasks:write`、3 个账务工具要
+`billing:read`。这是有意的 step-up 设计：客户端先拿只读令牌，撞到 403 `insufficient_scope`
+时再申请写权限，让「同意消耗额度」发生在用户第一次真要生成的时刻。
+
+我们自己代码注释里标着这条「没实测过」，所以我去验了 WorkBuddy 的 SDK，**它实现了**：
+
+```js
+if (response.status === 403 && this._authProvider) {
+  const { resourceMetadataUrl, scope, error } = extractWWWAuthenticateParams(response);
+  if (error === 'insufficient_scope') { /* upscoping，并有防无限循环的去重 */ }
+}
+```
+
+我们服务端返回的正是 `Bearer error="insufficient_scope", scope="<所需>", resource_metadata="…"`，
+字段对得上。**所以 DCR 做完之后不会再卡在 scope 上**，授权服务器的 scope 词表
+（`openid`/`offline_access`/`tasks:read`/`tasks:write`/`billing:read`）也已经齐了，不用动。
 
 ## 端点细节
 

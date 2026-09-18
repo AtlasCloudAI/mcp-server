@@ -1,75 +1,90 @@
-# WorkBuddy 一键登录：官网 OIDC 要加动态客户端注册
+# WorkBuddy 一键登录 · 给后端
 
-> 结论先行：**要实现 RFC 7591 动态客户端注册，以及它必需的客户端存储。**
-> 这是 WorkBuddy 上第三方连接器的标准做法，不是为我们一家开的特例。
-> 协议能力（PKCE、授权码、刷新令牌、公开客户端）已经全部就绪，缺的是注册这条路。
->
-> **工作量不是「加个 handler」**：注册出来的客户端要落库、跨副本可见、
-> 在 refresh_token 有效期内一直可用，这部分是主体。
+> 这一份既是发给后端的说明，也是完整规格，不另存一份。
+> 仓库位置：`mcp-server` 仓 `connectors/workbuddy/OAuth改造需求-给后端.md`
 
-## 一、证据：友商都是这么做的
+---
 
-WorkBuddy 连接器市场本机缓存 236 个连接器，其中 **142 个是远程服务且不让用户填凭证**，
-它们只能靠 OAuth。抽查五个第三方，授权服务器**全部**提供动态注册端点：
+WorkBuddy（腾讯）连接器要接一键登录，需要官网 OIDC 加 **RFC 7591 动态客户端注册**。
 
-| 连接器 | `registration_endpoint` |
-|---|---|
-| Canva | `https://mcp.canva.cn/register` |
-| 千图网 58pic | `https://ai.58pic.com/oauth/register` |
-| 八爪鱼 | `https://identity.bazhuayu.com/connect/register` |
-| FastMoss | `https://mcp.fastmoss.com/oauth/register` |
-| 分贝通 | `https://mcp.fenbeitong.com/register` |
+## 工作量
 
-原因在 WorkBuddy 桌面端代码里。它内置官方 MCP TypeScript SDK 1.24.3，
-`registerClient()` 在 `metadata.registration_endpoint` 缺失时直接抛
+两件，都在 `AtlasCloudTeam/kubedl` 的 **master** 分支：
+
+1. **注册端点 + 发现文档加字段**。端点本身不复杂。
+2. **注册出来的客户端要落库**，跨副本可见，且在 refresh_token 有效期内一直有效（刷新令牌时 token 端点要校验 client_id）。**这件才是主体，可能要建表。**
+
+协议能力那一层已经全齐，一个字不用动：PKCE S256、`authorization_code` + `refresh_token`、公开客户端（`token_endpoint_auth_methods_supported` 含 `none`）、资源指示符。
+
+拿一家已在 WorkBuddy 上架的友商逐项对照，**公示的能力差距只有一行**：
+
+| 字段 | 分贝通 | 我们 |
+|---|---|---|
+| code_challenge_methods_supported | S256 | S256 ✅ |
+| grant_types_supported | code + refresh_token | 同 ✅ |
+| token_endpoint_auth_methods_supported | 含 none | 含 none ✅ |
+| **registration_endpoint** | **有** | **无** ❌ |
+
+但别把这张表读成「只要加个字段」——公示差一行，背后要多一套客户端存储。
+
+## 为什么必须做，不是我们一家的要求
+
+WorkBuddy 桌面端内置官方 MCP TypeScript SDK 1.24.3，缺 `registration_endpoint` 时直接抛
 `Incompatible auth server: does not support dynamic client registration`。
 
-**注意一个容易搞错的点：SDK 本身是支持 CIMD 的**（SEP-991，URL-based Client IDs）：
+市场上 236 个连接器里，142 个是远程服务且不收用户凭证（也就是要么 OAuth、要么免鉴权）。
+抽查其中五个第三方，授权服务器**都**提供动态注册端点：
+
+- Canva `https://mcp.canva.cn/register`
+- 千图网 `https://ai.58pic.com/oauth/register`
+- 八爪鱼 `https://identity.bazhuayu.com/connect/register`
+- FastMoss `https://mcp.fastmoss.com/oauth/register`
+- 分贝通 `https://mcp.fenbeitong.com/register`
+
+（是抽查五个，不是把 142 个都验了；也没验它们的 OAuth 端到端跑通，只验了端点公示。）
+
+## 无代码的路我都试过了，都不成立
+
+会先想到的三条，逐条排除：
+
+**端点已存在只是没公示？** 不是。扫了 13 个可能路径 —— `/reg`、`/register`、`/oauth/register`、
+`/oauth2/register`、`/connect/register`、`/oidc/register`、`/api/v1/oidc/register`、`/clients`、
+`/oauth/clients`、`/v1/register`、`/dcr` 等，POST 全部 404。发现文档 17 个字段里带 `regist` 的一个都没有。
+
+**用现成的 CIMD 通道？** 走不通，但原因值得说清楚，免得你们查 SDK 时得出相反结论。
+**SDK 本身是支持 CIMD 的**（SEP-991，URL-based Client ID），条件是：
 
 ```js
-const supportsUrlBasedClientId = metadata?.client_id_metadata_document_supported === true;
-const clientMetadataUrl = provider.clientMetadataUrl;
-const shouldUseUrlBasedClientId = supportsUrlBasedClientId && clientMetadataUrl;
-if (shouldUseUrlBasedClientId) { clientInformation = { client_id: clientMetadataUrl }; }
-else { /* 回落到动态注册 */ }
+supportsUrlBasedClientId = metadata?.client_id_metadata_document_supported === true
+shouldUseUrlBasedClientId = supportsUrlBasedClientId && provider.clientMetadataUrl
 ```
 
-我们的授权服务器已经声明了 `client_id_metadata_document_supported: true`，
-即前半个条件成立。**但 WorkBuddy 没把 `clientMetadataUrl` 接上** ——
-它 `createProvider()` 构造的 provider 只有 `redirectUrl`、`clientMetadata`、
-`clientInformation`、`tokens` 等字段，没有这一项，所以后半个条件恒为假，永远落到动态注册。
-它甚至为动态注册做了 leader/follower 协调（`dcrLeaderActive`），说明那是它的设计主路径。
+我们的发现文档已经声明了前者。但 **WorkBuddy 没把 `clientMetadataUrl` 接上** ——
+它 `createProvider()` 从函数头到 `return provider` 整段（约 9900 字符）里没有这个字段，
+所以后半个条件恒假，永远落到动态注册。它还为 DCR 做了 leader/follower 协调，
+说明那是设计主路径。
 
-这意味着还有一条理论上更省的路：请 WorkBuddy 在它的 provider 里传 `clientMetadataUrl`。
-那样我们只需把它的托管域名加进 `AUTH_CLIENT_ID_METADATA_HOSTS`（现在只有 `chatgpt.com`），
-零代码改动。但那要等对方发桌面端新版本，不受我们控制，只适合作为顺带提出的建议，不能当方案。
+**从连接器配置注入？** 不行。`createProvider()` 整段里**一处都没有读 `serverConfig`**，
+我们在 `mcp.json` 里加任何字段都进不去。
 
-> 另有一条「云端托管 OAuth」(`auth_mode: server-side`)，但桌面端把它硬限制在
-> `.mcp.it.woa.com` / `.mcp.woa.com` / `.knot.woa.com` 域名加两个内部企业 ID，
-> 观察到的用例全是腾讯自家产品（ima、乐享、ardot）。对外部开发者不适用。
+## 顺带一提，一条不受我们控制的省事路
 
-## 二、差距只有一行
+如果 WorkBuddy 愿意在它的 provider 里传 `clientMetadataUrl`，我们只要把它的域名加进
+`AUTH_CLIENT_ID_METADATA_HOSTS`（现在只有 `chatgpt.com`），**零代码**。
+但这要等他们发桌面端新版，而且他们为 DCR 做了专门的协调逻辑，不太可能为一家改。
+可以提，但不能当方案等。
 
-拿分贝通的授权服务器和我们逐项对照：
+## 排不进来的话，有退路
 
-| 字段 | 分贝通 | auth.atlascloud.ai |
-|---|---|---|
-| `code_challenge_methods_supported` | `["S256"]` | `["S256"]` ✅ |
-| `grant_types_supported` | `authorization_code` + `refresh_token` | 同 ✅ |
-| `token_endpoint_auth_methods_supported` | 含 `none` | 含 `none` ✅ |
-| **`registration_endpoint`** | **有** | **无** ❌ |
+回到「用户自己粘 Atlas API Key」的模式，后端完全不动。代价是要把
+`atlascloud-mcp` 的新版发到 npm（包 owner 目前只有 mikewangatlas），
+而且丢掉「不用贴 key」这个产品主张。不推荐，但如果这季度排不进来，这条能上线。
 
-## 三、要做的
+## 端点细节
 
-### 1. 实现并公布动态注册端点
+路径随意，WorkBuddy 从发现文档读 `registration_endpoint`，现有端点一个都不用改名。
 
-端点路径随意，WorkBuddy 从发现文档读 `registration_endpoint`，现有端点一个都不用改名。
-
-- `metadata.go` 的 `Metadata` 结构加字段，并在 `Metadata()` 里填值
-- `oidc.go` 挂一个未鉴权的 `POST` 路由（`initialAccessToken` 不强制）
-- 建议按 IP 限流，`ratelimit.go` 有现成设施
-
-请求（WorkBuddy 会发的，公开原生客户端）：
+请求（公开原生客户端）：
 
 ```json
 {
@@ -82,64 +97,49 @@ else { /* 回落到动态注册 */ }
 }
 ```
 
-响应：`201` + JSON，**除 `client_id` 外应原样回显 `redirect_uris`**，
-WorkBuddy 文档把这条写成硬要求。
+- 响应 `201` + JSON，**应原样回显 `redirect_uris`**。文档把这条写成硬要求；
+  实测客户端有兜底会自己补（它代码里注释「部分服务端的 DCR 响应不回显 redirect_uris」），
+  但既然文档要求就照做，别依赖对方兜底。
+- **不要签发 `client_secret`**，公开客户端靠 PKCE。
+- 注册是未鉴权入口，建议按 IP 限流（`ratelimit.go` 有现成设施）。
+- 回调地址由客户端注册时自带，**不需要向腾讯索取，也不需要我们事先知道**。
 
-> 实测它其实有兜底：客户端代码里写着「部分服务端的 DCR 响应不回显 `redirect_uris`，
-> 不补就没有东西可供后续比对」，所以它会自己补上本次使用的地址。
-> 但既然文档要求，还是按要求回显，别依赖对方的兜底。
-
-**不要签发 `client_secret`**，公开客户端靠 PKCE。
-
-> 注意：回调地址由客户端在注册时自己提交，**我方不需要事先知道也不需要向腾讯索取**。
-> 这正是动态注册存在的意义。
-
-### 2. `clientRegistry` 加第三个来源
-
-`registry.go` 现在两个来源：配置登记的第一方（启动全量加载）+ 元数据文档 URL 标识的第三方（按需 fetch）。
-动态注册产生的客户端是第三种，需落库并在多副本间共享，`Lookup` 走 DB 那一路。
-
-### 3. 边缘网关放行注册路径
-
-`auth.atlascloud.ai` 外面有一层路径白名单。判据：`/healthz`、`/me` 是应用里真实存在的路由，
-在生产同样 404，而 `/jwks`、`/authorize`、`/token` 正常。
-
-## 四、明确不用做的
-
-| 项 | 为什么 |
-|---|---|
-| 支持公开客户端 | 已支持，`registry.go` 有 `Public` 标志 |
-| PKCE S256 | 已支持并已声明 |
-| 向腾讯索取回调地址或 client_id | **不需要**。动态注册里客户端自带 redirect_uri，client_id 由我方签发 |
-| 为回环回调放开端口匹配（RFC 8252 §7.3） | **不需要**。回调服务器用 `server.listen(0)` 拿随机端口，但客户端在 `connect()` 时若发现没有 refresh_token 会先作废已注册的 client 再重新注册——凡是真要跳浏览器的时候，它刚用当前端口注册过。精确匹配即可 |
-| 改现有端点路径 | 不必 |
-| 动 MCP server / 生产镜像 / K8s 清单 | 完全无关 |
-
-## 五、代码位置
-
-`AtlasCloudTeam/kubedl`，分支 **master**：
+## 代码位置
 
 ```
 console/backend/pkg/authzserver/metadata.go    发现文档，registration_endpoint 缺在这里
-console/backend/pkg/authzserver/registry.go    客户端注册表
-console/backend/pkg/routers/api/oidc.go        端点挂载
+console/backend/pkg/authzserver/registry.go    客户端注册表，现有两个来源
+console/backend/pkg/routers/api/oidc.go        根路径端点挂载（RegisterRootRoutes）
 ```
 
-> ⚠️ `feat/oidc-provider` 分支（`pkg/oidcprovider/`）是 2026-08-18 未合并的旧实现，
-> 不是生产代码，别照它改。
+⚠️ 仓库里 `feat/oidc-provider` 分支（`pkg/oidcprovider/`，2026-08-18）是未合并的旧实现，
+路径是 `/api/v1/oidc/authorize`，而生产是 `/authorize`。别照它改。
 
-`metadata.go` 现在有一句注释说明为何不声明注册端点：「客户端的选用优先级是
+`metadata.go` 里有一句注释说明当初为何不公示注册端点：「客户端的选用优先级是
 预注册 → 元数据文档 → 动态注册，声明了元数据文档就不会走到动态注册」。
-这对 ChatGPT 和 Codex 成立，但 WorkBuddy 的 SDK 不实现元数据文档，落不到这条链上。
+这对 ChatGPT 和 Codex 成立，WorkBuddy 是那条链覆盖不到的情况。
 
-## 六、验收
+## 两件不用做的
+
+**不用改回环回调的端口匹配。** WorkBuddy 的回调服务器每次用随机端口（`server.listen(0)`），
+看着像要按 RFC 8252 §7.3 忽略端口。但它 `connect()` 时若发现没有 refresh_token，
+会先作废已注册的 client 再重新注册 —— 凡是真要跳浏览器的时候，它刚用当前端口注册过。
+精确匹配就够。
+
+**大概不用动网关。** 我一度以为 `auth.atlascloud.ai` 外面有路径白名单，
+判据是 `/healthz`、`/me` 返回 404。那个判据是错的 —— 那两个路由属于另一个不部署的实现，
+kubedl 里根本没有。用 kubedl 真实存在的根路由复测：`/authorize`、`/token`、`/jwks`、
+`/consent`、`/.well-known/*` 全部到达应用（401 或 200，不是 404）。
+所以新加的根路由应该也能到。**保险起见改完从外网 curl 一次确认**，但不必预先申请放行。
+
+## 验收
 
 ```bash
-# 1. 发现文档公布了注册端点
+# 1. 发现文档公示了注册端点
 curl -s https://auth.atlascloud.ai/.well-known/oauth-authorization-server \
-  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("registration_endpoint") or "❌ 仍未公布")'
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("registration_endpoint") or "❌ 仍未公示")'
 
-# 2. 动态注册能过，且回显 redirect_uris、不发 client_secret
+# 2. 注册能过，回显 redirect_uris，且不发 client_secret
 REG=$(curl -s https://auth.atlascloud.ai/.well-known/oauth-authorization-server \
       | python3 -c 'import sys,json;print(json.load(sys.stdin)["registration_endpoint"])')
 curl -s -X POST "$REG" -H 'Content-Type: application/json' -d '{
@@ -150,17 +150,20 @@ curl -s -X POST "$REG" -H 'Content-Type: application/json' -d '{
   "redirect_uris":["http://127.0.0.1:51888/oauth/callback"]
 }' | python3 -m json.tool
 
-# 3. 拿注册回来的 client_id 走授权端点，不再是 invalid_client（把 <CLIENT_ID> 换掉）
+# 3. 拿上一步的 client_id 走授权端点，不再是 invalid_client
 curl -s -o /dev/null -w '%{http_code}\n' \
   "https://auth.atlascloud.ai/authorize?client_id=<CLIENT_ID>&response_type=code\
 &redirect_uri=http%3A%2F%2F127.0.0.1%3A51888%2Foauth%2Fcallback\
 &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=tasks%3Aread"
 # 期望 302 跳登录页（现在是 401 invalid_client）
+
+# 对照样板
+curl -s https://mcp.fenbeitong.com/.well-known/oauth-authorization-server
 ```
 
-对照样板：`curl -s https://mcp.fenbeitong.com/.well-known/oauth-authorization-server`
+三条全过之后叫我，我在 WorkBuddy 里装连接器实测一次完整授权，把结果回给你们。
 
-## 七、我方已就绪
+## 我方已就绪
 
 ```
 https://mcp.atlascloud.ai/.well-known/oauth-protected-resource
@@ -169,9 +172,4 @@ https://mcp.atlascloud.ai/.well-known/oauth-protected-resource
   scopes_supported       ["tasks:read"]
 ```
 
-MCP server 一行不用改。这个端点做完，WorkBuddy 就能走通整条链路，**不需要和腾讯做任何沟通**。
-
-## 参考
-
-- RFC 7591 动态客户端注册：https://www.rfc-editor.org/rfc/rfc7591
-- WorkBuddy 连接器规范：https://open.workbuddy.cn/docs/connector
+MCP server、生产镜像、K8s 清单一行不用改。

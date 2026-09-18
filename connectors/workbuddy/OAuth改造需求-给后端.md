@@ -20,10 +20,29 @@ WorkBuddy 连接器市场本机缓存 236 个连接器，其中 **142 个是远�
 | FastMoss | `https://mcp.fastmoss.com/oauth/register` |
 | 分贝通 | `https://mcp.fenbeitong.com/register` |
 
-原因在 WorkBuddy 桌面端代码里：它内置官方 MCP TypeScript SDK，
+原因在 WorkBuddy 桌面端代码里。它内置官方 MCP TypeScript SDK 1.24.3，
 `registerClient()` 在 `metadata.registration_endpoint` 缺失时直接抛
-`Incompatible auth server: does not support dynamic client registration`，
-且该 SDK 版本**不实现**客户端元数据文档（CIMD），搜不到任何 `clientIdMetadataDocument` 代码路径。
+`Incompatible auth server: does not support dynamic client registration`。
+
+**注意一个容易搞错的点：SDK 本身是支持 CIMD 的**（SEP-991，URL-based Client IDs）：
+
+```js
+const supportsUrlBasedClientId = metadata?.client_id_metadata_document_supported === true;
+const clientMetadataUrl = provider.clientMetadataUrl;
+const shouldUseUrlBasedClientId = supportsUrlBasedClientId && clientMetadataUrl;
+if (shouldUseUrlBasedClientId) { clientInformation = { client_id: clientMetadataUrl }; }
+else { /* 回落到动态注册 */ }
+```
+
+我们的授权服务器已经声明了 `client_id_metadata_document_supported: true`，
+即前半个条件成立。**但 WorkBuddy 没把 `clientMetadataUrl` 接上** ——
+它 `createProvider()` 构造的 provider 只有 `redirectUrl`、`clientMetadata`、
+`clientInformation`、`tokens` 等字段，没有这一项，所以后半个条件恒为假，永远落到动态注册。
+它甚至为动态注册做了 leader/follower 协调（`dcrLeaderActive`），说明那是它的设计主路径。
+
+这意味着还有一条理论上更省的路：请 WorkBuddy 在它的 provider 里传 `clientMetadataUrl`。
+那样我们只需把它的托管域名加进 `AUTH_CLIENT_ID_METADATA_HOSTS`（现在只有 `chatgpt.com`），
+零代码改动。但那要等对方发桌面端新版本，不受我们控制，只适合作为顺带提出的建议，不能当方案。
 
 > 另有一条「云端托管 OAuth」(`auth_mode: server-side`)，但桌面端把它硬限制在
 > `.mcp.it.woa.com` / `.mcp.woa.com` / `.knot.woa.com` 域名加两个内部企业 ID，
@@ -63,8 +82,14 @@ WorkBuddy 连接器市场本机缓存 236 个连接器，其中 **142 个是远�
 }
 ```
 
-响应：`201` + JSON，**除 `client_id` 外必须原样回显 `redirect_uris`**，
-这是 WorkBuddy 文档明写的硬要求。**不要签发 `client_secret`**，公开客户端靠 PKCE。
+响应：`201` + JSON，**除 `client_id` 外应原样回显 `redirect_uris`**，
+WorkBuddy 文档把这条写成硬要求。
+
+> 实测它其实有兜底：客户端代码里写着「部分服务端的 DCR 响应不回显 `redirect_uris`，
+> 不补就没有东西可供后续比对」，所以它会自己补上本次使用的地址。
+> 但既然文档要求，还是按要求回显，别依赖对方的兜底。
+
+**不要签发 `client_secret`**，公开客户端靠 PKCE。
 
 > 注意：回调地址由客户端在注册时自己提交，**我方不需要事先知道也不需要向腾讯索取**。
 > 这正是动态注册存在的意义。

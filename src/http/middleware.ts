@@ -1,4 +1,4 @@
-import { ADVERTISED_SCOPES } from "../config.js";
+import { resolveAdvertisedScopes } from "../config.js";
 import type { Request, RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import type { HttpServerConfig } from "../config.js";
@@ -18,11 +18,14 @@ export function challengeUnauthenticated(resourceMetadataUrl: string): RequestHa
       next();
       return;
     }
+    // 这里和 PRM 的 scopes_supported 必须同一个来源。MCP TS SDK 组授权 URL 时
+    // 优先取 401 头里的 scope，取不到才回落到 scopes_supported——两处不同源时
+    // MCP_ADVERTISED_SCOPES 只会改 PRM，客户端照旧只申请这里写的那几个。
     // 契约 v3 §6：401 必须带 resource_metadata 与 scope。缺少凭据时不带 error 参数
     // ——RFC 6750 把 error 留给「带了凭据但不被接受」的情形，这也是 aiproxy 的实测形状。
     res.setHeader(
       "WWW-Authenticate",
-      `Bearer resource_metadata="${resourceMetadataUrl}", scope="${ADVERTISED_SCOPES.join(" ")}"`
+      `Bearer resource_metadata="${resourceMetadataUrl}", scope="${resolveAdvertisedScopes().join(" ")}"`
     );
     res.status(401).json({ error: "invalid_token" });
   };
@@ -61,7 +64,7 @@ export function ensureChallengeScope(): RequestHandler {
           .trim();
       }
       if (!/[,\s]scope=/.test(challenge)) {
-        challenge = `${challenge}, scope="${ADVERTISED_SCOPES.join(" ")}"`;
+        challenge = `${challenge}, scope="${resolveAdvertisedScopes().join(" ")}"`;
       }
       return original(name, challenge);
     }) as typeof res.setHeader;

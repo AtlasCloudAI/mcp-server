@@ -357,3 +357,31 @@ test("pre-auth and authenticated-subject rate limits return 429", async () => {
     await closeServer(subjectHarness.server);
   }
 });
+
+test("MCP_ADVERTISED_SCOPES changes the PRM and both 401 challenges together", async () => {
+  // 2026-09-20 WorkBuddy 联调：SDK 组授权 URL 时优先取 401 头里的 scope，取不到才
+  // 回落到 PRM 的 scopes_supported。此前中间件把 ADVERTISED_SCOPES 常量写死进挑战头，
+  // env 只改得动 PRM，客户端照旧只申请 tasks:read——三处必须同源。
+  const previous = process.env.MCP_ADVERTISED_SCOPES;
+  process.env.MCP_ADVERTISED_SCOPES = "tasks:read,tasks:write,billing:read";
+  const harness = await startHarness();
+  try {
+    const metadata = await fetch(`${harness.baseUrl}/.well-known/oauth-protected-resource/mcp`);
+    const body = await metadata.json() as Record<string, unknown>;
+    assert.deepEqual(body.scopes_supported, ["tasks:read", "tasks:write", "billing:read"]);
+
+    const expected = /scope="tasks:read tasks:write billing:read"/;
+    // GET 走我们自己的 401 处理器
+    const get = await fetch(`${harness.baseUrl}/mcp`);
+    assert.equal(get.status, 401);
+    assert.match(get.headers.get("www-authenticate") ?? "", expected, "GET 挑战头");
+    // POST 走 SDK 的 requireBearerAuth，挑战头由 setHeader 拦截器补 scope
+    const post = await fetch(`${harness.baseUrl}/mcp`, { method: "POST" });
+    assert.equal(post.status, 401);
+    assert.match(post.headers.get("www-authenticate") ?? "", expected, "POST 挑战头");
+  } finally {
+    await closeServer(harness.server);
+    if (previous === undefined) delete process.env.MCP_ADVERTISED_SCOPES;
+    else process.env.MCP_ADVERTISED_SCOPES = previous;
+  }
+});

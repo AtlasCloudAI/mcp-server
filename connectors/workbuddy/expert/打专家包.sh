@@ -9,6 +9,7 @@ OUT="${1:-$PWD/../dist-expert}"
 STAGE=$(mktemp -d)/"$NAME"
 mkdir -p "$STAGE" "$OUT"
 
+# 白名单：工程笔记.md / 自检.py / 打专家包.sh 刻意不进包
 cp -R .codebuddy-plugin agents avatars README.md "$STAGE"/
 mkdir -p "$STAGE/skills"
 python3 -c "
@@ -20,7 +21,7 @@ for rel in json.load(open('.codebuddy-plugin/plugin.json')).get('skills',[]):
 "
 find "$STAGE" -name '.DS_Store' -delete
 
-python3 自检.py >/dev/null 2>&1 || { python3 自检.py; echo "  自检未通过，已打包但请先修（头像等）"; }
+python3 自检.py >/dev/null 2>&1 || { python3 自检.py; echo "  ✗ 自检未通过，已停止打包"; exit 1; }
 
 rm -f "$OUT/$NAME.zip"
 ( cd "$(dirname "$STAGE")" && zip -qr "$OUT/$NAME.zip" "$NAME" -x '*/.DS_Store' )

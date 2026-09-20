@@ -113,6 +113,26 @@ else:
         else: print(f'  头像 512x512  {sz//1024}KB  ✓')
     except ImportError: warn.append('未装 Pillow，跳过头像尺寸校验')
 
+# 会随包发给腾讯审核员的文件里，不能出现内部状态
+# （2026-09-20 实测：README 曾把草稿 id、后端阻塞点、以及对官方模板的评价一起打进 zip）
+# 只放高信号词：这些字串在对外物料里没有任何正当出现理由。
+# 别加「草稿」「卡在」「待确认」这类通用词 —— 试过，技能正文里「生成草稿」
+# 「不会卡在开通流程上」全被误判，噪声会让人直接忽略这条检查。
+LEAK = re.compile(r'oc_[0-9a-f]{8}|OAuth改造需求|工程笔记|给后端|官方模板|gaokao|design-experts')
+packaged = [P('README.md')] + [P(a) for a in agents]
+# 技能目录的真身在 ../skills/（打包时复制进来），这里要跟过去扫，否则等于没扫
+for rel in pj.get('skills', []):
+    d = P(rel) if os.path.isdir(P(rel)) else P('..', 'skills', os.path.basename(rel))
+    for root, _, fs in os.walk(d):
+        packaged += [os.path.join(root, f) for f in fs]
+print(f'  外发文件 {len(packaged)} 个，逐行扫内部信息')
+for f in packaged:
+    if not os.path.isfile(f): continue
+    rel = os.path.relpath(f, HERE)
+    for i, line in enumerate(open(f, encoding='utf-8', errors='ignore'), 1):
+        m = LEAK.search(line)
+        if m: bad.append(f'{rel}:{i} 含内部信息 "{m.group()}" —— 这个文件会进 zip 发给审核员')
+
 # 不该出现的东西
 SECRET = re.compile('apikey' + '-|sk' + r'-[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY')
 for root,_,files in os.walk(HERE):

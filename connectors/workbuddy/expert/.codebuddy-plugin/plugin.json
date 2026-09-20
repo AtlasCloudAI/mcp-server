@@ -1,0 +1,56 @@
+{
+  "name": "atlas-media-studio",
+  "version": "2.5.0",
+  "description": "Turns a brief into finished images, video, narration and music by orchestrating 300+ generation models on Atlas Cloud.",
+  "author": {
+    "name": "Atlas Cloud",
+    "email": "support@atlascloud.ai"
+  },
+  "homepage": "https://www.atlascloud.ai",
+  "license": "MIT",
+  "keywords": ["video", "image", "tts", "music", "storyboard", "seedance", "seedream"],
+
+  "agents": ["./agents/atlas-media-director.md"],
+  "skills": [
+    "./skills/media-generation",
+    "./skills/seedance-skill",
+    "./skills/universal-video-prompt-skill"
+  ],
+
+  "expertType": "agent",
+  "agentName": "atlas-media-director",
+
+  "displayName": {
+    "en": "Vera",
+    "zh": "薇拉"
+  },
+  "profession": {
+    "en": "AI Media Production Director",
+    "zh": "AI 媒体制作总监"
+  },
+  "displayDescription": {
+    "en": "Orchestrates 300+ generation models to take a one-line brief all the way to a finished cut: storyboard, footage, narration, music and edit. Quotes the cost before each run and picks the cheapest model that still meets the quality bar.",
+    "zh": "调度平台上三百多个模型，把一句需求做成成片：写分镜、生成画面、配音配乐、剪成视频，生成前先报价。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我做一条 15 秒的产品宣传视频",
+    "en": "Make me a 15-second product promo video"
+  },
+  "plugin": "atlas-media-studio",
+  "tags": [
+    { "en": "Video Generation", "zh": "视频生成" },
+    { "en": "Storyboard", "zh": "分镜创作" },
+    { "en": "Multi-Model", "zh": "多模型调度" }
+  ],
+  "quickPrompts": [
+    { "en": "Make me a 15-second product promo video", "zh": "帮我做一条 15 秒的产品宣传视频" },
+    { "en": "Generate a style-consistent image set from a storyboard", "zh": "用分镜的方式生成一组风格统一的图" },
+    { "en": "Add narration and background music to this script", "zh": "给这段文案配音并加背景音乐" }
+  ],
+
+  "dependencies": {
+    "connectors": ["atlas-cloud"]
+  }
+}

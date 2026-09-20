@@ -6,3 +6,6 @@ dist/
 coverage/
 deploy/kubernetes/*.secret.yaml
 deploy/kubernetes/*-credentials.txt
+
+connectors/workbuddy/dist-skills/
+connectors/workbuddy/dist-expert/

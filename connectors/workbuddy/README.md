@@ -3,6 +3,19 @@
 面向腾讯 WorkBuddy 开放平台的连接器包。规范见
 <https://open.workbuddy.cn/docs/connector>，提交入口 <https://open.workbuddy.cn/connector/publish>。
 
+## 这个目录下有三个彼此独立的上架物料
+
+WorkBuddy 开放平台的连接器、技能、专家是三条各自审核的通道：
+
+| 物料 | 内容 | 位置 | 状态 |
+| --- | --- | --- | --- |
+| 连接器 | `connector-meta.json` + `mcp.json` + `icon.svg` | 本目录 | 草稿 `oc_630b5b5c9e689e22`，卡在动态注册 |
+| 技能 | 每个一个 `SKILL.md` 目录 | `skills/`，用 `打技能包.sh` 单独打 | 可独立提交 |
+| 专家 | `.codebuddy-plugin/plugin.json` + `agents/*.md` + 头像 | `expert/`，见该目录 README | 包已就绪，两项待确认 |
+
+专家通过 `dependencies.connectors: ["atlas-cloud"]` 把连接器拉进来用，并打包复用 `skills/` 的三个技能
+（打包时复制，不在仓库里存第二份）。
+
 ## 当前方案：标准 MCP OAuth（`auth_mode` 省略）
 
 ```
@@ -21,9 +34,15 @@ connectors/workbuddy/
 
 ### 唯一卡点：授权服务器要实现动态注册
 
-WorkBuddy 桌面端内置官方 MCP TypeScript SDK。实测其打包代码：`registerClient()` 在
-`metadata.registration_endpoint` 缺失时抛 `Incompatible auth server`，且搜不到任何
-`clientIdMetadataDocument` 代码路径 —— 它不实现 CIMD，我们现有的 CIMD 通道对它无效。
+WorkBuddy 桌面端内置官方 MCP TypeScript SDK 1.24.3。实测其打包代码：`registerClient()` 在
+`metadata.registration_endpoint` 缺失时抛 `Incompatible auth server`。
+
+⚠️ **CIMD 通道对它无效，但原因不是「SDK 不支持」** —— SDK 支持（SEP-991，标识符叫
+`supportsUrlBasedClientId` / `provider.clientMetadataUrl`，搜 `clientIdMetadataDocument` 会得到
+0 命中并让你判错）。走 CIMD 需要两个条件同时成立：服务端声明 `client_id_metadata_document_supported`
+（我们已声明），**且**宿主在自己构造的 provider 里传 `clientMetadataUrl`。WorkBuddy 的
+`createProvider()` 只传 `redirectUrl`/`clientMetadata`/`clientInformation`/`tokens`，没有
+`clientMetadataUrl`，所以恒走动态注册；它还为动态注册做了 leader-follower 协调，说明那是设计主路径。
 
 这不是特例。市场缓存 236 个连接器里 142 个是远程且不自填凭证，抽查五个第三方
 （Canva、千图网、八爪鱼、FastMoss、分贝通）授权服务器**全部**提供动态注册端点。

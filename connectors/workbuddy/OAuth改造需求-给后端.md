@@ -157,11 +157,23 @@ console/backend/pkg/routers/api/oidc.go        根路径端点挂载（RegisterR
 我们只认 `http://127.0.0.1:*/oauth/callback` 就行，让它回退。
 自定义协议要额外过一遍 URI scheme 校验，不值得为省一次回退去做。
 
-**大概不用动网关。** 我一度以为 `auth.atlascloud.ai` 外面有路径白名单，
-判据是 `/healthz`、`/me` 返回 404。那个判据是错的 —— 那两个路由属于另一个不部署的实现，
-kubedl 里根本没有。用 kubedl 真实存在的根路由复测：`/authorize`、`/token`、`/jwks`、
-`/consent`、`/.well-known/*` 全部到达应用（401 或 200，不是 404）。
-所以新加的根路由应该也能到。**保险起见改完从外网 curl 一次确认**，但不必预先申请放行。
+**网关要动，而且已经动过了。**（2026-09-20 更正：这一节此前写的是「大概不用动网关」，错了。）
+
+`auth` 域外面有 Cloudflare Access 路径白名单。我当初用生产复测，`/healthz`、`/me` 返回 404，
+就判成「没有白名单」——**那是假阴性**：404 是应用自己回的，说明请求到达了，但生产那几条
+本来就没被 CF 拦。在 dev 上一看就露馅：
+
+```
+auth.dev.atlascloud.ai
+  /authorize /token /jwks /consent /register /.well-known/*   → 401 / 200（到达应用）
+  /healthz /me /userinfo /introspect                          → 302（CF Access 跳登录页）
+```
+
+**CF Access 拦截的指纹是 302，不是 404。** 加新根路由必须同步把它加进 bypass，
+否则外部客户端拿到的是一个跳转到登录页的 302，MCP SDK 会报一个和 OAuth 完全无关的错。
+
+dev 和生产的 `/register` bypass 都已由运维加好（此前放了 6 条）。
+如果 CF 的规则支持正则，建议合并成一条：`/(authorize|token|jwks|consent|register|\.well-known/.*)`。
 
 ## 验收
 

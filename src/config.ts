@@ -38,6 +38,12 @@ export const ADVERTISED_SCOPES = ["tasks:read"] as const;
  * 通了就说明客户端不做 step-up，该去跟契约方谈 §4.3 的可行性。
  *
  * 诊断用，不是常规配置——线上不要设置它。
+ *
+ * 2026-09-20 诊断结果：WorkBuddy 5.5.6（MCP TS SDK 1.24.3）**不做 step-up**。不是没实现，
+ * 是实现有 bug——auth() 在有 refresh_token 时先走刷新分支，而 refreshAuthorization 不传
+ * scope，刷出来还是旧 scope，重试再 403 就被防循环守卫吞成普通错误，浏览器永远不弹。
+ * dev 环境已设置本变量公示三个 scope（见 connectors/workbuddy/工程笔记.md）。
+ * 生产是否跟进是契约 §4.3 的决策，尚未定；Codex 是否有同样问题未实测。
  */
 export function resolveAdvertisedScopes(env: NodeJS.ProcessEnv = process.env): string[] {
   const raw = env.MCP_ADVERTISED_SCOPES?.trim();

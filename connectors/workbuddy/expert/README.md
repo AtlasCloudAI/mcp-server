@@ -40,18 +40,24 @@ python3 自检.py     # 校验
 `agentName` 必须能在 `agents/` 找到同名 md、agent frontmatter 不得自带 `tools`、
 头像必须是 512×512 且小于 500KB、全包不得出现凭据。
 
-## 依赖字段填什么（已从客户端核实）
+## 依赖字段填什么（已定论：填 `source`）
 
-`dependencies.connectors` 填的是**连接器的裸 id**，不是平台后台那个 `oc_630b5b5c9e689e22`。
-依据（WorkBuddy 5.5.6 客户端）：
+`dependencies.connectors` 填**连接器的 `source`**，不是后台那个 `oc_630b5b5c9e689e22`。
+两条独立证据：
+
+**一、连接器文档给的回调地址格式**（open.workbuddy.cn/docs/connector「MCP OAuth 流程」）：
+
+```
+workbuddy://workbuddy/mcp/connector%3A<source>/oauth/callback
+```
+
+`connector%3A` 就是 URL 编码的 `connector:`。
+
+**二、客户端拼这个前缀的代码**（WorkBuddy 5.5.6）：
 
 ```js
-// expert-dependency-runtime.ts —— 原样读取清单里的字符串当 id
-const connectorDependencies = (manifest.dependencies?.connectors ?? [])
-  .filter(id => typeof id === "string" && id.trim().length > 0)
-  .map(id => ({ type: "connector", id }));
-
-// 状态查询用这个 id 直接查连接器状态表
+// 清单里的字符串原样当 id，直接拿它查连接器状态
+.map(id => ({ type: "connector", id }));
 status: states[dep.id]?.status === "connected" ? "connected" : "disconnected"
 
 // `connector:` 只是运行时 MCP 配置 id 的前缀，不是连接器 id 本身
@@ -60,12 +66,12 @@ function toRuntimeMcpConfigId(configId) {
 }
 ```
 
-本机 `~/.workbuddy/connectors-marketplace/connectors/` 缓存的 243 个连接器，目录名就是这个 id
-（`tencent-docs`、`58pic-qiantu-ai`、`lexiang`…），和开放文档示例里的写法一致。
+两边拼出的是同一个字符串 → `configId ≡ source`。本机
+`~/.workbuddy/connectors-marketplace/connectors/` 缓存的 243 个目录名
+（`tencent-docs`、`58pic-qiantu-ai`、`lexiang`）就是这层 id，与文档示例写法一致。
 
-所以这里填了 `atlas-cloud`，与 `../connector-meta.json` 的 `source` 同值。
-**仍需向运营确认的是**：平台给连接器分配 id 时，取的是不是 `source` 字段。
-取错了不会报错，只会在召唤专家时引导卡片指空。
+`自检.py` 会强制 `dependencies.connectors` 至少包含 `../connector-meta.json` 的 `source`，
+以后谁改了一边忘了另一边会直接报错。
 
 ## 审核顺序
 
@@ -76,11 +82,25 @@ function toRuntimeMcpConfigId(configId) {
 代价是用户那边会多出一个「自定义连接器」条目，和官方连接器重复。**默认不这么做** —— 两条路都要
 后端先支持动态注册，自带声明并不能提前上线，只是多一份要维护的配置。
 
-## 和文档对不上的地方（按文档写，不按实物写）
+## 官方模板不可信，按文档写
 
-对照本机已上架的腾讯自家专家包 `gaokao-advisor`：它的 `tags` 和 `quickPrompts` **各 4 个**，
-`displayDescription.zh` 约 65 字，都超出文档写的「固定 3 个」「40-50 字」。说明解析器不卡这两条。
-本包仍按文档取 3 个、41 字 —— 第三方走人工审核，照文档写不会被挑。
+下过官方模板 `design-experts.zip`（文档「模板文件」那节的下载链接）逐项比对，
+**它和同一页的文档至少有四处打架**，照抄会踩：
+
+| 模板里 | 文档里 | 结论 |
+| --- | --- | --- |
+| `"categoryId": "01-Design"` | 行业分类表里根本没有这个值，产品设计是 `01-ProductDesign` | 按文档表 |
+| `displayName` 是 `{"en":"琳达","zh":"Diana"}` | 中英写反了 | 别照抄 |
+| 有 `skills/design-reference/`，但 plugin.json 里**没有** `skills` 字段 | 文档说 `skills` 是路径列表 | 显式声明，别赌自动发现 |
+| 声明了 `avatar: "avatars/expert.png"`，包里**没有** `avatars/` 目录 | 头像规范要求 512×512 PNG | 必须自己备 |
+
+模板里还带着 `.DS_Store` 和 `__MACOSX/`，说明解析器不挑这些垃圾文件 —— 但本包的打包脚本照样清掉。
+模板确认的唯一一件事：**zip 里要带一层与 `name` 同名的根目录**，本包的打包脚本就是这么打的。
+
+另外对照腾讯自家已上架的 `gaokao-advisor`：`tags` 和 `quickPrompts` **各 4 个**、
+`displayDescription.zh` 约 65 字，都超出文档写的「固定 3 个」「40-50 字」，说明解析器不卡这两条。
+它的 `categoryId` 是 `12-IndustryConsultant`，在文档表里 —— 进一步说明**文档的分类表是现行的，模板是旧的**。
+本包按文档取 3 个、41 字：第三方走人工审核，照文档写不会被挑。
 
 ## 头像
 

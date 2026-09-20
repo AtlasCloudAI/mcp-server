@@ -84,6 +84,21 @@ for rel in pj.get('skills',[]):
     if not os.path.isfile(P(rel,'SKILL.md')):
         warn.append(f'skills 路径 {rel} 下没有 SKILL.md（打包脚本会从 ../skills 复制进来）')
 
+# dependencies.connectors 必须与兄弟目录连接器的 source 一致
+deps = pj.get('dependencies', {}).get('connectors', [])
+meta_p = P('..', 'connector-meta.json')
+for cid in deps:
+    if not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', cid):
+        bad.append(f'dependencies.connectors "{cid}" 不是 kebab-case')
+if deps and os.path.isfile(meta_p):
+    src = json.load(open(meta_p, encoding='utf-8')).get('source')
+    # 依据：连接器文档给的回调是 workbuddy://workbuddy/mcp/connector%3A<source>/oauth/callback，
+    # 客户端 toRuntimeMcpConfigId 拼的是 `connector:` + configId → configId 就是 source。
+    if src and src not in deps:
+        bad.append(f'dependencies.connectors {deps} 不含兄弟连接器的 source "{src}"')
+    elif src:
+        print(f'  dependencies.connectors 对上 ../connector-meta.json 的 source="{src}"  ✓')
+
 # 头像
 av = P(pj.get('avatar','avatars/expert.png'))
 if not os.path.isfile(av):

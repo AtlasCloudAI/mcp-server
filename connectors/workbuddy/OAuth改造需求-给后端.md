@@ -143,12 +143,19 @@ console/backend/pkg/routers/api/oidc.go        根路径端点挂载（RegisterR
 预注册 → 元数据文档 → 动态注册，声明了元数据文档就不会走到动态注册」。
 这对 ChatGPT 和 Codex 成立，WorkBuddy 是那条链覆盖不到的情况。
 
-## 两件不用做的
+## 三件不用做的
 
 **不用改回环回调的端口匹配。** WorkBuddy 的回调服务器每次用随机端口（`server.listen(0)`），
 看着像要按 RFC 8252 §7.3 忽略端口。但它 `connect()` 时若发现没有 refresh_token，
 会先作废已注册的 client 再重新注册 —— 凡是真要跳浏览器的时候，它刚用当前端口注册过。
 精确匹配就够。
+
+**不用支持 `workbuddy://` 私有协议回调。** 开放平台文档写着「优先支持
+`workbuddy://workbuddy/mcp/connector%3A<source>/oauth/callback`」，看着像必须项。
+它不是：文档同一段接着写「若平台仅允许 HTTP/HTTPS 回调，则应允许本机回环地址
+`http://127.0.0.1:{动态端口}/oauth/callback`，WorkBuddy 会在私有协议被拒绝时自动回退一次」。
+我们只认 `http://127.0.0.1:*/oauth/callback` 就行，让它回退。
+自定义协议要额外过一遍 URI scheme 校验，不值得为省一次回退去做。
 
 **大概不用动网关。** 我一度以为 `auth.atlascloud.ai` 外面有路径白名单，
 判据是 `/healthz`、`/me` 返回 404。那个判据是错的 —— 那两个路由属于另一个不部署的实现，

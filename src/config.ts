@@ -29,6 +29,24 @@ export const REMOTE_SCOPES = [
 export const ADVERTISED_SCOPES = ["tasks:read"] as const;
 
 /**
+ * 协议层范围：不属于任何资源，因此**不进 REMOTE_SCOPES** —— §7 的令牌交换只认资源
+ * 权限，把它混进去会让交换请求被判 invalid_scope。
+ *
+ * 但它必须出现在我们公示的清单里。MCP TS SDK 1.24.3 组授权 URL 时的取值顺序是
+ * 「401 挑战头的 scope → 资源元数据的 scopes_supported → 客户端自己的
+ * clientMetadata.scope」，前两项都由我们给，客户端不会自己补 offline_access。
+ * 而授权服务器（kubedl `authzserver/provider.go` 的 `RefreshTokenScopes`）只在已批准
+ * 范围含它时才签发 refresh token。
+ *
+ * 不公示的后果是实测出来的：客户端永远拿不到 refresh token，SDK 发现本地没有就作废
+ * 已注册的客户端、重新走浏览器授权——access token 15 分钟一过期就打断用户一次。
+ *
+ * 所以它无条件附加在公示清单末尾，不受 MCP_ADVERTISED_SCOPES 影响：那个口子调的是
+ * 「公示哪几项资源权限」，和要不要长期凭证是两回事。
+ */
+export const PROTOCOL_SCOPES = ["offline_access"] as const;
+
+/**
  * 实际公示的 scope。默认就是 ADVERTISED_SCOPES，符合契约 §4.3。
  *
  * 之所以留一个 env 口子：step-up 要求客户端在收到 403 insufficient_scope 之后
@@ -44,18 +62,23 @@ export const ADVERTISED_SCOPES = ["tasks:read"] as const;
  * scope，刷出来还是旧 scope，重试再 403 就被防循环守卫吞成普通错误，浏览器永远不弹。
  * dev 环境已设置本变量公示三个 scope（见 connectors/workbuddy/工程笔记.md）。
  * 生产是否跟进是契约 §4.3 的决策，尚未定；Codex 是否有同样问题未实测。
+ *
+ * 注意这个口子只管资源权限那几项。`offline_access` 由 PROTOCOL_SCOPES 无条件附加，
+ * 设不设这个变量都会公示——它解决的是另一个问题（refresh token），见那段注释。
  */
 export function resolveAdvertisedScopes(env: NodeJS.ProcessEnv = process.env): string[] {
   const raw = env.MCP_ADVERTISED_SCOPES?.trim();
-  if (!raw) return [...ADVERTISED_SCOPES];
+  if (!raw) return [...ADVERTISED_SCOPES, ...PROTOCOL_SCOPES];
   const requested = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  const unknown = requested.filter((s) => !REMOTE_SCOPES.includes(s as never));
+  // 校验只针对资源权限：协议层范围不在 REMOTE_SCOPES 里，也不该由这个口子配置。
+  const permissions = requested.filter((s) => !PROTOCOL_SCOPES.includes(s as never));
+  const unknown = permissions.filter((s) => !REMOTE_SCOPES.includes(s as never));
   if (unknown.length > 0) {
     throw new Error(
       `MCP_ADVERTISED_SCOPES contains scopes outside the platform set: ${unknown.join(", ")}`
     );
   }
-  return requested;
+  return [...permissions, ...PROTOCOL_SCOPES];
 }
 
 export type ReleaseTier = "staging" | "production";

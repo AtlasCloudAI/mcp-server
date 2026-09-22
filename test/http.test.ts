@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES } from "../src/config.js";
+import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES, PROTOCOL_SCOPES, resolveAdvertisedScopes } from "../src/config.js";
 import { createHttpApp } from "../src/http.js";
 import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
@@ -129,13 +129,18 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
     const body = await metadata.json() as Record<string, unknown>;
     assert.equal(body.resource, "http://127.0.0.1/mcp");
-    // 契约 v3 §4.3：只公示 tasks:read，写权限走 step-up。
-    assert.deepEqual(body.scopes_supported, [...ADVERTISED_SCOPES]);
+    // 契约 v3 §4.3：资源权限只公示 tasks:read，写权限走 step-up。
+    // offline_access 是协议层范围，无条件附加，见 config.ts 的 PROTOCOL_SCOPES。
+    assert.deepEqual(body.scopes_supported, [...ADVERTISED_SCOPES, ...PROTOCOL_SCOPES]);
     assert.equal(body.resource_name, "Atlas Cloud MCP Server");
     assert.deepEqual(body.bearer_methods_supported, ["header"]);
+    // 2026-09-21 推翻了 v3 §8「refresh token 是客户端与 AS 之间的事」这条：
+    // 那句话的前提是客户端会自己申请 offline_access，实测 MCP TS SDK 1.24.3 不会——
+    // 它只申请我们公示的清单。不公示，AS 就不签发 refresh token，用户每 15 分钟
+    // 被打断一次重新授权。
     assert.ok(
-      !(body.scopes_supported as string[]).includes("offline_access"),
-      "v3 §8：refresh token 是客户端与 AS 之间的事，不进资源的 scope 清单"
+      (body.scopes_supported as string[]).includes("offline_access"),
+      "不公示 offline_access，客户端拿不到 refresh token，令牌一过期就要重新授权"
     );
     assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/readyz`)).status, 200);
@@ -278,7 +283,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       assert.match(challenge, /resource_metadata="http/, method);
       // 契约 v3 §6：401 必须带 scope。缺凭据时不带 error 参数——RFC 6750 把 error
       // 留给「带了凭据但不被接受」，aiproxy 的实测响应也是这个形状。
-      assert.match(challenge, /scope="tasks:read"/, method);
+      assert.match(challenge, /scope="tasks:read offline_access"/, method);
       assert.ok(!/error=/.test(challenge), `${method}: 缺凭据的挑战不应带 error 参数`);
     }
     // POST 走的是 MCP SDK 的 requireBearerAuth，它自己拼的头也必须被修正到同一形状
@@ -287,7 +292,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       assert.equal(post.status, 401);
       const challenge = post.headers.get("www-authenticate") ?? "";
       assert.match(challenge, /resource_metadata="http/);
-      assert.match(challenge, /scope="tasks:read"/);
+      assert.match(challenge, /scope="tasks:read offline_access"/);
       assert.ok(!/error=/.test(challenge), "SDK 的挑战头也不应带 error 参数");
     }
     // 带了凭据就按「这个无状态端点只接受 POST」处理。
@@ -368,9 +373,10 @@ test("MCP_ADVERTISED_SCOPES changes the PRM and both 401 challenges together", a
   try {
     const metadata = await fetch(`${harness.baseUrl}/.well-known/oauth-protected-resource/mcp`);
     const body = await metadata.json() as Record<string, unknown>;
-    assert.deepEqual(body.scopes_supported, ["tasks:read", "tasks:write", "billing:read"]);
+    assert.deepEqual(body.scopes_supported,
+      ["tasks:read", "tasks:write", "billing:read", "offline_access"]);
 
-    const expected = /scope="tasks:read tasks:write billing:read"/;
+    const expected = /scope="tasks:read tasks:write billing:read offline_access"/;
     // GET 走我们自己的 401 处理器
     const get = await fetch(`${harness.baseUrl}/mcp`);
     assert.equal(get.status, 401);
@@ -381,6 +387,30 @@ test("MCP_ADVERTISED_SCOPES changes the PRM and both 401 challenges together", a
     assert.match(post.headers.get("www-authenticate") ?? "", expected, "POST 挑战头");
   } finally {
     await closeServer(harness.server);
+    if (previous === undefined) delete process.env.MCP_ADVERTISED_SCOPES;
+    else process.env.MCP_ADVERTISED_SCOPES = previous;
+  }
+});
+
+test("offline_access is advertised regardless of MCP_ADVERTISED_SCOPES", async () => {
+  // 协议层范围和资源权限是两件事：env 口子调的是「公示哪几项资源权限」，而
+  // offline_access 决定 AS 签不签发 refresh token。把它绑进那个口子，将来有人为了
+  // 收窄资源权限而改配置，就会连带把 refresh token 关掉——现象是用户每 15 分钟
+  // 重新授权一次，而改配置的人不会想到是自己干的。
+  const previous = process.env.MCP_ADVERTISED_SCOPES;
+  try {
+    for (const value of [undefined, "tasks:read", "tasks:read,tasks:write,billing:read"]) {
+      if (value === undefined) delete process.env.MCP_ADVERTISED_SCOPES;
+      else process.env.MCP_ADVERTISED_SCOPES = value;
+      const scopes = resolveAdvertisedScopes();
+      assert.ok(scopes.includes("offline_access"), `MCP_ADVERTISED_SCOPES=${value}`);
+      assert.equal(scopes[scopes.length - 1], "offline_access", "协议层范围排在资源权限之后");
+    }
+    // 它也不该被 env 重复塞进来
+    process.env.MCP_ADVERTISED_SCOPES = "tasks:read,offline_access";
+    const deduped = resolveAdvertisedScopes();
+    assert.deepEqual(deduped, ["tasks:read", "offline_access"], "显式写它不应造成重复");
+  } finally {
     if (previous === undefined) delete process.env.MCP_ADVERTISED_SCOPES;
     else process.env.MCP_ADVERTISED_SCOPES = previous;
   }

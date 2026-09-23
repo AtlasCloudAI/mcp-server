@@ -3,6 +3,7 @@
 // so re-run this after any policy change:  npx tsx scripts/generate-app-submission.ts docs/chatgpt-app-submission.json
 import { writeFileSync, readFileSync } from "node:fs";
 import { TOOL_POLICIES, REMOTE_TOOL_NAMES } from "../src/tool-policy.js";
+import { REMOTE_SCOPES, PROTOCOL_SCOPES } from "../src/config.js";
 import { SERVER_VERSION } from "../src/version.js";
 
 const OUT = process.argv[2];
@@ -80,7 +81,10 @@ const doc = {
     client_registration: "CIMD",
     pkce_method: "S256",
     token_exchange_grant: "urn:ietf:params:oauth:grant-type:token-exchange",
-    scopes_advertised: ["tasks:read"],
+    // 生产把 MCP_ADVERTISED_SCOPES 设为全部资源权限（step-up 在 MCP TS SDK 上不可用，
+    // 见 src/config.ts 的诊断记录），offline_access 由 PROTOCOL_SCOPES 无条件附加。
+    // 从代码推而不是写死：这个字段写错等于向审核方申报了一个与线上不符的授权范围。
+    scopes_advertised: [...REMOTE_SCOPES, ...PROTOCOL_SCOPES],
     auto_submit_limit_usd: 20,
   },
   tools,

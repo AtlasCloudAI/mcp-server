@@ -21,6 +21,14 @@ data:
   MCP_TOKEN_EXCHANGE_RESOURCE: "https://api.atlascloud.ai"
   MCP_OAUTH_ALGORITHMS: "RS256"
 
+  # ---- 对外公示的资源权限 ----
+  # 契约 v3 §4.3 原设计是只公示 tasks:read、写权限靠 403 insufficient_scope 升权。
+  # 实测 MCP TypeScript SDK 1.24.3 升权走不通（auth() 的刷新分支不带 scope，重试再撞
+  # 403 就被防循环守卫吞掉），客户端永远拿不到写权限，12 个工具里 8 个调不动。
+  # 所以首次授权就把三项资源权限一次公示。offline_access 不在这里：它由代码的
+  # PROTOCOL_SCOPES 无条件附加，避免有人调这一行时把 refresh token 连带关掉。
+  MCP_ADVERTISED_SCOPES: "tasks:read,tasks:write,billing:read"
+
   # ---- 后端 API 地址（集群内 Service DNS）----
   ATLASCLOUD_API_BASE_URL: "http://backend.atlascloud.svc.cluster.local:9099"
   ATLASCLOUD_GENERATION_API_BASE_URL: "http://aiproxy-service.atlascloud.svc.cluster.local"

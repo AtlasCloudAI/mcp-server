@@ -33,10 +33,10 @@
 - 🎬 **비디오** (215) — MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash · MiniMax H3 · Wan-3.0-Prime · Wan-3.0
 - 🎨 **이미지** (134) — GPT Image 2.5 Sunburst · GPT Image 2.5 Flare · Seedream v4.7 · MAI-Image-2.6-Flash
 - 🧊 **3D** (14) — Seed3D 2.0 · Tripo H3.1 · Hunyuan 3D Rapid · Hunyuan 3D Pro
-- 💬 **LLM** (72) — DeepSeek V4.1 Flash · DeepSeek V4 Pro 0813 · Grok 4.6 · DeepSeek V4 Flash Vision Exp
+- 💬 **LLM** (73) — DeepSeek V4.1 Flash · DeepSeek V4 Pro 0813 · Grok 4.6 · DeepSeek V4 Flash Vision Exp
 - 🔊 **오디오 (TTS · 음악 · STT)** (13) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **더 살펴보기** — [전체 472개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 473개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **최신 비디오 모델** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

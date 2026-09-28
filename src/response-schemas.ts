@@ -198,3 +198,43 @@ export const chatCompletionResponseSchema = z
       .optional(),
   })
   .passthrough();
+
+// /model/history（kubedl console backend）。code 是字符串 "200"，createdAt 是秒级
+// 时间戳字符串，requestBody 在库里存的是 JSON 字符串——都按 2026-09-28 生产实测的
+// 形状写，别照 prediction 那套去猜。
+const historyItemSchema = z
+  .object({
+    ID: z.string().min(1),
+    model: z.string().default(""),
+    status: z
+      .string()
+      .nullable()
+      .optional()
+      .transform((value) => value ?? ""),
+    createdAt: z.union([z.string(), z.number()]).nullable().optional(),
+    requestBody: z.unknown().optional(),
+    result: z.unknown().optional(),
+  })
+  .passthrough();
+
+export type HistoryItem = z.output<typeof historyItemSchema>;
+
+export const historyResponseSchema = z
+  .object({
+    code: z.union([z.string(), z.number()]),
+    data: z
+      .object({
+        total: z.coerce.number().int().nonnegative().default(0),
+        pageNo: z.coerce.number().int().optional(),
+        pageSize: z.coerce.number().int().optional(),
+        items: z
+          .array(historyItemSchema)
+          .nullable()
+          .optional()
+          .transform((value) => value ?? []),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+export type HistoryResponse = z.output<typeof historyResponseSchema>;

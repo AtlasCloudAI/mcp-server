@@ -129,6 +129,11 @@ export interface HttpServerConfig {
   idempotencyTtlSeconds: number;
   generationConfirmationSecret: string;
   generationConfirmationTtlSeconds: number;
+  uploadTicketTtlSeconds: number;
+  uploadMaxBytes: number;
+  uploadRequestsPerMinute: number;
+  /** 上传中转端点的公网前缀，以 / 结尾；票据直接拼在后面。 */
+  publicUploadBaseUrl: URL;
   redisUrl?: string;
 }
 
@@ -186,6 +191,18 @@ const envSchema = z.object({
     .min(60)
     .max(3600)
     .default(600),
+  // 上传中转（/upload/:ticket）：票据有效期、单文件上限、每张票每分钟的上传次数。
+  // 上限默认 32MB——文件要整个进内存再包成 multipart 转投，pod 是 512Mi。比这大的
+  // 视频仍走公网链接。ingress 的 proxy-body-size 与 Cloudflare 的上限都必须高于此值，
+  // 否则请求在门口就被 413，而且看起来像是我们的 bug。
+  MCP_UPLOAD_TICKET_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
+  MCP_UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1_048_576)
+    .max(268_435_456)
+    .default(33_554_432),
+  MCP_UPLOAD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(30),
   MCP_REDIS_URL: z.string().url().optional(),
 });
 
@@ -514,6 +531,12 @@ export function loadHttpServerConfig(
       env.MCP_GENERATION_CONFIRMATION_SECRET ?? "development-confirmation-secret-change-me",
     generationConfirmationTtlSeconds:
       env.MCP_GENERATION_CONFIRMATION_TTL_SECONDS,
+    uploadTicketTtlSeconds: env.MCP_UPLOAD_TICKET_TTL_SECONDS,
+    uploadMaxBytes: env.MCP_UPLOAD_MAX_BYTES,
+    uploadRequestsPerMinute: env.MCP_UPLOAD_REQUESTS_PER_MINUTE,
+    // 中转端点是 /mcp 的兄弟路径（/mcp → /upload/），同一个 origin，Host 校验、
+    // 安全头、CORS 全部复用；挂在子路径下部署时也跟着 MCP 的前缀走。
+    publicUploadBaseUrl: new URL("upload/", publicMcpUrl),
     redisUrl: env.MCP_REDIS_URL,
   };
 }

@@ -2,11 +2,11 @@
 name: atlas-media-director
 description: AI media production director. Turns a brief into finished images, video, narration, music or transcripts by orchestrating 300+ generation models on Atlas Cloud. Use whenever the user wants to PRODUCE visual or audio content — a promo video, a style-consistent image set, a storyboard, a voiceover, background music, a transcript — rather than write code. Also use for choosing between video/image models, comparing their price and parameters, and turning one brief into prompts for several models.
 displayName:
-  en: "Atlas Cloud Media Expert"
-  zh: "Atlas Cloud 媒体制作专家"
-profession:
   en: "AI Storyboard · Footage · Voiceover"
   zh: "AI 分镜 · 成片 · 配音一条龙"
+profession:
+  en: "Atlas Cloud Media Expert"
+  zh: "Atlas Cloud 媒体制作专家"
 maxTurns: 100
 skills:
   - media-generation

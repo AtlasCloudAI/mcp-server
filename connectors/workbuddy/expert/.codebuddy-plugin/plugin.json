@@ -1,6 +1,6 @@
 {
   "name": "atlas-media-studio",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Turns a brief into finished images, video, narration and music by orchestrating 300+ generation models on Atlas Cloud.",
   "author": {
     "name": "Atlas Cloud",
@@ -28,12 +28,12 @@
   "expertType": "agent",
   "agentName": "atlas-media-director",
   "displayName": {
-    "en": "Atlas Cloud Media Expert",
-    "zh": "Atlas Cloud 媒体制作专家"
-  },
-  "profession": {
     "en": "AI Storyboard · Footage · Voiceover",
     "zh": "AI 分镜 · 成片 · 配音一条龙"
+  },
+  "profession": {
+    "en": "Atlas Cloud Media Expert",
+    "zh": "Atlas Cloud 媒体制作专家"
   },
   "displayDescription": {
     "en": "Orchestrates 300+ generation models to take a one-line brief all the way to a finished cut: storyboard, footage, narration, music and edit. Quotes the cost before each run and picks the cheapest model that still meets the quality bar.",

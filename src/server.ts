@@ -5,8 +5,10 @@ import { registerDocsTools } from "./tools/docs.js";
 import { registerImageTools } from "./tools/image.js";
 import { registerLLMTools } from "./tools/llm.js";
 import { registerModelTools } from "./tools/models.js";
+import { registerPredictionTools } from "./tools/predictions.js";
 import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 import { registerUploadTools } from "./tools/upload.js";
+import { registerUploadUrlTool } from "./tools/upload-url.js";
 import { registerVideoTools } from "./tools/video.js";
 import { SERVER_VERSION } from "./version.js";
 
@@ -40,6 +42,10 @@ export function createAtlasCloudServer(
   registerLLMTools(server, { includeChat: profile === "stdio" });
   registerQuickGenerateTools(server);
   registerAccountTools(server);
+  registerPredictionTools(server);
+  // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
+  // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。
+  registerUploadUrlTool(server);
   if (profile === "stdio") {
     registerUploadTools(server);
   }

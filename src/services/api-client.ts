@@ -347,7 +347,23 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const apiKey = getApiKey();
   const fileBuffer = await readFile(resolvedFile);
   const fileName = basename(resolvedFile);
+  return uploadMediaBuffer(fileBuffer, fileName, apiKey);
+}
 
+export interface UploadBufferOptions {
+  fetcher?: typeof fetch;
+}
+
+// 把一段已经在内存里的字节传给 Atlas。上面的路径版是 stdio 用的；远程的上传
+// 中转端点直接走这里——它手上是客户端 POST 上来的字节和票据里解出的令牌，
+// 没有本地路径可读。
+export async function uploadMediaBuffer(
+  fileBuffer: Uint8Array,
+  fileName: string,
+  apiKey: string,
+  options: UploadBufferOptions = {}
+): Promise<UploadResponse> {
+  const { fetcher = fetch } = options;
   const formData = new FormData();
   formData.append("file", new Blob([fileBuffer]), fileName);
 
@@ -357,7 +373,7 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetcher(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,

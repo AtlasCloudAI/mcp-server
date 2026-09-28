@@ -7,10 +7,12 @@ export type AtlasToolName =
   | "atlas_generate_image"
   | "atlas_generate_video"
   | "atlas_upload_media"
+  | "atlas_get_upload_url"
   | "atlas_generate_audio"
   | "atlas_transcribe_audio"
   | "atlas_chat"
   | "atlas_get_prediction"
+  | "atlas_list_predictions"
   | "atlas_get_balance"
   | "atlas_get_model_usage"
   | "atlas_get_model_costs"
@@ -99,6 +101,14 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotationJustification:
       "Uploads a local file and creates an externally hosted asset; retries are deduplicated by idempotency key.",
   },
+  atlas_get_upload_url: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Issues a short-lived, subject-bound upload URL; nothing is uploaded or billed until the client posts bytes to it.",
+  },
   atlas_generate_audio: {
     scope: "tasks:write",
     remote: true,
@@ -130,6 +140,14 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotations: firstPartyRead,
     annotationJustification:
       "Reads a specific Atlas prediction and does not alter task or asset state.",
+  },
+  atlas_list_predictions: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads a bounded page of the authenticated account's generation history without mutation.",
   },
   atlas_get_balance: {
     scope: "billing:read",

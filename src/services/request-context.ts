@@ -12,6 +12,13 @@ export interface AtlasRequestContext {
   idempotencyTtlSeconds: number;
   generationConfirmationSecret: string;
   generationConfirmationTtlSeconds: number;
+  /**
+   * 上传票据。只有远程 HTTP 服务会给这三项；stdio 没有中转端点，工具据此拒绝。
+   * 票据格式与用途见 services/upload-ticket.ts。
+   */
+  uploadBaseUrl?: string;
+  uploadTicketTtlSeconds?: number;
+  uploadMaxBytes?: number;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

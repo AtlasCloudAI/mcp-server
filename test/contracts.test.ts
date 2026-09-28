@@ -24,7 +24,7 @@ import { buildQuickGenerateParams } from "../src/tools/quick-generate.js";
 import { exactModelById } from "../src/services/doc-fetcher.js";
 import type { Model } from "../src/types.js";
 
-test("stdio exposes all 14 tools with exact annotations and output schemas", async () => {
+test("stdio exposes all 16 tools with exact annotations and output schemas", async () => {
   const server = createAtlasCloudServer("stdio");
   const client = new Client({ name: "contract-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -36,7 +36,7 @@ test("stdio exposes all 14 tools with exact annotations and output schemas", asy
     ) as { version: string };
     assert.equal(client.getServerVersion()?.version, packageManifest.version);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 14);
+    assert.equal(listed.tools.length, 16);
     assert.deepEqual(
       listed.tools.map((tool) => tool.name).sort(),
       [...ALL_TOOL_NAMES].sort()

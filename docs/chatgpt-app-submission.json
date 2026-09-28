@@ -102,6 +102,21 @@
       "billable": true,
       "required_scope": "tasks:write"
     },
+    "atlas_get_upload_url": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Issues a short-lived, subject-bound upload URL; nothing is uploaded or billed until the client posts bytes to it. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "tasks:write"
+    },
     "atlas_generate_audio": {
       "annotations": {
         "readOnlyHint": false,
@@ -141,6 +156,21 @@
       },
       "justifications": {
         "read_only_justification": "Reads a specific Atlas prediction and does not alter task or asset state. It performs no writes to the user's Atlas account, tasks, or assets.",
+        "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
+        "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
+      },
+      "billable": false,
+      "required_scope": "tasks:read"
+    },
+    "atlas_list_predictions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reads a bounded page of the authenticated account's generation history without mutation. It performs no writes to the user's Atlas account, tasks, or assets.",
         "open_world_justification": "Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.",
         "destructive_justification": "Alters no state; repeated calls return the same information at no charge."
       },
@@ -263,8 +293,8 @@
   "source_snapshot": {
     "repository": "https://github.com/AtlasCloudAI/mcp-server",
     "branch": "combo/oauth-exchange-20260907",
-    "server_version": "2.6.0",
-    "remote_tool_count": 12,
+    "server_version": "2.7.0",
+    "remote_tool_count": 14,
     "note": "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_chat and atlas_upload_media, which are not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
     "plugin_repository": "https://github.com/AtlasCloudAI/atlas-cloud-plugin",
     "plugin_version": "0.6.0",

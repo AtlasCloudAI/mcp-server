@@ -8,7 +8,7 @@ import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES, PROTOCOL_SCOPES, resolveAdvertisedScopes } from "../src/config.js";
-import { createHttpApp } from "../src/http.js";
+import { createHttpApp, type HttpAppDependencies } from "../src/http.js";
 import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
 import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
@@ -28,8 +28,49 @@ class StubVerifier implements OAuthTokenVerifier {
   }
 }
 
+// 假的 Atlas 上传上游：记下转投时带的凭据和文件名，按 upstreamStatus 决定成败。
+interface RecordedUpload {
+  authorization: string | undefined;
+  filename: string | undefined;
+  size: number | undefined;
+}
+const uploads: RecordedUpload[] = [];
+let upstreamStatus = 200;
+const fakeUpload = (async (
+  _input: unknown,
+  init?: { headers?: Record<string, string>; body?: unknown }
+) => {
+  const body = init?.body as { get(name: string): unknown } | undefined;
+  const file = body?.get("file") as { name?: string; size?: number } | null | undefined;
+  uploads.push({
+    authorization: init?.headers?.Authorization,
+    filename: file?.name,
+    size: file?.size,
+  });
+  if (upstreamStatus !== 200) {
+    return new Response(JSON.stringify({ message: "invalid token" }), {
+      status: upstreamStatus,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(
+    JSON.stringify({
+      code: 200,
+      message: "success",
+      data: {
+        type: "image",
+        download_url: "https://atlas-img.example.test/images/x.png",
+        filename: "x.png",
+        size: 9,
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}) as unknown as NonNullable<HttpAppDependencies["uploadFetcher"]>;
+
 async function startHarness(
-  overrides: NodeJS.ProcessEnv = {}
+  overrides: NodeJS.ProcessEnv = {},
+  dependencies: Partial<HttpAppDependencies> = {}
 ): Promise<{ baseUrl: string; server: Server }> {
   const config = loadHttpServerConfig({
     NODE_ENV: "test",
@@ -54,6 +95,7 @@ async function startHarness(
         return { subject: "test-user", apiKey: "test-atlas-key" };
       },
     },
+    ...dependencies,
   });
   const server = await new Promise<Server>((resolve, reject) => {
     const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -115,7 +157,7 @@ async function statusWithHost(url: string, host: string): Promise<number> {
 }
 
 test("real HTTP MCP surface enforces protocol, auth and security boundaries", async (t) => {
-  const { baseUrl, server } = await startHarness();
+  const { baseUrl, server } = await startHarness({}, { uploadFetcher: fakeUpload });
   t.after(() => closeServer(server));
 
   await t.test("challenge, metadata, health and security headers are exact", async () => {
@@ -188,7 +230,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("official MCP client initializes and lists exactly 12 remote tools", async () => {
+  await t.test("official MCP client initializes and lists exactly 14 remote tools", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: {
         headers: {
@@ -201,7 +243,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 12);
+      assert.equal(listed.tools.length, 14);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
         [...REMOTE_TOOL_NAMES].sort()
@@ -215,6 +257,125 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       }
     } finally {
       await client.close();
+    }
+  });
+
+  await t.test("upload relay: the tool mints a ticket and the relay forwards bytes with the subject's credential", async () => {
+    async function mintUploadPath(base: string): Promise<string> {
+      const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: {
+          headers: { Authorization: "Bearer all", Origin: "https://chatgpt.com" },
+        },
+      });
+      const client = new Client({ name: "upload-relay-test", version: "1.0.0" });
+      await client.connect(transport);
+      try {
+        const minted = await client.callTool({
+          name: "atlas_get_upload_url",
+          arguments: { filename_hint: "cat.png" },
+        });
+        const structured = minted.structuredContent as Record<string, unknown>;
+        const uploadUrl = new URL(String(structured.upload_url));
+        // 公示地址用 MCP_PUBLIC_URL 的 origin（测试里没有端口），路径部分才是票据。
+        assert.equal(uploadUrl.origin, "http://127.0.0.1");
+        assert.ok(uploadUrl.pathname.startsWith("/upload/"));
+        assert.equal(structured.method, "POST");
+        assert.equal(structured.filename_header, "X-Atlas-Filename");
+        assert.match(String(structured.curl_example), /X-Atlas-Filename: cat\.png/);
+        return uploadUrl.pathname;
+      } finally {
+        await client.close();
+      }
+    }
+
+    uploads.length = 0;
+    const uploadPath = await mintUploadPath(baseUrl);
+
+    const accepted = await fetch(`${baseUrl}${uploadPath}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream", "x-atlas-filename": "cat.png" },
+      body: Buffer.from("png-bytes"),
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), {
+      url: "https://atlas-img.example.test/images/x.png",
+      filename: "x.png",
+      size_bytes: 9,
+      media_type: "image",
+    });
+    assert.equal(accepted.headers.get("cache-control"), "no-store");
+    assert.equal(uploads.length, 1);
+    // 转投时带的是这个 subject 换来的凭据，不是任何服务端 key。
+    assert.equal(uploads[0]!.authorization, "Bearer test-atlas-key");
+    assert.equal(uploads[0]!.filename, "cat.png");
+    assert.equal(uploads[0]!.size, 9);
+
+    // 文件名从 query 走时 UTF-8 原样到达；Content-Type 不限定（curl 默认发的不是 octet-stream）。
+    const viaQuery = await fetch(
+      `${baseUrl}${uploadPath}?filename=${encodeURIComponent("产品图.jpg")}`,
+      { method: "POST", body: Buffer.from("jpg") }
+    );
+    assert.equal(viaQuery.status, 200);
+    assert.equal(uploads[1]!.filename, "产品图.jpg");
+
+    // 同一张票在有效期内可重复使用——两次都成了，正是这个意思。
+
+    const noName = await fetch(`${baseUrl}${uploadPath}`, {
+      method: "POST",
+      body: Buffer.from("x"),
+    });
+    assert.equal(noName.status, 400);
+    assert.equal(((await noName.json()) as { error: string }).error, "filename_required");
+
+    const emptyBody = await fetch(`${baseUrl}${uploadPath}`, {
+      method: "POST",
+      headers: { "x-atlas-filename": "a.png" },
+    });
+    assert.equal(emptyBody.status, 400);
+    assert.equal(((await emptyBody.json()) as { error: string }).error, "empty_body");
+
+    const forged = await fetch(`${baseUrl}/upload/not-a-ticket`, {
+      method: "POST",
+      headers: { "x-atlas-filename": "a.png" },
+      body: Buffer.from("x"),
+    });
+    assert.equal(forged.status, 401);
+    assert.equal(((await forged.json()) as { error: string }).error, "invalid_upload_ticket");
+
+    // 票据没过期，但它包着的令牌已被 Atlas 拒了 → 401，让调用方去要新票。
+    upstreamStatus = 401;
+    try {
+      const rejected = await fetch(`${baseUrl}${uploadPath}`, {
+        method: "POST",
+        headers: { "x-atlas-filename": "a.png" },
+        body: Buffer.from("x"),
+      });
+      assert.equal(rejected.status, 401);
+      assert.equal(((await rejected.json()) as { error: string }).error, "credential_rejected");
+    } finally {
+      upstreamStatus = 200;
+    }
+
+    // 超过上限在 body-parser 那一层就被拒，字节不会读完。用最小允许上限起一个独立实例。
+    const small = await startHarness(
+      { MCP_UPLOAD_MAX_BYTES: "1048576" },
+      { uploadFetcher: fakeUpload }
+    );
+    try {
+      const smallPath = await mintUploadPath(small.baseUrl);
+      const before = uploads.length;
+      const tooBig = await fetch(`${small.baseUrl}${smallPath}`, {
+        method: "POST",
+        headers: { "x-atlas-filename": "big.bin" },
+        body: Buffer.alloc(1_048_577),
+      });
+      assert.equal(tooBig.status, 413);
+      const body = (await tooBig.json()) as { error: string; max_bytes: number };
+      assert.equal(body.error, "upload_too_large");
+      assert.equal(body.max_bytes, 1_048_576);
+      assert.equal(uploads.length, before, "超限的请求不该到达上游");
+    } finally {
+      await closeServer(small.server);
     }
   });
 
@@ -233,7 +394,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const payload = await response.json() as Record<string, unknown>;
     const result = payload.result as Record<string, unknown>;
     const tools = result.tools as Array<Record<string, unknown>>;
-    assert.equal(tools.length, 12);
+    assert.equal(tools.length, 14);
     for (const tool of tools) {
       const name = tool.name as keyof typeof TOOL_POLICIES;
       const scope = TOOL_POLICIES[name].scope;

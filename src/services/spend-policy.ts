@@ -151,14 +151,19 @@ export function formatUsd(amount: number): string {
 /**
  * The line appended to a successful submission that went through without asking.
  *
- * The user still has to be told what they were charged — skipping the
- * confirmation is about not blocking them, not about spending quietly.
+ * The user still has to be told what this costs — skipping the confirmation is
+ * about not blocking them, not about spending quietly. It says "estimated"
+ * because submission is not settlement: generation is async, and a run that ends
+ * in status "failed" is not billed at all. Calling this a charge made the model
+ * report money as spent on jobs that later failed and cost nothing.
  */
 export function autoSubmitNotice(decision: SpendDecision): string {
   if (!decision.autoSubmit || decision.quotedUsd === null) return "";
   return (
-    `- **Charge**: ${formatUsd(decision.quotedUsd)} — submitted without a separate ` +
-    `confirmation because it is under the ${formatUsd(decision.thresholdUsd)} limit. ` +
-    `Report this amount to the user.`
+    `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} — submitted without a ` +
+    `separate confirmation because it is under the ${formatUsd(decision.thresholdUsd)} limit. ` +
+    `Give the user this estimate. It is not a settled charge: generation is async, ` +
+    `so treat it as spent only once polling returns a successful result, and a run ` +
+    `that ends in status "failed" is not billed.`
   );
 }

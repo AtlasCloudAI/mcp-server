@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolveAdvertisedScopes } from "../config.js";
 import type { Request, RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
@@ -156,6 +157,22 @@ export function createSubjectRateLimiter(
         ? `sub:${subject}`
         : `client:${req.auth?.clientId ?? "unknown"}`;
     },
+    message: { error: "rate_limit_exceeded" },
+  });
+}
+
+export function createUploadRateLimiter(
+  config: HttpServerConfig
+): RequestHandler {
+  return rateLimit({
+    windowMs: 60_000,
+    limit: config.uploadRequestsPerMinute,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    // 票据就是身份：同一张票一分钟内的上传次数受限。铸票本身走 MCP 端点的
+    // subject 限流，所以换票刷不掉这个额度。哈希后当键，日志里不留票据原文。
+    keyGenerator: (req) =>
+      `upload:${createHash("sha256").update(String(req.params.ticket ?? "")).digest("hex")}`,
     message: { error: "rate_limit_exceeded" },
   });
 }

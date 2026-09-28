@@ -26,10 +26,12 @@ import {
   JwtAccessTokenVerifier,
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
+import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
 import {
   challengeUnauthenticated,
   createPreAuthRateLimiter,
   createSubjectRateLimiter,
+  createUploadRateLimiter,
   enforceExactHost,
   enforceToolScopes,
   restrictedCors,
@@ -51,6 +53,8 @@ export interface HttpAppDependencies {
    * 未就绪时 MCP 端点拒绝一切请求——JWKS 拿不到就无法验签，放行等于不验令牌。
    */
   readiness?: AuthorizationServerReadiness;
+  /** 测试注入：上传中转转投 Atlas 时用的 fetch。 */
+  uploadFetcher?: UploadFetcher;
 }
 
 /**
@@ -231,6 +235,10 @@ export function createHttpApp(
               config.generationConfirmationSecret,
             generationConfirmationTtlSeconds:
               config.generationConfirmationTtlSeconds,
+            // 上传票据：atlas_get_upload_url 用这三项铸票，票据指向下面挂的 /upload/:ticket。
+            uploadBaseUrl: config.publicUploadBaseUrl.toString(),
+            uploadTicketTtlSeconds: config.uploadTicketTtlSeconds,
+            uploadMaxBytes: config.uploadMaxBytes,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -258,6 +266,19 @@ export function createHttpApp(
     config.publicMcpUrl.pathname,
     challengeUnauthenticated(resourceMetadataUrl),
     methodNotAllowed
+  );
+
+  // 上传中转：拿票据换一次上传，没有 bearer——凭据在票据里，见 services/upload-ticket.ts。
+  // 挂在 MCP 同一个 origin 下，Host 校验、安全头、CORS 全部复用。
+  const uploadPath = `${config.publicUploadBaseUrl.pathname}:ticket`;
+  app.options(uploadPath, (_req, res) => {
+    res.status(204).end();
+  });
+  app.post(
+    uploadPath,
+    createPreAuthRateLimiter(config),
+    createUploadRateLimiter(config),
+    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher })
   );
 
   app.use((_req, res) => {

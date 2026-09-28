@@ -41,6 +41,14 @@ data:
   MCP_CREDENTIAL_REDIS_PREFIX: "atlascloud:openai-plugin:credential"
   MCP_IDEMPOTENCY_BACKEND: "redis"
 
+  # ---- 上传中转（/upload/:ticket）----
+  # 专家用 atlas_get_upload_url 换一张票据，把本地文件 curl 到这里，服务端代用户转投
+  # Atlas 的 /model/uploadMedia。文件要整个进内存再包成 multipart，pod 是 512Mi，
+  # 所以单文件上限 32MB；ingress 的 proxy-body-size 与 Cloudflare 的上限都必须高于此值。
+  MCP_UPLOAD_MAX_BYTES: "33554432"
+  MCP_UPLOAD_TICKET_TTL_SECONDS: "600"
+  MCP_UPLOAD_REQUESTS_PER_MINUTE: "30"
+
   # ---- 运行参数 ----
   NODE_ENV: "production"
   PLUGIN_RELEASE_TIER: "staging"

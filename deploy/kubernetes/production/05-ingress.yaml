@@ -33,7 +33,9 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
-    nginx.ingress.kubernetes.io/proxy-body-size: 256k
+    # /upload/:ticket 收整个文件；代码上限 MCP_UPLOAD_MAX_BYTES=32MB，这里留出余量。
+    # 之前是 256k——请求只有 JSON 时够用，上传一开就会在门口被 413，现象看起来像我们的 bug。
+    nginx.ingress.kubernetes.io/proxy-body-size: 40m
     # 若集群有 cert-manager，取消注释让它自动签证书；
     # 走 Cloudflare Origin Certificate 就删掉这行，改为手工建好 TLS Secret。
     # cert-manager.io/cluster-issuer: letsencrypt-dns01

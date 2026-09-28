@@ -131,7 +131,7 @@ test("不足一分钱的价格不被四舍五入成 $0.01", () => {
   assert.equal(formatUsd(20), "$20.00");
 });
 
-test("直接提交时文案带上实际扣费，要求告知用户", () => {
+test("直接提交时文案给的是预估、不是已扣费，且要求告知用户", () => {
   const notice = autoSubmitNotice({
     autoSubmit: true,
     quotedUsd: 0.036,
@@ -140,7 +140,10 @@ test("直接提交时文案带上实际扣费，要求告知用户", () => {
   });
   assert.match(notice, /\$0\.04/);
   assert.match(notice, /\$20\.00/);
-  assert.match(notice, /Report this amount/);
+  assert.match(notice, /Give the user this estimate/);
+  // 异步任务失败不计费，所以这句永远不能说成已经扣掉了。
+  assert.match(notice, /not a settled charge/);
+  assert.ok(!/\*\*Charge\*\*/.test(notice), "不能再叫 Charge —— 会被当成已扣费");
 
   // 走确认流程的那次不该冒出这句。
   assert.equal(

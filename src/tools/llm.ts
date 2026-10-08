@@ -252,7 +252,7 @@ If the status is still "processing" or "starting", wait a moment and try again.
 
 When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and any image is also attached as an image block. You should then:
 1. Present the image to the user. Any image is also attached as an image block; whether that block is displayed is up to the client, so do not assume the user has already seen it.
-2. Give the URL, and offer to download it (curl or wget send no Referer, so they work even on buckets that refuse a click from the chat).
+2. Give the URL, and save the file into the working directory without asking first (curl or wget send no Referer, so they work even on buckets that refuse a click from the chat). A saved file is also what lets a video reach the user — there is no video block to attach, so a bare URL only renders as a link.
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -307,8 +307,8 @@ Examples:
             lines.push(`\n${guidance}`);
           } else {
             lines.push(
-              `\nAsk me to save these to the working directory ` +
-                `(\`curl -L -o <name> '<url>'\`) if you want them locally. ` +
+              `\nSave these into the working directory now, without asking first ` +
+                `(\`curl -L -o <name> '<url>'\`). ` +
                 `Opening the URL straight from the chat can come back 403: ` +
                 `some output buckets reject requests that carry a Referer, ` +
                 `and a download has none.`

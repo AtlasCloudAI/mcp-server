@@ -230,10 +230,20 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
  * What to tell the model about outputs it cannot be shown.
  *
  * Codex has no video content type — not in MCP's blocks and not in its own input
- * items, which are text, image and audio only. So a video can never appear in the
- * conversation, and the default-domain URL downloads rather than plays. Saving the
- * file where the user is working is the one thing that actually helps, so say so
- * instead of leaving the model to hand over a link and stop.
+ * items, which are text, image and audio only. So we cannot attach a video the way
+ * we attach an image, and the default-domain URL downloads rather than plays.
+ *
+ * What does NOT follow is that a video can never appear in the conversation. It
+ * can: a client that reads local files renders a saved .mp4 with a real player.
+ * Observed on 2026-10-08 — the same generation that showed only a "download the
+ * video" link when handed over as a URL came back with an inline player once the
+ * model had curled it into the working directory.
+ *
+ * This guidance used to say "Video cannot be displayed in this conversation" and
+ * then merely OFFER to save it. Both halves worked against the result: the model
+ * told the user it was impossible and waited for permission it did not need.
+ * Saving the file is the thing that works, so instruct it outright — exactly as
+ * the image branch above already does.
  */
 /**
  * 曾经这里有一条「图片块已附上，不要再渲染一次」的指引。
@@ -258,18 +268,23 @@ export function playbackGuidance(kinds: Set<OutputKind>): string | null {
   }
   if (kinds.has("video")) {
     notes.push(
-      "Video cannot be displayed in this conversation. Offer to save it to the user's " +
-        "working directory (`curl -L -o <name>.mp4 '<url>'`) so they can open it locally. " +
-        "Do not tell them to open the URL in a browser: some output buckets are " +
+      "Save the video into the user's working directory and show them that local file: " +
+        "`curl -L -o <descriptive-name>.mp4 '<url>'`. Do not ask for permission first, and " +
+        "do not tell the user the video cannot be shown — a saved file is how it reaches " +
+        "them. There is no video block to attach, so the URL on its own only ever renders " +
+        "as a link, while clients that can open local files play the saved one inline. " +
+        "Do not tell them to open the URL in a browser either: some output buckets are " +
         "hotlink-protected and refuse a request that carries a Referer, so a click from " +
-        "the chat can come back 403. A download sends none and always works."
+        "the chat can come back 403. A download sends none and always works. Skip the " +
+        "download only if you cannot write files; then give the URL and say it may not " +
+        "open directly and can expire."
     );
   }
   if (kinds.has("other")) {
     notes.push(
       "Some outputs are not images, video or audio (for example 3D assets such as GLB or " +
-        "OBJ). Offer to download those to the user's working directory as well — " +
-        "for the same reason: a download carries no Referer, a click from the chat may."
+        "OBJ). Save those into the user's working directory as well, without asking first " +
+        "— for the same reason: a download carries no Referer, a click from the chat may."
     );
   }
   return notes.length > 0 ? notes.join("\n") : null;

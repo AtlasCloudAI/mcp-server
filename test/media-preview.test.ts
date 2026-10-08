@@ -113,7 +113,12 @@ test("视频给的是下载指引，不是「在浏览器里打开」", () => {
   assert.ok(text);
   // Codex 没有 video 内容类型，链接点开又是下载，所以唯一有用的建议是存到本地。
   assert.match(text, /curl -L -o/);
-  assert.match(text, /cannot be displayed/i);
+  // 必须是祈使句：以前写成 "Offer to save"，模型就只递个链接等用户点头。
+  assert.match(text, /^Save the video/);
+  assert.match(text, /do not ask for permission first/i);
+  // 以前开头是 "Video cannot be displayed in this conversation"，这个前提是错的：
+  // 存成本地文件后客户端能播（2026-10-08 实测）。说了反而把模型劝退。
+  assert.doesNotMatch(text, /cannot be displayed/i);
 
   // 图片的指引归上一个测试管（现在也要下载，理由不同：防盗链）。
   // 这里只确认「什么产出都没有」时不硬塞一段话。
@@ -201,7 +206,7 @@ test("已完成的产出会同时给出 URL 文本与图片块位", async (t) =>
   assert.match(result.text, /1\. https:\/\/b\.oss-us-west-1\.aliyuncs\.com\/images\/a\.png/);
   assert.match(result.text, /2\. .*b\.mp4/);
   // 混了视频就要带上下载指引
-  assert.match(result.text, /cannot be displayed/i);
+  assert.match(result.text, /Save the video into the user's working directory/);
   // 取图失败时块为空，但绝不抛错
   assert.deepEqual(result.blocks, []);
 });

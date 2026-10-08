@@ -119,6 +119,10 @@ test("视频给的是下载指引，不是「在浏览器里打开」", () => {
   // 以前开头是 "Video cannot be displayed in this conversation"，这个前提是错的：
   // 存成本地文件后客户端能播（2026-10-08 实测）。说了反而把模型劝退。
   assert.doesNotMatch(text, /cannot be displayed/i);
+  // 光说「保存」不够：v2.7.1 实测模型存完只给一个「下载并播放视频」的链接。
+  // 必须把要的结果点名——在对话里内联显示、带播放器——并堵掉「给个链接就算完」。
+  assert.match(text, /DISPLAY THAT SAVED FILE INLINE IN THE CONVERSATION, WITH A PLAYER/);
+  assert.match(text, /A link is not the deliverable/);
 
   // 图片的指引归上一个测试管（现在也要下载，理由不同：防盗链）。
   // 这里只确认「什么产出都没有」时不硬塞一段话。
@@ -205,8 +209,8 @@ test("已完成的产出会同时给出 URL 文本与图片块位", async (t) =>
   assert.match(result.text, /## Output/);
   assert.match(result.text, /1\. https:\/\/b\.oss-us-west-1\.aliyuncs\.com\/images\/a\.png/);
   assert.match(result.text, /2\. .*b\.mp4/);
-  // 混了视频就要带上下载指引
-  assert.match(result.text, /Save the video into the user's working directory/);
+  // 混了视频就要带上下载+内联显示的指引
+  assert.match(result.text, /DISPLAY THAT SAVED FILE INLINE IN THE CONVERSATION/);
   // 取图失败时块为空，但绝不抛错
   assert.deepEqual(result.blocks, []);
 });

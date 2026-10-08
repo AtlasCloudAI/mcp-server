@@ -242,8 +242,17 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
  * This guidance used to say "Video cannot be displayed in this conversation" and
  * then merely OFFER to save it. Both halves worked against the result: the model
  * told the user it was impossible and waited for permission it did not need.
- * Saving the file is the thing that works, so instruct it outright — exactly as
- * the image branch above already does.
+ *
+ * Fixing that (v2.7.1) was necessary but not sufficient. The model then saved the
+ * file and handed over a link labelled "download and play the video" — still no
+ * player in the conversation. "Show them that local file" left it room to read
+ * showing as linking.
+ *
+ * What settled it: asked directly, in the very same conversation, to "display the
+ * video inline, with a player", the model did it in 8 seconds. The capability was
+ * never missing on either side — the instruction was. So this now names the
+ * outcome (display inline, with a player) and rules out the near miss (a link is
+ * not the deliverable), rather than describing the mechanism and hoping.
  */
 /**
  * 曾经这里有一条「图片块已附上，不要再渲染一次」的指引。
@@ -268,16 +277,19 @@ export function playbackGuidance(kinds: Set<OutputKind>): string | null {
   }
   if (kinds.has("video")) {
     notes.push(
-      "Save the video into the user's working directory and show them that local file: " +
-        "`curl -L -o <descriptive-name>.mp4 '<url>'`. Do not ask for permission first, and " +
-        "do not tell the user the video cannot be shown — a saved file is how it reaches " +
-        "them. There is no video block to attach, so the URL on its own only ever renders " +
-        "as a link, while clients that can open local files play the saved one inline. " +
-        "Do not tell them to open the URL in a browser either: some output buckets are " +
-        "hotlink-protected and refuse a request that carries a Referer, so a click from " +
-        "the chat can come back 403. A download sends none and always works. Skip the " +
-        "download only if you cannot write files; then give the URL and say it may not " +
-        "open directly and can expire."
+      "Save the video with `curl -L -o <descriptive-name>.mp4 '<url>'`, then DISPLAY THAT " +
+        "SAVED FILE INLINE IN THE CONVERSATION, WITH A PLAYER. Do not ask for permission " +
+        "first.\n" +
+        "A link is not the deliverable. Offering \"download the video\" and stopping there " +
+        "fails the request: the user wants to watch it where they are reading, not click " +
+        "through to another window. Embed the saved local file the same way you would show " +
+        "a generated image. The server cannot attach a video block for you — that is " +
+        "precisely why presenting the saved file is your job, not an optional extra.\n" +
+        "Do not tell the user the video cannot be shown, and do not tell them to open the " +
+        "URL in a browser: some output buckets are hotlink-protected and refuse a request " +
+        "that carries a Referer, so a click from the chat can come back 403, while a " +
+        "download sends none and always works. Skip all of this only if you cannot write " +
+        "files; then give the URL and say it may not open directly and can expire."
     );
   }
   if (kinds.has("other")) {

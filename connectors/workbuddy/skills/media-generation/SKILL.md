@@ -52,7 +52,7 @@ Content-Type: application/json
 | `POST` | `/v1/chat/completions` | LLM chat (OpenAI-compatible format) |
 | `GET` | `api.atlascloud.ai/api/v1/models` | List all available models (no auth required) |
 
-## MCP Tools (14 Tools)
+## MCP Tools (16 Tools)
 
 > **Using this through the Atlas Cloud plugin (no API key needed)**
 >
@@ -75,7 +75,7 @@ Content-Type: application/json
 
 
 
-If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), the following 14 tools are available for direct invocation:
+If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 14 of them — `atlas_chat` and `atlas_upload_media` are local-only, the latter because a hosted server cannot read the caller's disk. Check your own tool list rather than assuming.
 
 ### Model Discovery Tools
 
@@ -522,7 +522,7 @@ This endpoint requires no authentication.
 
 ## MCP Server Installation
 
-Atlas Cloud MCP Server provides 14 tools for direct use in any MCP-compatible client. Prerequisites: Node.js >= 18 and an [Atlas Cloud API Key](https://www.atlascloud.ai/console/api-keys).
+Atlas Cloud MCP Server provides 16 tools for direct use in any MCP-compatible client (a hosted connector exposes 14 of them). Prerequisites: Node.js >= 18 and an [Atlas Cloud API Key](https://www.atlascloud.ai/console/api-keys).
 
 ### CLI Tools (One-Line Install)
 

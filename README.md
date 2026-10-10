@@ -74,6 +74,72 @@ LLM calls are protocol-aware: each model is called through the contract it actua
 
 ## Quick Start
 
+### Hosted server — no API key, nothing to install
+
+Point your client at our hosted MCP server and sign in once in the browser. Nothing to install, no key to create or paste, and generation is billed to the Atlas Cloud account you sign in with.
+
+**Endpoint:** `https://mcp.atlascloud.ai/mcp`
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http --scope user atlas-cloud https://mcp.atlascloud.ai/mcp
+```
+
+Drop `--scope user` to add it to the current project only. Adding the server does not sign you in — run `/mcp` inside Claude Code afterwards and follow the browser prompt.
+
+Or add it to `.mcp.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+`type` is required here — without it Claude Code reads the entry as a stdio server and skips it.
+
+**ChatGPT & Codex**
+
+Install the plugin, which bundles this server together with our skills:
+
+```bash
+codex plugin marketplace add AtlasCloudAI/atlas-cloud-plugin
+codex plugin add atlas-cloud@atlas-cloud
+codex mcp login atlas-cloud
+```
+
+In the ChatGPT desktop app: **Settings → Plugins → Add → Add plugin marketplace**, source `AtlasCloudAI/atlas-cloud-plugin`, then open **Atlas Cloud** and install it.
+
+**VS Code**
+
+In `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+**Other MCP clients**
+
+Most take the endpoint under an `mcpServers` key. The exact field names differ between clients — some want the transport spelled out, others infer it from the URL — so check your client's own MCP documentation.
+
+Authentication is OAuth 2.1: the client registers itself, opens your browser once, and stays authorized after that. There is no API key anywhere in this path.
+
+---
+
+Prefer to run the server on your own machine, with your own API key? The rest of this section covers that.
+
 ### Prerequisites
 
 - Node.js >= 18

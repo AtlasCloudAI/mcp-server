@@ -261,6 +261,23 @@ export function summarizeInputSchema(
 }
 
 /**
+ * Every Input property that declares a default, except `model`. Used to price a
+ * model "as it comes": /model/calculate without them quotes a different
+ * configuration (product-visuals: $0.48 bare vs $0.2593 with its own defaults).
+ */
+export function schemaDefaults(
+  schema: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const extracted = extractInputSchema(schema);
+  if (!extracted) return {};
+  return Object.fromEntries(
+    Object.entries(extracted.input.properties ?? {})
+      .filter(([key, prop]) => key !== "model" && prop.default !== undefined)
+      .map(([key, prop]) => [key, prop.default])
+  );
+}
+
+/**
  * Validate caller params against a model schema.
  * When the Input schema is unavailable, returns ok (cannot validate -> allow,
  * to avoid false negatives). `params` must NOT contain the `model` field

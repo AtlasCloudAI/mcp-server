@@ -105,6 +105,14 @@ export function generateLLMPrompt(
         sections.push(
           `  - Options: ${enumValues.map((v: unknown) => JSON.stringify(v)).join(", ")}`
         );
+        // 自定义扩展：取值可以是用英文逗号连起来的多个选项，校验器按同样的规则逐项检查
+        if (prop["x-multiple"] === true) {
+          sections.push(
+            `  - Multiple: yes — join several options with commas, e.g. ${JSON.stringify(
+              enumValues.slice(0, 2).join(", ")
+            )}`
+          );
+        }
       }
       sections.push("");
     }

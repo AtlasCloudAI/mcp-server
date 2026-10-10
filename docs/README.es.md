@@ -69,6 +69,72 @@ Por debajo: descubrimiento de modelos, esquemas de parámetros dinámicos por mo
 
 ## Inicio rápido
 
+### Servidor alojado: sin clave de API, sin instalar nada
+
+Apunta tu cliente a nuestro servidor MCP alojado e inicia sesión una vez en el navegador. No hay nada que instalar ni ninguna clave que crear o pegar, y las generaciones se cobran a la cuenta de Atlas Cloud con la que inicies sesión.
+
+**Endpoint:** `https://mcp.atlascloud.ai/mcp`
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http --scope user atlas-cloud https://mcp.atlascloud.ai/mcp
+```
+
+Omite `--scope user` para añadirlo solo al proyecto actual. Añadir el servidor no inicia la sesión: después ejecuta `/mcp` dentro de Claude Code y sigue las indicaciones del navegador.
+
+También puedes añadirlo directamente a `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+Aquí `type` es obligatorio: sin él, Claude Code interpreta la entrada como un servidor stdio y la omite.
+
+**ChatGPT y Codex**
+
+Instala el plugin, que incluye este servidor junto con nuestras Skills:
+
+```bash
+codex plugin marketplace add AtlasCloudAI/atlas-cloud-plugin
+codex plugin add atlas-cloud@atlas-cloud
+codex mcp login atlas-cloud
+```
+
+En la aplicación de escritorio de ChatGPT: **Configuración → Plugins → Añadir → Añadir marketplace de plugins**, con el origen `AtlasCloudAI/atlas-cloud-plugin`; luego abre **Atlas Cloud** e instálalo.
+
+**VS Code**
+
+En `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+**Otros clientes MCP**
+
+La mayoría recibe el endpoint bajo una clave `mcpServers`. Los nombres exactos de los campos varían entre clientes —algunos exigen indicar el transporte de forma explícita y otros lo deducen de la URL—, así que consulta la documentación MCP de tu cliente.
+
+La autenticación es OAuth 2.1: el cliente se registra solo, abre el navegador una vez y queda autorizado a partir de ahí. En esta ruta no interviene ninguna clave de API.
+
+---
+
+¿Prefieres ejecutar el servidor en tu propia máquina, con tu propia clave de API? El resto de esta sección cubre justamente eso.
+
 ### Requisitos previos
 
 - Node.js >= 18

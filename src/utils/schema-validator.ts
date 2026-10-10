@@ -27,6 +27,7 @@ interface SchemaProperty {
   minItems?: number;
   maxItems?: number;
   items?: SchemaProperty;
+  "x-multiple"?: boolean;
 }
 
 interface InputSchema {
@@ -70,6 +71,42 @@ function extractInputSchema(
   return { input: inputRecord as InputSchema, components };
 }
 
+// 多选字段：schema 里写成 { type: "string", enum: [...], "x-multiple": true }，取值是用英文逗号
+// 连起来的若干个枚举值——网页表单多选就是这么提交的，上游也按条数计价（atlascloud/studio/
+// a-plus-content 选 1 项 $0.1408、选 3 项 $0.3808）。x-multiple 是我们自己的扩展，Ajv 不认识；
+// 原样交给 Ajv 的话，enum 会把 "hero, feature" 整串当成一个值去比，必然拒绝，于是出现
+// 「描述说可以逗号多选、校验器却只认单个值」。所以这类字段不让 Ajv 管 enum，改为逐项检查。
+type MultiSelectProperty = SchemaProperty & { enum: unknown[] };
+
+function isMultiSelect(prop: SchemaProperty | undefined): prop is MultiSelectProperty {
+  return (
+    !!prop &&
+    prop["x-multiple"] === true &&
+    Array.isArray(prop.enum) &&
+    (prop.type === undefined || prop.type === "string")
+  );
+}
+
+function multiSelectErrors(input: InputSchema, params: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  for (const [key, prop] of Object.entries(input.properties ?? {})) {
+    const value = params[key];
+    if (!isMultiSelect(prop) || typeof value !== "string") continue;
+    // 整串恰好是一个枚举值时直接放行，枚举值本身含逗号也不会被拆坏
+    if (prop.enum.includes(value)) continue;
+    const items = value.split(",").map((item) => item.trim());
+    const bad = items.filter((item) => !prop.enum.includes(item));
+    if (bad.length === 0) continue;
+    const allowed = prop.enum.map((v) => JSON.stringify(v)).join(" | ");
+    const got = bad.map((item) => (item ? JSON.stringify(item) : "an empty item")).join(", ");
+    errors.push(
+      `Parameter \`${key}\` takes one or more of: ${allowed}, joined with commas ` +
+        `(e.g. ${JSON.stringify(prop.enum.slice(0, 2).join(", "))}); ${got} is not one of them.`
+    );
+  }
+  return errors;
+}
+
 const ajv = new Ajv({
   allErrors: true,
   strict: false,
@@ -100,19 +137,22 @@ function validatorForSchema(
   // 补 {} 而不是 { type: "string" }：这里的目的只是让字段合法存在，不是替上游
   // 补全类型约束——猜错类型会把本来能过的请求拦下来。additionalProperties: false
   // 仍然拦得住真正的拼写错误，因为那些名字不在 required 里。
-  const declaredProperties = (input.properties ?? {}) as Record<string, unknown>;
+  // 多选字段去掉 enum 再交给 Ajv，类型等其余约束照旧；取值逐项检查见 multiSelectErrors
+  const declaredProperties = Object.fromEntries(
+    Object.entries(input.properties ?? {}).map(([key, prop]) => {
+      if (!isMultiSelect(prop)) return [key, prop];
+      const { enum: _enum, ...rest } = prop;
+      return [key, rest];
+    })
+  ) as Record<string, unknown>;
   const requiredNames = Array.isArray(input.required) ? (input.required as string[]) : [];
   const undeclaredRequired = requiredNames.filter((name) => !(name in declaredProperties));
   const validationRoot = {
     ...input,
-    ...(undeclaredRequired.length > 0
-      ? {
-          properties: {
-            ...declaredProperties,
-            ...Object.fromEntries(undeclaredRequired.map((name) => [name, {}])),
-          },
-        }
-      : {}),
+    properties: {
+      ...declaredProperties,
+      ...Object.fromEntries(undeclaredRequired.map((name) => [name, {}])),
+    },
     additionalProperties: false,
     ...(components ? { components } : {}),
   };
@@ -193,7 +233,11 @@ export function summarizeInputSchema(
 
     const bits: string[] = [prop.type || "string"];
     bits.push(required.has(key) ? "required" : "optional");
-    if (Array.isArray(prop.enum)) {
+    if (isMultiSelect(prop)) {
+      bits.push(
+        `one or more of: ${prop.enum.map((v) => JSON.stringify(v)).join(" | ")} (comma-separated)`
+      );
+    } else if (Array.isArray(prop.enum)) {
       bits.push(
         `one of: ${prop.enum.map((v) => JSON.stringify(v)).join(" | ")}`
       );
@@ -214,6 +258,23 @@ export function summarizeInputSchema(
     lines.push(`- \`${key}\` (${bits.join(", ")})${desc ? `: ${desc}` : ""}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * Every Input property that declares a default, except `model`. Used to price a
+ * model "as it comes": /model/calculate without them quotes a different
+ * configuration (product-visuals: $0.48 bare vs $0.2593 with its own defaults).
+ */
+export function schemaDefaults(
+  schema: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const extracted = extractInputSchema(schema);
+  if (!extracted) return {};
+  return Object.fromEntries(
+    Object.entries(extracted.input.properties ?? {})
+      .filter(([key, prop]) => key !== "model" && prop.default !== undefined)
+      .map(([key, prop]) => [key, prop.default])
+  );
 }
 
 /**
@@ -247,7 +308,10 @@ export function validateModelParams(
     };
   }
   const valid = validate({ model: modelId, ...params });
-  const errors = valid ? [] : (validate.errors ?? []).map(formatAjvError);
+  const errors = [
+    ...(valid ? [] : (validate.errors ?? []).map(formatAjvError)),
+    ...multiSelectErrors(input, params),
+  ];
 
   return {
     ok: errors.length === 0,

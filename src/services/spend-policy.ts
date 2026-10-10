@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
+import { schemaDefaults } from "../utils/schema-validator.js";
 
 // Every billable tool used to stop after the first call and wait for the user to
 // confirm a quote, without exception. For a $0.009 image that is the wrong trade:
@@ -58,6 +59,30 @@ export interface SpendDecision {
   thresholdUsd: number;
   /** Why it went the way it did. Diagnostic, not shown verbatim. */
   reason: string;
+  /** The platform flagged the quote as incomplete: the real charge is higher. */
+  partial?: boolean;
+}
+
+export interface Quote {
+  usd: number | null;
+  partial: boolean;
+}
+
+/**
+ * Ask the platform what this exact request would cost. Throws when the quote
+ * endpoint fails; callers decide whether that is fatal.
+ */
+export async function fetchQuote(
+  requestBody: unknown,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<Quote> {
+  const quote: z.output<typeof calculateResponseSchema> = await generationApi("/model/calculate", {
+    method: "POST",
+    body: requestBody,
+    responseSchema: calculateResponseSchema,
+    ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+  });
+  return { usd: quote.price ?? null, partial: quote.estimate_partial === true };
 }
 
 export function autoSubmitThresholdUsd(): number {
@@ -92,14 +117,9 @@ export async function evaluateSpend(
     };
   }
 
-  let quote: z.output<typeof calculateResponseSchema>;
+  let quote: Quote;
   try {
-    quote = await generationApi("/model/calculate", {
-      method: "POST",
-      body: requestBody,
-      responseSchema: calculateResponseSchema,
-      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
-    });
+    quote = await fetchQuote(requestBody, options);
   } catch (error) {
     return {
       autoSubmit: false,
@@ -109,7 +129,7 @@ export async function evaluateSpend(
     };
   }
 
-  const quotedUsd = quote.price ?? null;
+  const quotedUsd = quote.usd;
   if (quotedUsd === null) {
     return {
       autoSubmit: false,
@@ -118,11 +138,12 @@ export async function evaluateSpend(
       reason: "quote did not include a price",
     };
   }
-  if (quote.estimate_partial === true) {
+  if (quote.partial) {
     return {
       autoSubmit: false,
       quotedUsd,
       thresholdUsd,
+      partial: true,
       reason: "quote is partial, the real charge is higher",
     };
   }
@@ -166,4 +187,60 @@ export function autoSubmitNotice(decision: SpendDecision): string {
     `so treat it as spent only once polling returns a successful result, and a run ` +
     `that ends in status "failed" is not billed.`
   );
+}
+
+/**
+ * The cost line shown when a request stops for confirmation.
+ *
+ * The confirmation used to show only the catalog's unit price — for a
+ * per-second video model or a Studio workflow that is a starting rate, several
+ * times below what the request actually costs, and agents relayed it to users as
+ * "the price". The real figure for these exact parameters is already in hand
+ * from the quote that triggered the confirmation, so lead with that.
+ */
+export function confirmationCostNotice(decision: SpendDecision): string {
+  if (decision.quotedUsd === null) {
+    return (
+      `- **Estimated cost**: not available — the platform could not price this exact request ` +
+      `in advance. Do not derive a total from the catalog unit price below; tell the user the ` +
+      `cost is unknown until the job runs.`
+    );
+  }
+  if (decision.partial) {
+    return (
+      `- **Estimated cost**: at least ${formatUsd(decision.quotedUsd)} — the platform could not ` +
+      `see everything it needs to price this request (for example a reference video's length), ` +
+      `so the real charge will be higher.`
+    );
+  }
+  return (
+    `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
+    `at or above the ${formatUsd(decision.thresholdUsd)} auto-submit limit, so it needs confirmation).`
+  );
+}
+
+/** The same figure for structuredContent. */
+export function costEstimate(decision: SpendDecision): { usd: number | null; partial: boolean } {
+  return { usd: decision.quotedUsd, partial: decision.partial === true };
+}
+
+/**
+ * Live price of a model at its own defaults, for model documentation. The
+ * catalog only carries a starting unit price; agents read it as "the price" and
+ * then found the real charge several times higher. Text models are billed per
+ * token and have no meaningful per-request figure, so they are skipped. Any
+ * failure returns null: documentation must not break because pricing did.
+ */
+export async function quoteAtDefaults(
+  model: { model: string; type?: string },
+  schema: Record<string, unknown> | null | undefined,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<Quote | null> {
+  if (model.type === "Text") return null;
+  try {
+    const quote = await fetchQuote({ model: model.model, ...schemaDefaults(schema) }, options);
+    return quote.usd === null ? null : quote;
+  } catch {
+    return null;
+  }
 }

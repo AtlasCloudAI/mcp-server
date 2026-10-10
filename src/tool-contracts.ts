@@ -84,6 +84,8 @@ export const modelInfoOutputSchema = {
         .optional(),
     })
     .optional(),
+  // 默认参数下的实时报价（/model/calculate）；目录 pricing 只是计费单位起步价
+  estimated_price_at_defaults_usd: z.number().optional(),
   schema_available: z.boolean(),
   documentation_available: z.boolean(),
 };
@@ -112,6 +114,9 @@ export const generationOutputSchema = {
   confirmation_token: z.string().min(32).optional(),
   confirmation_expires_at: z.string().datetime().optional(),
   pricing: generationPricingSchema.optional(),
+  // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
+  estimated_cost_usd: z.number().optional(),
+  estimate_partial: z.boolean().optional(),
 };
 
 export type GenerationStructuredContent = Record<string, unknown> &
@@ -171,7 +176,8 @@ export function generationConfirmationStructuredContent(
     confirmationToken: string;
     expiresAt: string;
     pricing: z.infer<typeof generationPricingSchema>;
-  }
+  },
+  estimate?: { usd: number | null; partial: boolean }
 ): GenerationStructuredContent {
   return {
     model_id: model.model,
@@ -181,5 +187,8 @@ export function generationConfirmationStructuredContent(
     confirmation_token: confirmation.confirmationToken,
     confirmation_expires_at: confirmation.expiresAt,
     pricing: confirmation.pricing,
+    ...(estimate && estimate.usd !== null
+      ? { estimated_cost_usd: estimate.usd, ...(estimate.partial ? { estimate_partial: true } : {}) }
+      : {}),
   };
 }

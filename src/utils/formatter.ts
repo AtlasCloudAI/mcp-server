@@ -1,4 +1,5 @@
 import type { Model } from "../types.js";
+import type { Quote } from "../services/spend-policy.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 
 // Format model list as Markdown
@@ -33,7 +34,12 @@ export function formatModelList(models: Model[], type?: string): string {
 }
 
 // Format model detail as Markdown
-export function formatModelInfo(model: Model): string {
+// Up to four decimals, trailing zeros dropped: $0.0145, $0.1408, $3.136.
+function usd(amount: number): string {
+  return `$${Number(amount.toFixed(4))}`;
+}
+
+export function formatModelInfo(model: Model, defaultQuote?: Quote | null): string {
   const lines: string[] = [];
   lines.push(`# ${model.displayName}`);
   lines.push(`\n> ${model.profile || "No description available"}\n`);
@@ -49,14 +55,29 @@ export function formatModelInfo(model: Model): string {
   if (model.tags?.length) lines.push(`- **Tags**: ${model.tags.join(", ")}`);
 
   // Pricing info
-  if (model.price?.actual) {
+  if (model.price?.actual || defaultQuote) {
     lines.push(`\n## Pricing\n`);
-    const p = model.price.actual;
+    if (defaultQuote && defaultQuote.usd !== null) {
+      lines.push(
+        `- **Estimated price at default parameters**: ${usd(defaultQuote.usd)}` +
+          `${defaultQuote.partial ? " or more" : ""} (live quote). Resolution, duration, ` +
+          `count and other parameters change it; every generate tool quotes the exact ` +
+          `request before anything is billed.`
+      );
+    }
+    const p = model.price?.actual ?? {};
     if (p.input_price) lines.push(`- Input: $${p.input_price}/M tokens`);
     if (p.output_price) lines.push(`- Output: $${p.output_price}/M tokens`);
-    if (p.base_price) lines.push(`- Base: $${p.base_price}/request`);
+    // base_price 是计费单位的起步价（按张、或最低档位的每秒），不是一单的总价。
+    // 以前标成「/request」，agent 拿它当单价去对账，结果「实际扣费高好几倍」。
+    if (p.base_price) {
+      lines.push(
+        `- Catalog unit price: $${p.base_price} — a starting rate per billing unit ` +
+          `(per image, or per second of video at the lowest tier), not the total for a request`
+      );
+    }
     if (p.cache_price) lines.push(`- Cache: $${p.cache_price}/M tokens`);
-    if (model.price.discount && model.price.discount !== "100") {
+    if (model.price?.discount && model.price.discount !== "100") {
       lines.push(`- Discount: ${model.price.discount}%`);
     }
   }

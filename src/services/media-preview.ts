@@ -93,6 +93,14 @@ function resizeParamName(hostname: string): string | null {
   return null;
 }
 
+// 预览格式按原图选：JPG 原图本来就没有透明通道，转 JPG 最省；其它（png/webp，以及
+// 签名链接里看不出格式的）一律转 WebP。以前统一转 JPG，透明背景的图在预览里被填成
+// 白底，agent 看预览就断定「透明参数没生效」——原文件其实是透明的。
+// 实测 1024px：WebP 113KB 保住 alpha；PNG 1.6MB，超过抓取上限，预览会静默消失。
+function previewFormat(pathname: string): "jpg" | "webp" {
+  return /\.jpe?g$/i.test(pathname) ? "jpg" : "webp";
+}
+
 export function withResizeParams(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -102,7 +110,7 @@ export function withResizeParams(url: string): string | null {
     const edge = intEnv("MCP_MEDIA_PREVIEW_EDGE", 1024, 256, 2048);
     parsed.searchParams.set(
       param,
-      `image/resize,l_${edge}/format,jpg/quality,q_80`
+      `image/resize,l_${edge}/format,${previewFormat(parsed.pathname)}/quality,q_80`
     );
     return parsed.toString();
   } catch {

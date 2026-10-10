@@ -69,6 +69,72 @@ Sous le capot : découverte de modèles, schémas de paramètres dynamiques prop
 
 ## Démarrage rapide
 
+### Serveur hébergé — aucune clé API, rien à installer
+
+Pointez votre client vers notre serveur MCP hébergé et connectez-vous une fois dans le navigateur. Rien à installer, aucune clé à créer ni à coller, et les générations sont facturées au compte Atlas Cloud avec lequel vous vous connectez.
+
+**Point d'accès :** `https://mcp.atlascloud.ai/mcp`
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http --scope user atlas-cloud https://mcp.atlascloud.ai/mcp
+```
+
+Retirez `--scope user` pour ne l'ajouter qu'au projet courant. Ajouter le serveur ne vous connecte pas : exécutez ensuite `/mcp` dans Claude Code et suivez les instructions du navigateur.
+
+Vous pouvez aussi l'ajouter directement dans `.mcp.json` :
+
+```json
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+Ici, `type` est obligatoire : sans lui, Claude Code interprète l'entrée comme un serveur stdio et l'ignore.
+
+**ChatGPT et Codex**
+
+Installez le plugin, qui regroupe ce serveur et nos Skills :
+
+```bash
+codex plugin marketplace add AtlasCloudAI/atlas-cloud-plugin
+codex plugin add atlas-cloud@atlas-cloud
+codex mcp login atlas-cloud
+```
+
+Dans l'application de bureau ChatGPT : **Paramètres → Plugins → Ajouter → Ajouter une marketplace de plugins**, avec la source `AtlasCloudAI/atlas-cloud-plugin`, puis ouvrez **Atlas Cloud** et installez-le.
+
+**VS Code**
+
+Dans `.vscode/mcp.json` :
+
+```json
+{
+  "servers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+**Autres clients MCP**
+
+La plupart acceptent le point d'accès sous une clé `mcpServers`. Les noms de champs exacts varient d'un client à l'autre — certains exigent de préciser le transport, d'autres le déduisent de l'URL — consultez donc la documentation MCP de votre client.
+
+L'authentification se fait en OAuth 2.1 : le client s'enregistre lui-même, ouvre le navigateur une fois, puis reste autorisé. Aucune clé API n'intervient sur ce chemin.
+
+---
+
+Vous préférez faire tourner le serveur sur votre propre machine, avec votre propre clé API ? La suite de cette section traite précisément de ce cas.
+
 ### Prérequis
 
 - Node.js >= 18

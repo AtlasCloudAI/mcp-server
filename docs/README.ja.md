@@ -69,6 +69,72 @@ AI アシスタントに自然な言葉で頼むだけで、適切なモデル�
 
 ## クイックスタート
 
+### ホスト型サーバー — API キー不要、インストール不要
+
+クライアントを当社のホスト型 MCP サーバーに向け、ブラウザで一度サインインするだけです。インストールするものはなく、キーの作成や貼り付けも不要で、生成の料金はサインインした Atlas Cloud アカウントに課金されます。
+
+**エンドポイント:** `https://mcp.atlascloud.ai/mcp`
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http --scope user atlas-cloud https://mcp.atlascloud.ai/mcp
+```
+
+`--scope user` を外すと現在のプロジェクトのみに追加されます。サーバーを追加しただけではサインインは完了しません。追加後に Claude Code 内で `/mcp` を実行し、ブラウザの指示に従ってください。
+
+`.mcp.json` に直接書くこともできます:
+
+```json
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+ここでの `type` は必須です。指定しないと Claude Code はこのエントリを stdio サーバーとして読み取り、スキップします。
+
+**ChatGPT と Codex**
+
+このサーバーと当社の Skills をまとめたプラグインをインストールします:
+
+```bash
+codex plugin marketplace add AtlasCloudAI/atlas-cloud-plugin
+codex plugin add atlas-cloud@atlas-cloud
+codex mcp login atlas-cloud
+```
+
+ChatGPT デスクトップアプリの場合: **設定 → プラグイン → 追加 → プラグインマーケットプレイスを追加** で、ソースに `AtlasCloudAI/atlas-cloud-plugin` を指定し、**Atlas Cloud** を開いてインストールします。
+
+**VS Code**
+
+`.vscode/mcp.json` に記述します:
+
+```json
+{
+  "servers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+**その他の MCP クライアント**
+
+多くのクライアントは `mcpServers` キーの下でエンドポイントを受け取ります。フィールド名はクライアントごとに異なり、トランスポートを明示的に指定させるものもあれば、URL から推測するものもあります。お使いのクライアントの MCP ドキュメントをご確認ください。
+
+認証は OAuth 2.1 です。クライアントが自身を登録し、ブラウザを一度開いて承認すれば、以降は認証済みの状態が維持されます。この経路に API キーは一切登場しません。
+
+---
+
+自分のマシンで、自分の API キーを使ってサーバーを動かしたい場合は、このセクションの以降をご覧ください。
+
 ### 前提条件
 
 - Node.js >= 18

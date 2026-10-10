@@ -71,6 +71,72 @@
 
 ## 快速开始
 
+### 托管服务 — 无需 API Key，无需安装
+
+把你的客户端指向我们的托管 MCP 服务，在浏览器里登录一次即可。不用安装任何东西，不用创建和粘贴 Key，生成费用计入你登录的那个 Atlas Cloud 账号。
+
+**服务地址：** `https://mcp.atlascloud.ai/mcp`
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http --scope user atlas-cloud https://mcp.atlascloud.ai/mcp
+```
+
+去掉 `--scope user` 则只在当前项目生效。添加服务本身不会完成登录 —— 之后在 Claude Code 里运行 `/mcp`，按浏览器提示完成授权。
+
+也可以直接写进 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+这里的 `type` 是必填的 —— 不写的话 Claude Code 会把这条当成 stdio 服务，直接跳过。
+
+**ChatGPT 与 Codex**
+
+安装插件，它把这个服务和我们的 Skills 打包在一起：
+
+```bash
+codex plugin marketplace add AtlasCloudAI/atlas-cloud-plugin
+codex plugin add atlas-cloud@atlas-cloud
+codex mcp login atlas-cloud
+```
+
+在 ChatGPT 桌面端：**设置 → 插件 → 添加 → 添加插件市场**，来源填 `AtlasCloudAI/atlas-cloud-plugin`，然后打开 **Atlas Cloud** 点击安装。
+
+**VS Code**
+
+写进 `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "atlas-cloud": {
+      "type": "http",
+      "url": "https://mcp.atlascloud.ai/mcp"
+    }
+  }
+}
+```
+
+**其他 MCP 客户端**
+
+多数客户端都在 `mcpServers` 键下填写服务地址。各家的字段名不尽相同 —— 有的要求显式写出传输类型，有的则从 URL 自行推断 —— 请以该客户端自己的 MCP 文档为准。
+
+认证走 OAuth 2.1：客户端自行完成注册，打开一次浏览器授权，之后保持登录状态。这条路径上不存在任何 API Key。
+
+---
+
+更希望把服务跑在自己机器上、用自己的 API Key？本节余下内容讲的就是这种方式。
+
 ### 前提条件
 
 - Node.js >= 18

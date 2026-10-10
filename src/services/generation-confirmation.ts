@@ -192,7 +192,7 @@ export function formatGenerationPricing(pricing: ModelPrice): string {
     cache_price: "cached-input price per million tokens",
     output_image_price: "price per output image",
     request_price: "price per request",
-    base_price: "catalog billing-unit price (NOT an estimated total)",
+    base_price: "starting rate per billing unit (not this request's total)",
   };
   const parts = Object.entries(pricing.actual ?? {})
     .filter((entry): entry is [string, string] => Boolean(entry[1]))

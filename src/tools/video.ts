@@ -16,6 +16,8 @@ import {
 } from "../services/media-preview.js";
 import {
   autoSubmitNotice,
+  confirmationCostNotice,
+  costEstimate,
   evaluateSpend,
   type SpendDecision,
 } from "../services/spend-policy.js";
@@ -103,16 +105,18 @@ Returns:
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
               "video",
-              confirmation
+              confirmation,
+              costEstimate(spend)
             ),
             content: [{
               type: "text",
               text:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
-                `- **Current pricing**: ${formatGenerationPricing(confirmation.pricing)}\n` +
+                `${confirmationCostNotice(spend)}\n` +
+                `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
-                `Show this exact model and pricing to the user, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with the returned confirmation_token.`,
+                `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with the returned confirmation_token.`,
             }],
           };
         }

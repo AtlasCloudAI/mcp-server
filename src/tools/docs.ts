@@ -1,3 +1,4 @@
+import { quoteAtDefaults } from "../services/spend-policy.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchModels, getModelSchema } from "../services/doc-fetcher.js";
@@ -72,10 +73,10 @@ Examples:
         // If only one match, return detailed info
         if (models.length === 1 && offset === 0) {
           const model = models[0];
-          let detail = formatModelInfo(model);
-
-          // Try to get schema doc
+          // Schema first: the default-parameter quote needs its defaults
           const schema = await getModelSchema(model);
+          let detail = formatModelInfo(model, await quoteAtDefaults(model, schema));
+
           if (schema) {
             detail +=
               "\n\n---\n\n" +

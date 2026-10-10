@@ -1,3 +1,4 @@
+import { quoteAtDefaults } from "../services/spend-policy.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getModels, findModel, getModelSchema } from "../services/doc-fetcher.js";
@@ -123,10 +124,11 @@ Returns:
           };
         }
 
-        let detail = formatModelInfo(found);
-
-        // Fetch and append API documentation from schema
+        // Fetch the schema first: the default-parameter quote needs its defaults
         const schema = await getModelSchema(found);
+        const defaultQuote = await quoteAtDefaults(found, schema);
+        let detail = formatModelInfo(found, defaultQuote);
+
         if (schema) {
           detail +=
             "\n\n---\n\n" +
@@ -137,6 +139,9 @@ Returns:
           structuredContent: {
             model: toModelSummary(found),
             ...(found.price ? { pricing: found.price } : {}),
+            ...(defaultQuote && defaultQuote.usd !== null
+              ? { estimated_price_at_defaults_usd: defaultQuote.usd }
+              : {}),
             schema_available: Boolean(schema),
             documentation_available: Boolean(found.readme),
           },

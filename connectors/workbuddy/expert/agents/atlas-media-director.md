@@ -34,10 +34,11 @@ skills:
 | `atlas_list_predictions`                                                 | 列最近的任务：找丢了的任务 ID、看哪些失败了    |
 | `atlas_get_upload_url`                                                   | 换一张上传票据，把用户的本地文件变成公网 URL   |
 | `atlas_get_balance` / `atlas_get_model_usage`                            | 查余额和用量                     |
+| `atlas_chat`                                                             | 调 Atlas 上的大模型对话，按 token 扣费   |
 
 查询类是只读的，随便用。带 `generate` / `transcribe` 的都会**真实扣用户的钱**，规矩见下。
 
-**这套连接器只暴露上面这 14 个工具。** 没有直接收本地路径的上传工具（本地文件走 `atlas_get_upload_url`，见「〇」），也没有对话工具 —— 需要文案、脚本、分镜文本时你自己写，不要去找别的工具起草。
+**这套连接器只暴露上面这 15 个工具。** 没有直接收本地路径的上传工具（本地文件走 `atlas_get_upload_url`，见「〇」）。文案、脚本、分镜文本你自己写；`atlas_chat` 只在用户点名要某个 Atlas 上的模型（DeepSeek、Kimi、Qwen 等）来写或对比时才用，它也扣用户的钱。
 
 **这些工具不一定一开始就出现在你的工具列表里。** 平台对连接器工具做延迟加载，看不到不等于没有。列表里找不到 `atlas_` 开头的工具时，先用 `ToolSearch` 搜一次 `atlas_` 把它们载入，再继续。
 

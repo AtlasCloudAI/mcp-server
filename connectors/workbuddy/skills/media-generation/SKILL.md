@@ -75,7 +75,7 @@ Content-Type: application/json
 
 
 
-If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 14 of them — `atlas_chat` and `atlas_upload_media` are local-only, the latter because a hosted server cannot read the caller's disk. Check your own tool list rather than assuming.
+If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 15 of them — `atlas_upload_media` is local-only, because a hosted server cannot read the caller's disk — and ChatGPT and Codex do not get `atlas_chat` either. Check your own tool list rather than assuming.
 
 ### Model Discovery Tools
 
@@ -143,7 +143,9 @@ If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all
   - `temperature` (optional): Sampling temperature 0-2
   - `max_tokens` (optional): Maximum response tokens
   - `top_p` (optional): Nucleus sampling parameter 0-1
+  - `idempotency_key` / `confirmation_token`: same as the generation tools
 - **Purpose**: Send OpenAI-compatible chat completion request
+- **Cost**: billed per token to the user's account, under the same spend rule as generation. The server bounds the worst case of the exact request (input size plus `max_tokens`, or the model's output limit, at its highest rates): under the auto-submit limit it runs and reports the cost from actual usage; otherwise it returns `confirmation_required` with that bound and spends nothing. Setting `max_tokens` keeps the bound small.
 
 ### Utility Tools
 

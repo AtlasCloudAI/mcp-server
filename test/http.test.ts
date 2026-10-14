@@ -11,10 +11,10 @@ import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES, PROTOCOL_SCOPES
 import { createHttpApp, type HttpAppDependencies } from "../src/http.js";
 import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
-import { OPENAI_REMOTE_TOOL_NAMES, REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
+import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
 
 // 令牌前缀决定客户端：claude* 是 Claude 网页版的元数据文档客户端，其余是 ChatGPT 的。
-// *models 只有只读 scope。客户端身份决定 atlas_chat 这类按客户端隐藏的工具能不能看到。
+// *models 只有只读 scope。两类客户端看到的工具清单一样。
 const CHATGPT_CLIENT_ID = "https://chatgpt.com/oauth/client.json";
 const CLAUDE_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 
@@ -235,7 +235,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("official MCP client initializes and lists exactly 14 remote tools", async () => {
+  await t.test("official MCP client initializes and lists exactly 15 remote tools", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: {
         headers: {
@@ -248,12 +248,12 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 14);
+      assert.equal(listed.tools.length, 15);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
-        [...OPENAI_REMOTE_TOOL_NAMES].sort()
+        [...REMOTE_TOOL_NAMES].sort()
       );
-      assert.ok(!listed.tools.some((tool) => tool.name === "atlas_chat"));
+      assert.ok(listed.tools.some((tool) => tool.name === "atlas_chat"));
       assert.ok(!listed.tools.some((tool) => tool.name === "atlas_upload_media"));
       for (const tool of listed.tools) {
         const name = tool.name as keyof typeof TOOL_POLICIES;
@@ -399,7 +399,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const payload = await response.json() as Record<string, unknown>;
     const result = payload.result as Record<string, unknown>;
     const tools = result.tools as Array<Record<string, unknown>>;
-    assert.equal(tools.length, 14);
+    assert.equal(tools.length, REMOTE_TOOL_NAMES.length);
     for (const tool of tools) {
       const name = tool.name as keyof typeof TOOL_POLICIES;
       const scope = TOOL_POLICIES[name].scope;
@@ -413,7 +413,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("non-OpenAI clients also see atlas_chat, guarded by tasks:write", async () => {
+  await t.test("a server-side client sees the same tools, and atlas_chat needs tasks:write", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       // Claude 从服务端调用，不带 Origin
       requestInit: { headers: { Authorization: "Bearer claude" } },
@@ -471,7 +471,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     assert.equal(insufficient.status, 403);
     assert.match(insufficient.headers.get("www-authenticate") ?? "", /insufficient_scope/);
 
-    // atlas_chat 对 OpenAI 的客户端隐藏：调用也按不存在处理
+    // 只在本地档位的工具：远程调用按不存在处理
     const localOnly = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: {
@@ -479,7 +479,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
         Origin: "https://chatgpt.com",
         "content-type": "application/json",
       },
-      body: rpcBody("tools/call", { name: "atlas_chat", arguments: {} }),
+      body: rpcBody("tools/call", { name: "atlas_upload_media", arguments: {} }),
     });
     assert.equal(localOnly.status, 404);
     assert.deepEqual(await localOnly.json(), { error: "tool_not_available" });

@@ -11,15 +11,20 @@ import { REMOTE_SCOPES, loadHttpServerConfig, ADVERTISED_SCOPES, PROTOCOL_SCOPES
 import { createHttpApp, type HttpAppDependencies } from "../src/http.js";
 import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
-import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
+import { OPENAI_REMOTE_TOOL_NAMES, REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
+
+// 令牌前缀决定客户端：claude* 是 Claude 网页版的元数据文档客户端，其余是 ChatGPT 的。
+// *models 只有只读 scope。客户端身份决定 atlas_chat 这类按客户端隐藏的工具能不能看到。
+const CHATGPT_CLIENT_ID = "https://chatgpt.com/oauth/client.json";
+const CLAUDE_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 
 class StubVerifier implements OAuthTokenVerifier {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     if (token === "invalid") throw new InvalidTokenError("invalid test token");
-    const scopes = token === "models" ? ["tasks:read"] : [...REMOTE_SCOPES];
+    const scopes = token.endsWith("models") ? ["tasks:read"] : [...REMOTE_SCOPES];
     return {
       token,
-      clientId: "chatgpt-test-client",
+      clientId: token.startsWith("claude") ? CLAUDE_CLIENT_ID : CHATGPT_CLIENT_ID,
       scopes,
       expiresAt: Math.floor(Date.now() / 1000) + 300,
       resource: new URL("http://127.0.0.1/mcp"),
@@ -246,7 +251,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       assert.equal(listed.tools.length, 14);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
-        [...REMOTE_TOOL_NAMES].sort()
+        [...OPENAI_REMOTE_TOOL_NAMES].sort()
       );
       assert.ok(!listed.tools.some((tool) => tool.name === "atlas_chat"));
       assert.ok(!listed.tools.some((tool) => tool.name === "atlas_upload_media"));
@@ -408,6 +413,51 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
+  await t.test("non-OpenAI clients also see atlas_chat, guarded by tasks:write", async () => {
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+      // Claude 从服务端调用，不带 Origin
+      requestInit: { headers: { Authorization: "Bearer claude" } },
+    });
+    const client = new Client({ name: "http-contract-test", version: "1.0.0" });
+    await client.connect(transport);
+    try {
+      const listed = await client.listTools();
+      assert.equal(listed.tools.length, 15);
+      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...REMOTE_TOOL_NAMES].sort());
+      const chat = listed.tools.find((tool) => tool.name === "atlas_chat");
+      assert.ok(chat, "atlas_chat must be listed for Claude");
+      assert.deepEqual(chat.annotations, TOOL_POLICIES.atlas_chat.annotations);
+      // SDK 客户端解析时只保留 _meta 里的那份 securitySchemes
+      assert.deepEqual((chat._meta as Record<string, unknown>).securitySchemes, [
+        { type: "oauth2", scopes: ["tasks:write"] },
+      ]);
+      assert.ok(!listed.tools.some((tool) => tool.name === "atlas_upload_media"));
+    } finally {
+      await client.close();
+    }
+
+    // 只读令牌调 chat：在执行前就按 step-up 要 tasks:write，和生成工具一样
+    const readOnly = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { Authorization: "Bearer claude-models", "content-type": "application/json" },
+      body: rpcBody("tools/call", { name: "atlas_chat", arguments: {} }),
+    });
+    assert.equal(readOnly.status, 403);
+    assert.match(readOnly.headers.get("www-authenticate") ?? "", /insufficient_scope", scope="tasks:write"/);
+
+    // 有 tasks:write 的 Claude 令牌能进到工具本身（参数不全由工具自己拒，而不是 404）
+    const allowed = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer claude",
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: rpcBody("tools/call", { name: "atlas_chat", arguments: {} }),
+    });
+    assert.equal(allowed.status, 200);
+  });
+
   await t.test("scope and remote-tool allowlists fail before tool execution", async () => {
     const insufficient = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
@@ -421,6 +471,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     assert.equal(insufficient.status, 403);
     assert.match(insufficient.headers.get("www-authenticate") ?? "", /insufficient_scope/);
 
+    // atlas_chat 对 OpenAI 的客户端隐藏：调用也按不存在处理
     const localOnly = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: {

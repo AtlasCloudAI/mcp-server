@@ -6,13 +6,28 @@ const moneyValueSchema = z.object({
   currency: z.string(),
 });
 
+// 文本模型的阶梯价：输入超过 threshold 个 token 后按这一档的单价算（例如 GPT-6 Astra
+// 超过 272k 输入 token 后输入、输出单价都更高）。对话的花费上限按最贵的一档估，
+// 所以必须保留下来，不能被 z.object 默认的剥离吃掉。
+const promptThresholdSchema = z
+  .object({
+    threshold: z.number().optional(),
+    input_price: z.string().optional(),
+    output_price: z.string().optional(),
+    cache_price: z.string().optional(),
+    cache_creation_price: z.string().optional(),
+  })
+  .passthrough();
+
 const priceFieldsSchema = z.object({
   input_price: z.string().optional(),
   output_price: z.string().optional(),
   base_price: z.string().optional(),
   cache_price: z.string().optional(),
+  cache_creation_price: z.string().optional(),
   output_image_price: z.string().optional(),
   request_price: z.string().optional(),
+  prompt_thresholds: z.array(promptThresholdSchema).optional(),
 });
 
 export const modelResponseSchema = z

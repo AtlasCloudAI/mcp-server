@@ -75,7 +75,7 @@ Content-Type: application/json
 
 
 
-If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 15 of them — `atlas_upload_media` is local-only, because a hosted server cannot read the caller's disk — and ChatGPT and Codex do not get `atlas_chat` either. Check your own tool list rather than assuming.
+If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 15 of them — `atlas_upload_media` is local-only, because a hosted server cannot read the caller's disk. Check your own tool list rather than assuming.
 
 ### Model Discovery Tools
 

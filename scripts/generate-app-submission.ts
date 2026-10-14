@@ -1,9 +1,8 @@
 // Generates docs/chatgpt-app-submission.json for the OpenAI App Store review portal.
-// Tool annotations and justifications derive from src/tool-policy.ts (the remote profile as
-// OpenAI's clients see it — tools hidden from ChatGPT/Codex are left out),
+// Tool annotations and justifications derive from src/tool-policy.ts (the remote profile),
 // so re-run this after any policy change:  npx tsx scripts/generate-app-submission.ts docs/chatgpt-app-submission.json
 import { writeFileSync, readFileSync } from "node:fs";
-import { TOOL_POLICIES, OPENAI_REMOTE_TOOL_NAMES } from "../src/tool-policy.js";
+import { TOOL_POLICIES, REMOTE_TOOL_NAMES } from "../src/tool-policy.js";
 import { REMOTE_SCOPES, PROTOCOL_SCOPES } from "../src/config.js";
 import { SERVER_VERSION } from "../src/version.js";
 
@@ -26,6 +25,11 @@ function justify(name: string) {
   const p = TOOL_POLICIES[name as keyof typeof TOOL_POLICIES];
   const a = p.annotations;
   const base = p.annotationJustification;
+  // 文本模型没有 /model/calculate 报价，chat 的「报价」是这次请求的最坏情况
+  const chatQuote =
+    name === "atlas_chat"
+      ? ` For atlas_chat the quote is the worst case of the exact request: input size plus max_tokens (or the model's output limit) at the model's highest per-token rates from the catalog; a model without complete rates always requires confirmation.`
+      : "";
   return {
     read_only_justification: a.readOnlyHint
       ? `${base} It performs no writes to the user's Atlas account, tasks, or assets.`
@@ -34,13 +38,13 @@ function justify(name: string) {
       ? `Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.`
       : `Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.`,
     destructive_justification: a.destructiveHint
-      ? `Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (MCP_AUTOSUBMIT_MAX_USD, USD 20 by default) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. The gate fails closed: a quote that cannot be obtained, or that the platform marks partial, also requires confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice.`
+      ? `Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (MCP_AUTOSUBMIT_MAX_USD, USD 20 by default) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. The gate fails closed: a quote that cannot be obtained, or that the platform marks partial, also requires confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice.${chatQuote}`
       : `Alters no state; repeated calls return the same information at no charge.`,
   };
 }
 
 const tools: Record<string, unknown> = {};
-for (const name of OPENAI_REMOTE_TOOL_NAMES) {
+for (const name of REMOTE_TOOL_NAMES) {
   const p = TOOL_POLICIES[name];
   tools[name] = {
     annotations: {
@@ -129,8 +133,8 @@ const doc = {
     repository: "https://github.com/AtlasCloudAI/mcp-server",
     branch: "combo/oauth-exchange-20260907",
     server_version: SERVER_VERSION,
-    remote_tool_count: OPENAI_REMOTE_TOOL_NAMES.length,
-    note: "Tool count is the remote (production) profile as ChatGPT and Codex see it. atlas_chat is served at the production URL only to non-OpenAI clients, and the stdio profile additionally registers atlas_upload_media; main branch is 1.7.0 and describes a different service.",
+    remote_tool_count: REMOTE_TOOL_NAMES.length,
+    note: "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_upload_media, which is not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
     plugin_repository: "https://github.com/AtlasCloudAI/atlas-cloud-plugin",
     plugin_version: "0.6.0",
     skills: ["media-generation", "seedance-skill", "universal-video-prompt-skill"],
@@ -138,4 +142,4 @@ const doc = {
 };
 writeFileSync(OUT, JSON.stringify(doc, null, 2) + "\n");
 console.log(`  ✓ 写出 ${OUT}`);
-console.log(`  工具 ${OPENAI_REMOTE_TOOL_NAMES.length} 个 · 版本 ${SERVER_VERSION} · subtitle ${subtitle.length} 字符`);
+console.log(`  工具 ${REMOTE_TOOL_NAMES.length} 个 · 版本 ${SERVER_VERSION} · subtitle ${subtitle.length} 字符`);

@@ -30,7 +30,7 @@ connectors/workbuddy/
 浏览器跳 `auth.atlascloud.ai` 授权 → 带 Bearer 调 `https://mcp.atlascloud.ai/mcp`。
 **不装本地进程，不发 npm，也不需要和腾讯做任何沟通。**
 
-远程档位暴露 **15 个工具**（共 16 个），比 stdio 少 `atlas_upload_media` —— 托管服务器读不到调用方的磁盘，本地文件改走 `atlas_get_upload_url` 签发的上传票据。`atlas_chat` 对 ChatGPT / Codex 不暴露（OpenAI 的应用审核不收纯转发的大模型对话），WorkBuddy 这类其他客户端都有。
+远程档位暴露 **15 个工具**（共 16 个），比 stdio 少 `atlas_upload_media` —— 托管服务器读不到调用方的磁盘，本地文件改走 `atlas_get_upload_url` 签发的上传票据。`atlas_chat` 所有远程客户端都有。
 
 ### 唯一卡点：授权服务器要实现动态注册
 

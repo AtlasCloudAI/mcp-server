@@ -147,6 +147,21 @@
       "billable": true,
       "required_scope": "tasks:write"
     },
+    "atlas_chat": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Invokes a billable external model; a stable idempotency key prevents duplicate charges. It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.",
+        "open_world_justification": "Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.",
+        "destructive_justification": "Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (MCP_AUTOSUBMIT_MAX_USD, USD 20 by default) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. The gate fails closed: a quote that cannot be obtained, or that the platform marks partial, also requires confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice. For atlas_chat the quote is the worst case of the exact request: input size plus max_tokens (or the model's output limit) at the model's highest per-token rates from the catalog; a model without complete rates always requires confirmation."
+      },
+      "billable": true,
+      "required_scope": "tasks:write"
+    },
     "atlas_get_prediction": {
       "annotations": {
         "readOnlyHint": true,
@@ -293,9 +308,9 @@
   "source_snapshot": {
     "repository": "https://github.com/AtlasCloudAI/mcp-server",
     "branch": "combo/oauth-exchange-20260907",
-    "server_version": "2.8.0",
-    "remote_tool_count": 14,
-    "note": "Tool count is the remote (production) profile as ChatGPT and Codex see it. atlas_chat is served at the production URL only to non-OpenAI clients, and the stdio profile additionally registers atlas_upload_media; main branch is 1.7.0 and describes a different service.",
+    "server_version": "2.8.1",
+    "remote_tool_count": 15,
+    "note": "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_upload_media, which is not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
     "plugin_repository": "https://github.com/AtlasCloudAI/atlas-cloud-plugin",
     "plugin_version": "0.6.0",
     "skills": [

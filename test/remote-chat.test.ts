@@ -8,12 +8,7 @@ import {
   chatWorstCaseUsd,
   evaluateChatSpend,
 } from "../src/services/spend-policy.js";
-import {
-  isOpenAIClient,
-  isRemoteToolAvailable,
-  OPENAI_REMOTE_TOOL_NAMES,
-  REMOTE_TOOL_NAMES,
-} from "../src/tool-policy.js";
+import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
 import type { Model } from "../src/types.js";
 
 function textModel(price: Model["price"], extra: Partial<Model> = {}): Model {
@@ -33,30 +28,11 @@ function textModel(price: Model["price"], extra: Partial<Model> = {}): Model {
   };
 }
 
-test("OpenAI clients are recognised by their metadata-document host only", () => {
-  assert.equal(isOpenAIClient("https://chatgpt.com/oauth/client.json"), true);
-  assert.equal(isOpenAIClient("https://chatgpt.com/oauth/codex/client.json"), true);
-  assert.equal(isOpenAIClient("https://platform.openai.com/oauth/client.json"), true);
-  assert.equal(isOpenAIClient("https://claude.ai/oauth/mcp-oauth-client-metadata"), false);
-  assert.equal(isOpenAIClient("https://claude.ai/oauth/claude-code-client-metadata"), false);
-  // 动态注册拿到的随机 id、长得像但不是这个域名的，都不算
-  assert.equal(isOpenAIClient("3f6c0b1e-dcr-client"), false);
-  assert.equal(isOpenAIClient("https://chatgpt.com.evil.example/client.json"), false);
-  assert.equal(isOpenAIClient("https://notchatgpt.com/client.json"), false);
-  assert.equal(isOpenAIClient(undefined), false);
-});
-
-test("atlas_chat is remote for everyone except OpenAI clients", () => {
+test("atlas_chat is a remote tool for every client; only the upload tool stays local", () => {
   assert.ok(REMOTE_TOOL_NAMES.includes("atlas_chat"));
-  assert.ok(!OPENAI_REMOTE_TOOL_NAMES.includes("atlas_chat"));
-  assert.equal(OPENAI_REMOTE_TOOL_NAMES.length, 14);
-  assert.equal(isRemoteToolAvailable("atlas_chat", "https://chatgpt.com/oauth/client.json"), false);
-  assert.equal(isRemoteToolAvailable("atlas_chat", "https://chatgpt.com/oauth/codex/client.json"), false);
-  assert.equal(isRemoteToolAvailable("atlas_chat", "https://claude.ai/oauth/mcp-oauth-client-metadata"), true);
-  assert.equal(isRemoteToolAvailable("atlas_chat", "some-dcr-client"), true);
-  // 其他工具不受影响；只在本地的工具对谁都不远程开放
-  assert.equal(isRemoteToolAvailable("atlas_generate_image", "https://chatgpt.com/oauth/client.json"), true);
-  assert.equal(isRemoteToolAvailable("atlas_upload_media", "https://claude.ai/oauth/mcp-oauth-client-metadata"), false);
+  assert.equal(REMOTE_TOOL_NAMES.length, 15);
+  assert.ok(!REMOTE_TOOL_NAMES.includes("atlas_upload_media"));
+  assert.equal(TOOL_POLICIES.atlas_chat.scope, "tasks:write");
 });
 
 test("input tokens are bounded by UTF-8 bytes plus per-message overhead", () => {

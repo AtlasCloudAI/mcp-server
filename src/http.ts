@@ -206,7 +206,7 @@ export function createHttpApp(
         throw error;
       }
 
-      const server = createAtlasCloudServer("remote", { clientId: req.auth.clientId });
+      const server = createAtlasCloudServer("remote");
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

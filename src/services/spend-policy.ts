@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
 import { schemaDefaults } from "../utils/schema-validator.js";
+import type { Model, PromptThresholdPrice } from "../types.js";
 
 // Every billable tool used to stop after the first call and wait for the user to
 // confirm a quote, without exception. For a $0.009 image that is the wrong trade:
@@ -163,8 +164,107 @@ export async function evaluateSpend(
   };
 }
 
+// ---- 对话（按 token 计费）----
+//
+// /model/calculate 不给文本模型报价（按 token 计费，提交前不知道会输出多少），所以对话
+// 的闸门用本地算的「最坏情况」：输入按 UTF-8 字节数算 token（字节级 BPE 每个字节至多
+// 一个 token，只会高估），输出按 max_tokens，没给就按模型的最大输出；单价取所有阶梯里
+// 最贵的一档（含缓存写入价）。高估只会让闸门更早要求确认，不会让贵的请求漏过去。
+
+export interface ChatRequestShape {
+  messages: Array<{ role: string; content: string }>;
+  max_tokens?: number;
+}
+
+/** 每条消息在内容之外还有角色、分隔符等开销，按 16 个 token 留足。 */
+const CHAT_MESSAGE_OVERHEAD_TOKENS = 16;
+
+function parseRate(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function tiersOf(model: Model): PromptThresholdPrice[] {
+  const actual = model.price?.actual;
+  if (!actual) return [];
+  return [actual, ...(actual.prompt_thresholds ?? [])];
+}
+
+/** 输入、输出每百万 token 的最高单价；缺任何一个都返回 null（拿不准就不自动提交）。 */
+function worstCaseRates(model: Model): { input: number; output: number } | null {
+  let input: number | null = null;
+  let output: number | null = null;
+  for (const tier of tiersOf(model)) {
+    for (const rate of [parseRate(tier.input_price), parseRate(tier.cache_creation_price)]) {
+      if (rate !== null) input = Math.max(input ?? 0, rate);
+    }
+    const out = parseRate(tier.output_price);
+    if (out !== null) output = Math.max(output ?? 0, out);
+  }
+  return input === null || output === null ? null : { input, output };
+}
+
+export function chatInputTokenUpperBound(request: ChatRequestShape): number {
+  return request.messages.reduce(
+    (sum, message) => sum + Buffer.byteLength(message.content, "utf8") + CHAT_MESSAGE_OVERHEAD_TOKENS,
+    0
+  );
+}
+
+/** 这次对话最多花多少钱（美元）；单价或输出上限不明时返回 null。 */
+export function chatWorstCaseUsd(model: Model, request: ChatRequestShape): number | null {
+  const rates = worstCaseRates(model);
+  const outputTokens = request.max_tokens ?? model.maxCompletionTokens ?? model.contextLength;
+  if (!rates || outputTokens === undefined) return null;
+  return (chatInputTokenUpperBound(request) * rates.input + outputTokens * rates.output) / 1_000_000;
+}
+
+/**
+ * 对话的花费闸门，规则与生成工具相同：低于自动提交上限就直接调用，达到上限或算不出
+ * 上限就停下来等确认。quotedUsd 是上限，不是实际花费（实际按用量算，通常小几个数量级）。
+ */
+export function evaluateChatSpend(model: Model, request: ChatRequestShape): SpendDecision {
+  const thresholdUsd = autoSubmitThresholdUsd();
+  if (thresholdUsd <= 0) {
+    return { autoSubmit: false, quotedUsd: null, thresholdUsd, reason: "auto-submit disabled" };
+  }
+  const worst = chatWorstCaseUsd(model, request);
+  if (worst === null) {
+    return { autoSubmit: false, quotedUsd: null, thresholdUsd, reason: "per-token rates or output limit unavailable" };
+  }
+  if (worst >= thresholdUsd) {
+    return { autoSubmit: false, quotedUsd: worst, thresholdUsd, reason: "worst-case cost is at or above the threshold" };
+  }
+  return { autoSubmit: true, quotedUsd: worst, thresholdUsd, reason: "worst-case cost is below the threshold" };
+}
+
+/** 按实际用量算这次对话的花费：输入超过阶梯门槛就用那一档的单价。 */
+export function chatUsageCostUsd(
+  model: Model,
+  usage: { prompt_tokens: number; completion_tokens: number }
+): number | null {
+  const actual = model.price?.actual;
+  if (!actual) return null;
+  let tier: PromptThresholdPrice = actual;
+  for (const candidate of actual.prompt_thresholds ?? []) {
+    if (typeof candidate.threshold === "number" && usage.prompt_tokens > candidate.threshold) {
+      if (typeof tier.threshold !== "number" || candidate.threshold > tier.threshold) tier = candidate;
+    }
+  }
+  const input = parseRate(tier.input_price) ?? parseRate(actual.input_price);
+  const output = parseRate(tier.output_price) ?? parseRate(actual.output_price);
+  if (input === null || output === null) return null;
+  return (usage.prompt_tokens * input + usage.completion_tokens * output) / 1_000_000;
+}
+
 export function formatUsd(amount: number): string {
-  // Sub-cent prices are normal here, so do not round them away to $0.01.
+  // Sub-cent prices are normal here, so do not round them away to $0.01. A short
+  // chat costs millionths of a dollar: keep two significant digits rather than
+  // printing $0.0000.
+  if (amount > 0 && amount < 0.0001) {
+    return `$${amount.toFixed(Math.min(10, 1 - Math.floor(Math.log10(amount))))}`;
+  }
   const decimals = amount > 0 && amount < 0.01 ? 4 : 2;
   return `$${amount.toFixed(decimals)}`;
 }

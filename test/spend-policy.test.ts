@@ -127,6 +127,10 @@ test("阈值设为 0 时连报价都不发，直接回到全部确认", async (t
 
 test("不足一分钱的价格不被四舍五入成 $0.01", () => {
   assert.equal(formatUsd(0.009), "$0.0090");
+  assert.equal(formatUsd(0.0000221), "$0.000022");
+  assert.equal(formatUsd(0.0000058), "$0.0000058");
+  assert.equal(formatUsd(0.000001), "$0.0000010");
+  assert.equal(formatUsd(0), "$0.00");
   assert.equal(formatUsd(0.036), "$0.04");
   assert.equal(formatUsd(20), "$20.00");
 });

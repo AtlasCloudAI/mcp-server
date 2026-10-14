@@ -9,6 +9,12 @@ import {
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import {
+  chatUsageCostUsd,
+  evaluateChatSpend,
+  formatUsd,
+  type SpendDecision,
+} from "../services/spend-policy.js";
+import {
   buildImagePreviews,
   classifyOutput,
   playbackGuidance,
@@ -39,20 +45,20 @@ export function registerLLMTools(
       "atlas_chat",
       {
         title: "Chat with LLM",
-        description: `Two-step chat completion through the Atlas Cloud OpenAI-compatible API. The exact model ID is verified against the live Text catalog before any billable request.
+        description: `Chat completion with an Atlas Cloud LLM (OpenAI-compatible), billed to the signed-in Atlas account. Use it when the user asks for an answer from a specific Atlas model (for example DeepSeek, Kimi, Qwen or GLM) or wants to compare models; the exact model ID is verified against the live Text catalog first.
 
-Billing confirmation is mandatory. The first call MUST omit confirmation_token and returns only the exact model and current input/output token rates; it does not submit or spend credits. Show those rates and stop. Only after a new user message explicitly confirms may you repeat the call with the same idempotency_key, unchanged arguments, and confirmation_token. Rates are per million tokens, not a guaranteed total; max_tokens bounds output length but not the final billed total.
+Billing follows the same spend gate as the generation tools. Call once without confirmation_token. The server bounds the worst-case cost of this exact request (input size, max_tokens and the model's highest per-token rates): under the auto-submit limit it runs straight away and reports the cost from actual token usage — pass that cost on to the user. At or above the limit, or when the model's rates are unknown, it returns the bound and a confirmation_token and spends nothing; show it and stop, and only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. Do not add a confirmation step of your own on top of this.
 
 Args:
   - model (string, required): An exact current LLM model ID returned by atlas_list_models.
   - messages (array, required): Array of message objects with "role" and "content" fields.
     Roles: "system", "user", "assistant"
   - temperature (number, optional): Sampling temperature, 0-2. Default: 1
-  - max_tokens (number, optional): Maximum tokens in the response
+  - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound.
   - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1
 
 Returns:
-  The LLM response including the generated message, token usage, and finish reason.
+  The LLM response including the generated message, token usage, finish reason and cost.
 
 Before calling, use atlas_list_models with type="Text" to obtain a current model ID.`,
         inputSchema: {
@@ -103,6 +109,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           confirmation_token: z.string().min(32).optional(),
           confirmation_expires_at: z.string().datetime().optional(),
           pricing: generationPricingSchema.optional(),
+          // 停下来等确认时：这次请求的花费上限；完成时：按实际用量算的花费
+          worst_case_cost_usd: z.number().optional(),
+          cost_usd: z.number().optional(),
         },
         annotations: toolAnnotations("atlas_chat"),
       },
@@ -141,13 +150,21 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             resolved_model: found.model,
             request_body: body,
           };
+          let spend: SpendDecision | undefined;
           if (!confirmation_token) {
+            spend = evaluateChatSpend(found, { messages, max_tokens });
+          }
+          if (spend && !spend.autoSubmit) {
             const confirmation = issueGenerationConfirmation(
               "atlas_chat",
               idempotency_key,
               confirmedRequest,
               found.price
             );
+            const bound =
+              spend.quotedUsd === null
+                ? "- **Worst-case cost**: unknown — the catalog has no complete per-token rates or output limit for this model, so it cannot be bounded in advance."
+                : `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request (input size, max_tokens and the highest rate tier), at or above the ${formatUsd(spend.thresholdUsd)} auto-submit limit. The real charge follows actual token usage and is usually far lower; setting a smaller max_tokens lowers this bound.`;
             return {
               structuredContent: {
                 status: "confirmation_required" as const,
@@ -155,25 +172,29 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                 confirmation_token: confirmation.confirmationToken,
                 confirmation_expires_at: confirmation.expiresAt,
                 pricing: confirmation.pricing,
+                ...(spend.quotedUsd !== null ? { worst_case_cost_usd: spend.quotedUsd } : {}),
               },
               content: [{
                 type: "text",
                 text:
                   "Confirmation required — no chat request was submitted and no credits were spent.\n\n" +
                   `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
+                  `${bound}\n` +
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                   `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
-                  "These are unit rates, not a guaranteed total. Show them to the user and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.",
+                  "Show this to the user and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.",
               }],
             };
           }
-          verifyGenerationConfirmation(
-            confirmation_token,
-            "atlas_chat",
-            idempotency_key,
-            confirmedRequest,
-            found.price
-          );
+          if (confirmation_token) {
+            verifyGenerationConfirmation(
+              confirmation_token,
+              "atlas_chat",
+              idempotency_key,
+              confirmedRequest,
+              found.price
+            );
+          }
 
           const response = await executeIdempotently(
             "atlas_chat",
@@ -211,11 +232,21 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           lines.push("## Response\n");
           lines.push(choice.message.content);
 
+          const costUsd = response.usage ? chatUsageCostUsd(found, response.usage) : null;
           if (response.usage) {
             lines.push(`\n## Token Usage\n`);
             lines.push(`- Prompt: ${response.usage.prompt_tokens}`);
             lines.push(`- Completion: ${response.usage.completion_tokens}`);
             lines.push(`- Total: ${response.usage.total_tokens}`);
+          }
+          if (costUsd !== null) {
+            const amount = `about ${formatUsd(costUsd)}`;
+            const how = spend?.autoSubmit
+              ? `run without a separate confirmation because its worst case was under the ${formatUsd(spend.thresholdUsd)} limit`
+              : "run after confirmation";
+            lines.push(
+              `\n**Cost**: ${amount} from token usage at catalog rates (${how}). Tell the user this cost; the Atlas bill is authoritative.`
+            );
           }
 
           return {
@@ -226,6 +257,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               message: choice.message.content,
               finish_reason: choice.finish_reason,
               ...(response.usage ? { usage: response.usage } : {}),
+              ...(costUsd !== null ? { cost_usd: costUsd } : {}),
             },
             content: [{ type: "text", text: lines.join("\n") }],
           };

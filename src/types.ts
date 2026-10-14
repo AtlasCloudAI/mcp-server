@@ -1,4 +1,13 @@
 // Model pricing structure
+/** 文本模型的一档阶梯价：输入超过 threshold 个 token 后生效。 */
+export interface PromptThresholdPrice {
+  threshold?: number;
+  input_price?: string;
+  output_price?: string;
+  cache_price?: string;
+  cache_creation_price?: string;
+}
+
 export interface ModelPrice {
   discount?: string;
   actual?: {
@@ -6,8 +15,10 @@ export interface ModelPrice {
     output_price?: string;
     base_price?: string;
     cache_price?: string;
+    cache_creation_price?: string;
     output_image_price?: string;
     request_price?: string;
+    prompt_thresholds?: PromptThresholdPrice[];
   };
   origin?: {
     input_price?: string;

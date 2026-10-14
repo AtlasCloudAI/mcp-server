@@ -3,7 +3,7 @@ import { resolveAdvertisedScopes } from "../config.js";
 import type { Request, RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import type { HttpServerConfig } from "../config.js";
-import { isAtlasToolName, TOOL_POLICIES } from "../tool-policy.js";
+import { isAtlasToolName, isRemoteToolAvailable, TOOL_POLICIES } from "../tool-policy.js";
 import { isExactAllowedHost } from "./host-validation.js";
 
 /**
@@ -201,7 +201,8 @@ export function enforceToolScopes(
 ): RequestHandler {
   return (req, res, next) => {
     for (const name of calledToolNames(req)) {
-      if (!isAtlasToolName(name) || !TOOL_POLICIES[name].remote) {
+      // 对这个客户端不可见的工具，调用也按「不存在」处理，和 tools/list 保持一致
+      if (!isAtlasToolName(name) || !isRemoteToolAvailable(name, req.auth?.clientId)) {
         res.status(404).json({ error: "tool_not_available" });
         return;
       }

@@ -259,7 +259,12 @@ export function chatUsageCostUsd(
 }
 
 export function formatUsd(amount: number): string {
-  // Sub-cent prices are normal here, so do not round them away to $0.01.
+  // Sub-cent prices are normal here, so do not round them away to $0.01. A short
+  // chat costs millionths of a dollar: keep two significant digits rather than
+  // printing $0.0000.
+  if (amount > 0 && amount < 0.0001) {
+    return `$${amount.toFixed(Math.min(10, 1 - Math.floor(Math.log10(amount))))}`;
+  }
   const decimals = amount > 0 && amount < 0.01 ? 4 : 2;
   return `$${amount.toFixed(decimals)}`;
 }

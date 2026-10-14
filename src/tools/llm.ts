@@ -240,7 +240,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             lines.push(`- Total: ${response.usage.total_tokens}`);
           }
           if (costUsd !== null) {
-            const amount = costUsd > 0 && costUsd < 0.0001 ? "under $0.0001" : `about ${formatUsd(costUsd)}`;
+            const amount = `about ${formatUsd(costUsd)}`;
             const how = spend?.autoSubmit
               ? `run without a separate confirmation because its worst case was under the ${formatUsd(spend.thresholdUsd)} limit`
               : "run after confirmation";

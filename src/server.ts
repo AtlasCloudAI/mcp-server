@@ -10,12 +10,19 @@ import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 import { registerUploadTools } from "./tools/upload.js";
 import { registerUploadUrlTool } from "./tools/upload-url.js";
 import { registerVideoTools } from "./tools/video.js";
+import { isRemoteToolAvailable } from "./tool-policy.js";
 import { SERVER_VERSION } from "./version.js";
 
 export type ServerProfile = "stdio" | "remote";
 
+export interface ServerOptions {
+  /** 远程档位：调用方 OAuth 令牌里的 client_id，决定按客户端隐藏的工具要不要注册。 */
+  clientId?: string;
+}
+
 export function createAtlasCloudServer(
-  profile: ServerProfile = "stdio"
+  profile: ServerProfile = "stdio",
+  options: ServerOptions = {}
 ): McpServer {
   const server = new McpServer(
     {
@@ -39,7 +46,9 @@ export function createAtlasCloudServer(
   registerImageTools(server);
   registerVideoTools(server);
   registerAudioTools(server);
-  registerLLMTools(server, { includeChat: profile === "stdio" });
+  registerLLMTools(server, {
+    includeChat: profile === "stdio" || isRemoteToolAvailable("atlas_chat", options.clientId),
+  });
   registerQuickGenerateTools(server);
   registerAccountTools(server);
   registerPredictionTools(server);

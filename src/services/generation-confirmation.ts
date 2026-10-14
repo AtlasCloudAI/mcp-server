@@ -190,13 +190,22 @@ export function formatGenerationPricing(pricing: ModelPrice): string {
     input_price: "input price per million tokens",
     output_price: "output price per million tokens",
     cache_price: "cached-input price per million tokens",
+    cache_creation_price: "cache-write price per million tokens",
     output_image_price: "price per output image",
     request_price: "price per request",
     base_price: "starting rate per billing unit (not this request's total)",
   };
   const parts = Object.entries(pricing.actual ?? {})
-    .filter((entry): entry is [string, string] => Boolean(entry[1]))
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "")
     .map(([field, value]) => `${labels[field] ?? field}: $${value}`);
+  for (const tier of pricing.actual?.prompt_thresholds ?? []) {
+    if (typeof tier.threshold !== "number") continue;
+    const rates = [
+      tier.input_price ? `input $${tier.input_price}` : "",
+      tier.output_price ? `output $${tier.output_price}` : "",
+    ].filter(Boolean);
+    if (rates.length) parts.push(`above ${tier.threshold} input tokens: ${rates.join(", ")} per million tokens`);
+  }
   if (pricing.discount && pricing.discount !== "100") {
     parts.push(`catalog discount: ${pricing.discount}%`);
   }

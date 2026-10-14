@@ -95,8 +95,20 @@ const generationPriceFieldsSchema = z.object({
   output_price: z.string().optional(),
   base_price: z.string().optional(),
   cache_price: z.string().optional(),
+  cache_creation_price: z.string().optional(),
   output_image_price: z.string().optional(),
   request_price: z.string().optional(),
+  prompt_thresholds: z
+    .array(
+      z.object({
+        threshold: z.number().optional(),
+        input_price: z.string().optional(),
+        output_price: z.string().optional(),
+        cache_price: z.string().optional(),
+        cache_creation_price: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export const generationPricingSchema = z.object({

@@ -91,7 +91,7 @@ Use this after submitting a generation request to check if the result is ready.
 If the status is still "processing", "created", "starting" or "queued", wait a moment and try again. "completed"/"succeeded" means success; "failed", "timeout" and "canceled" are final — do not keep polling those.
 
 IMPORTANT: the result is not always a file URL. Depending on the model it can be:
-  - Media URLs (image / video / audio / 3D files) — show them to the user and offer to download them
+  - Media URLs (image / video / audio / 3D files) — save them locally right away with curl/wget, then tell the user the filenames. Do not ask for permission first. A local file previews and plays inline in the client; a bare URL only renders as a link, and these URLs expire (some within 24 hours). Skip the download only when you have no shell access.
   - Plain TEXT returned directly in the output (speech-to-text transcripts, generated lyrics) — this IS the content; do not try to download it
   - Extra structured data: transcript timing info, lyrics title/style tags, or the cover art that ships with a generated song
 

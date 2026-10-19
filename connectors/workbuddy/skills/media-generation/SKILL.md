@@ -5,7 +5,7 @@ display_name: "Atlas Cloud 媒体生成"
 display_name_en: "Atlas Cloud Media Generation"
 description_zh: "用自然语言调用 Atlas Cloud 上 300+ 个模型，生成图片、视频、语音、音乐和 3D，并可查模型目录、参数与价格。"
 description_en: "Call 300+ Atlas Cloud models in natural language to generate images, video, speech, music and 3D, and to browse the catalog, parameters and pricing."
-version: 2.5.0
+version: 2.6.0
 author: Atlas Cloud
 ---
 
@@ -76,6 +76,8 @@ Content-Type: application/json
 
 
 If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all 16 tools below are available for direct invocation. A hosted connector exposes 15 of them — `atlas_upload_media` is local-only, because a hosted server cannot read the caller's disk. Check your own tool list rather than assuming.
+
+**Before anything is billed**: every generation is quoted first. Pick the model and parameters yourself (default to a fast, cost-effective model unless the user asks for top quality; do not ask the user to choose a model or a budget first), call the generation tool once to get the live quote, then show the model, the key parameters and the price in one short message — with one higher-quality alternative and its price if there is one — and wait for an explicit yes before calling again with `confirmation_token`.
 
 ### Model Discovery Tools
 
@@ -153,7 +155,8 @@ If the user has installed the Atlas Cloud MCP Server (`npx atlascloud-mcp`), all
 - **Params**: `prediction_id` (required): Prediction ID returned from a generation request
 - **Purpose**: Check image/video generation task status and result
 - **Status values**: `starting` → `processing` → `completed`/`succeeded`/`failed`
-- **On completion**: Returns output URL list. **Save each file with `curl -L -o "<descriptive-name>.<ext>" "<url>"` and then display it inline in the conversation — with a player for video. Do not ask for permission first.** A link is not the deliverable: the user wants to see the result where they are reading, not click through to another window. Saving also protects it, since some upstream providers expire these URLs within 24 hours. Skip this only when you cannot write files; then give the URL and say it may not open directly and can expire. Note that speech-to-text and lyrics models return the text itself rather than a file — there is nothing to download for those.
+- **Polling**: the server waits up to about 20 seconds for an unfinished task before it answers, so call `atlas_get_prediction` again right away while the task is still running, and keep polling in the same turn until it finishes. Never end your turn while a task is still processing, and never resubmit it.
+- **On completion**: follow the presentation notes in the result; they depend on the client. Where you have a shell (Codex), save each file with `curl -L --fail --max-time 600 -o "<descriptive-name>.<ext>" "<url>"`, wait until that command has actually exited (a shell tool can hand back control while curl is still writing — a half-written file shows as broken), and then show it with Markdown image syntax and the absolute path: `![<title>](/absolute/path/<name>.mp4)`. The leading `!` is what renders a player for video and the picture for an image; a plain link `[title](path)` only shows a file chip, and an HTML `<video>` tag is printed as text. Never put a remote Atlas URL inside image syntax: the storage refuses requests from the app and it renders as a broken image. If the sandbox has no network, ask to run that one download with network access. If the result says the file is still being copied to Atlas storage, poll again for the permanent link instead of downloading the temporary provider link. Speech-to-text and lyrics models return the text itself — nothing to download.
 
 #### Uploading a local file — which tool exists depends on how you are connected
 

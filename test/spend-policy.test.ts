@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   autoSubmitNotice,
   autoSubmitThresholdUsd,
+  confirmationCostNotice,
   evaluateSpend,
   formatUsd,
+  generationAutoSubmitThresholdUsd,
 } from "../src/services/spend-policy.js";
 
 function quoteFetcher(payload: unknown, status = 200): typeof fetch {
@@ -48,7 +50,7 @@ test("阈值默认 20，写坏了退回 0（= 全部要确认）而不是放行"
 });
 
 test("低于阈值直接提交", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
   const decision = await evaluateSpend(
     { model: "m", prompt: "p" },
     { fetcher: quoteFetcher({ code: 200, data: { price: "0.036", discount: 100 } }) }
@@ -58,7 +60,7 @@ test("低于阈值直接提交", async (t) => {
 });
 
 test("等于或高于阈值仍然要确认", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
   // 边界取「大于等于」：正好 20 属于该拦的那一侧。
   for (const price of ["20", "20.0001", "35.5"]) {
     const decision = await evaluateSpend(
@@ -73,7 +75,7 @@ test("等于或高于阈值仍然要确认", async (t) => {
 // 下面三条是同一件事的三种形态：拿不到可信报价时，"没能证明它便宜" 不等于
 // "它便宜"。全部必须落到要确认那一侧。
 test("报价接口失败时要确认", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
   const decision = await evaluateSpend(
     {},
     { fetcher: quoteFetcher({ message: "boom" }, 500) }
@@ -84,7 +86,7 @@ test("报价接口失败时要确认", async (t) => {
 });
 
 test("报价里没有 price 字段时要确认", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
   const decision = await evaluateSpend(
     {},
     { fetcher: quoteFetcher({ code: 200, data: { discount: 100 } }) }
@@ -94,7 +96,7 @@ test("报价里没有 price 字段时要确认", async (t) => {
 });
 
 test("平台标了 estimate_partial 时要确认，哪怕数字很小", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "20", ATLASCLOUD_API_KEY: "test-key" });
   // 参考视频没被探测到时报价是偏低的，真实扣费更高，这个数字不能用来过闸。
   const decision = await evaluateSpend(
     {},
@@ -109,20 +111,34 @@ test("平台标了 estimate_partial 时要确认，哪怕数字很小", async (t
   assert.match(decision.reason, /partial/);
 });
 
-test("阈值设为 0 时连报价都不发，直接回到全部确认", async (t) => {
-  withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: "0", ATLASCLOUD_API_KEY: "test-key" });
-  let called = false;
+test("生成类阈值为 0 时仍然拿实时报价，但一律要用户确认", async (t) => {
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "0", ATLASCLOUD_API_KEY: "test-key" });
   const decision = await evaluateSpend(
-    {},
-    {
-      fetcher: (async () => {
-        called = true;
-        return new Response("{}", { status: 200 });
-      }) as typeof fetch,
-    }
+    { model: "m", prompt: "p" },
+    { fetcher: quoteFetcher({ code: 200, data: { price: "0.22" } }) }
   );
   assert.equal(decision.autoSubmit, false);
-  assert.equal(called, false, "关掉之后不该再打报价接口");
+  assert.equal(decision.quotedUsd, 0.22, "确认里要能给出这次的真实价格");
+  assert.match(confirmationCostNotice(decision), /\$0\.22.*confirmed with the user/);
+});
+
+test("生成类阈值为 0 且报价失败：照样要确认，价格标为未知", async (t) => {
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: "0", ATLASCLOUD_API_KEY: "test-key" });
+  const decision = await evaluateSpend({}, { fetcher: quoteFetcher({ message: "boom" }, 500) });
+  assert.equal(decision.autoSubmit, false);
+  assert.equal(decision.quotedUsd, null);
+});
+
+test("生成类默认每次确认；对话保留 20 美元的自动上限", (t) => {
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: undefined, MCP_AUTOSUBMIT_MAX_USD: undefined });
+  assert.equal(generationAutoSubmitThresholdUsd(), 0);
+  assert.equal(autoSubmitThresholdUsd(), 20);
+  for (const bad of ["abc", "-1", "NaN"]) {
+    process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD = bad;
+    assert.equal(generationAutoSubmitThresholdUsd(), 0, `${bad} 应当退回 0`);
+  }
+  process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD = "5";
+  assert.equal(generationAutoSubmitThresholdUsd(), 5);
 });
 
 test("不足一分钱的价格不被四舍五入成 $0.01", () => {

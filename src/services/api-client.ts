@@ -566,3 +566,35 @@ export async function fetchExternalBinary(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Byte size of an object on Atlas storage, read with a HEAD request, or null.
+ *
+ * Used so an agent can check that the copy it saved is complete before showing it
+ * (a shell that returns early leaves a half-written file that looks "corrupt").
+ * Only Atlas storage is probed — the caller passes URLs that isAtlasStorageUrl
+ * already accepted — and every failure is silent: the size is a check, not a
+ * requirement.
+ */
+export async function headContentLength(
+  url: string,
+  options: { fetcher?: typeof fetch; timeoutMs?: number } = {}
+): Promise<number | null> {
+  const fetcher = options.fetcher ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3_000);
+  try {
+    const response = await fetcher(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+    });
+    if (!response.ok) return null;
+    const length = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+    return Number.isFinite(length) && length > 0 ? length : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

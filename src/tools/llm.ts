@@ -29,6 +29,17 @@ import {
   predictionIdSchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import { currentClientProfile } from "../services/client-profile.js";
+import {
+  completedAtOf,
+  createdAtOf,
+  hasUntransferredMedia,
+  isFinished,
+  secondsSince,
+  predictionOutputUrls,
+  probeSizes,
+  waitForPrediction,
+} from "../services/prediction-wait.js";
 import {
   chatCompletionResponseSchema,
   predictionResponseSchema,
@@ -280,11 +291,11 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
 
 Use this after submitting a generation request to check if the result is ready.
 
-If the status is still "processing" or "starting", wait a moment and try again.
+The server waits up to about 20 seconds for an unfinished task before answering, so call it again right away while the status is still "processing" or "starting" — keep polling in the same turn until the task finishes.
 
 When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and any image is also attached as an image block. You should then:
 1. Present the image to the user. Any image is also attached as an image block; whether that block is displayed is up to the client, so do not assume the user has already seen it.
-2. Give the URL, and save the file into the working directory without asking first (curl or wget send no Referer, so they work even on buckets that refuse a click from the chat). Then display the saved file inline in the conversation — with a player for video. Handing over a link instead does not satisfy the request; the server cannot attach a video block, so presenting it is your job.
+2. Follow the presentation notes in the result — they depend on the client. Where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video.
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -303,6 +314,7 @@ Examples:
         prediction_id: predictionIdSchema,
         status: z.string(),
         outputs: z.array(z.string()),
+        transfer_pending: z.boolean().optional(),
         error: z.string().optional(),
         metrics: z.record(z.unknown()).optional(),
       },
@@ -310,49 +322,67 @@ Examples:
     },
     async ({ prediction_id }) => {
       try {
-        const result = await generationApi<PredictionResponse>(
-          `/model/prediction/${encodeURIComponent(prediction_id)}`,
-          { responseSchema: predictionResponseSchema }
-        );
+        const fetchOnce = () =>
+          generationApi<PredictionResponse>(
+            `/model/prediction/${encodeURIComponent(prediction_id)}`,
+            { responseSchema: predictionResponseSchema }
+          );
+        const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
+        const status = result.data?.status || "unknown";
 
         const lines = [`# Prediction Result\n`];
         lines.push(`- **ID**: \`${prediction_id}\``);
-        lines.push(`- **Status**: ${result.data?.status || "unknown"}\n`);
+        lines.push(`- **Status**: ${status}\n`);
 
         if (result.data?.error) {
           lines.push(`## Error\n\n${result.data.error}`);
         }
 
-        const outputs = result.data?.outputs || result.data?.output;
-        const outputUrls = Array.isArray(outputs) ? outputs : outputs ? [outputs] : [];
+        const outputUrls = predictionOutputUrls(result);
+        const transferPending =
+          isFinished(status) && hasUntransferredMedia(outputUrls, completedAtOf(result));
         const kinds = new Set<OutputKind>(outputUrls.map(classifyOutput));
+        const profile = currentClientProfile();
         // 先建块：提示语要根据「用户是否已经看到图」给出相反的指引。
-        const previewBlocks = await buildImagePreviews(outputUrls);
+        const previewBlocks = transferPending ? [] : await buildImagePreviews(outputUrls);
 
-        if (outputUrls.length > 0) {
+        if (transferPending) {
+          lines.push("## Output (temporary provider link)\n");
+          outputUrls.forEach((url, i) => lines.push(`${i + 1}. ${url}`));
+          lines.push(
+            `\nThe file is finished but is still being copied to Atlas storage. Call ` +
+              `\`atlas_get_prediction\` again with this same ID in about 15 seconds and save the ` +
+              `permanent Atlas link it returns: that link downloads in seconds and stays available ` +
+              `for about 15 days, while the provider link above is slow from many networks and ` +
+              `expires within 24 hours. Use the provider link only if the Atlas link has still not ` +
+              `appeared after about 5 minutes. Keep going in this turn; do not stop here.`
+          );
+        } else if (outputUrls.length > 0) {
           lines.push("## Output\n");
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
-          const guidance = playbackGuidance(kinds);
+          const sizes = profile === "chatgpt" ? new Map<string, number>() : await probeSizes(outputUrls);
+          const guidance = playbackGuidance(kinds, { profile, sizes, urls: outputUrls });
           if (guidance) {
             lines.push(`\n${guidance}`);
-          } else {
-            lines.push(
-              `\nSave these into the working directory now, without asking first ` +
-                `(\`curl -L -o <name> '<url>'\`), then display each saved file ` +
-                `inline in the conversation — with a player for video. ` +
-                `A link on its own does not satisfy the request. ` +
-                `Opening the URL straight from the chat can come back 403: ` +
-                `some output buckets reject requests that carry a Referer, ` +
-                `and a download has none.`
-            );
           }
         }
 
-        if (result.data?.status && !["completed", "succeeded", "failed"].includes(result.data.status)) {
+        if (status !== "unknown" && !isFinished(status) && status !== "failed") {
+          const runningFor = secondsSince(createdAtOf(result));
           lines.push(
-            `\nThe task is still in progress. Please wait a moment and use \`atlas_get_prediction\` again to check.`
+            `\nThe task is still running` +
+              (runningFor !== null ? ` (submitted ${Math.round(runningFor / 6) / 10} min ago)` : "") +
+              (waitedSeconds > 0 ? `; the server already waited ${waitedSeconds} s on this call` : "") +
+              `. Video jobs commonly take 1–6 minutes and longer is normal under load — that is not ` +
+              `a failure. Call \`atlas_get_prediction\` again with this same ID right away and keep ` +
+              `polling in this turn until it reaches completed or failed. Do not end your turn ` +
+              `with a "still running, I will keep checking" message: once your turn ends nothing ` +
+              `checks again and the user is left waiting. If you nonetheless have to stop, say ` +
+              `plainly that the job is still running on Atlas and that replying "continue" (继续) ` +
+              `will pick it up with the same ID — never imply it is finished or stuck. Do not submit ` +
+              `the job again — that would start and bill a second one.`
           );
         }
 
@@ -366,8 +396,9 @@ Examples:
         return {
           structuredContent: {
             prediction_id,
-            status: result.data?.status || "unknown",
+            status,
             outputs: outputUrls,
+            ...(transferPending ? { transfer_pending: true } : {}),
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
           },

@@ -5,6 +5,7 @@ import {
   UPLOAD_FILENAME_HEADER,
   issueUploadTicketFromContext,
 } from "../services/upload-ticket.js";
+import { currentClientProfile, type ClientProfile } from "../services/client-profile.js";
 import { toolAnnotations } from "../tool-policy.js";
 
 // 只用来填 curl 示例：去掉路径和会破坏 shell 引号的字符。
@@ -13,6 +14,34 @@ function exampleFilename(hint: string | undefined): string {
     .replace(/["'`$\\\r\n]/g, "")
     .trim();
   return cleaned === "" ? "input.png" : cleaned;
+}
+
+// 2026-10-19 实测：从用户自己的网络上传，1.77 MB 的图要 6~7 秒（上行约 250~300 KB/s），
+// 中转还要再转投一次。Codex 的命令工具约 10 秒就交回控制权，模型把还在传的 curl 当成
+// 「上传无响应」，于是放弃或换票重来。另外默认权限的沙箱没有网络，ChatGPT 的沙箱解析不了
+// 我们的域名。指引把这几种情况分别说清楚。
+function uploadNotes(profile: ClientProfile): string[] {
+  const notes = [
+    "- Uploads go over the user's own connection: a 2 MB image can take 10 seconds or more. " +
+      "Wait for the curl command to exit; if your shell tool returns while it is still running, " +
+      "keep waiting on that same process — a running upload is not a failure.",
+    "- A reference image does not need full resolution. Shrink anything over about 2 MB before " +
+      "uploading (on macOS: `sips -Z 2048 -s format jpeg in.png --out ref.jpg`).",
+    "- If the upload fails or times out, call atlas_get_upload_url again for a fresh URL and retry once.",
+  ];
+  if (profile === "chatgpt") {
+    notes.push(
+      "- If the command cannot resolve or reach the upload host, this sandbox has no network. " +
+        "Do not fall back to sending the file as base64 in a tool call (it is rejected as too " +
+        "large); ask the user for a public link to the file instead."
+    );
+  } else {
+    notes.push(
+      "- If the sandbox has no network access, ask to run that one command with network access " +
+        "(escalated permissions) instead of giving up."
+    );
+  }
+  return notes;
 }
 
 export function registerUploadUrlTool(server: McpServer): void {
@@ -78,7 +107,7 @@ Returns:
       }
       const name = exampleFilename(filename_hint);
       const curlExample = [
-        `curl -sS -X POST "${issued.uploadUrl}"`,
+        `curl -sS --fail-with-body --max-time 180 -X POST "${issued.uploadUrl}"`,
         `  -H "Content-Type: application/octet-stream"`,
         `  -H "${UPLOAD_FILENAME_HEADER}: ${name}"`,
         `  --data-binary @"/path/to/${name}"`,
@@ -98,6 +127,8 @@ Returns:
         "",
         "The response is JSON with `url`; use it as the media URL in a generation tool. " +
           "For larger files, ask the user for a public link instead.",
+        "",
+        ...uploadNotes(currentClientProfile()),
       ].join("\n");
       return {
         structuredContent: {

@@ -12,6 +12,7 @@ import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
 } from "../services/media-preview.js";
+import { currentClientProfile } from "../services/client-profile.js";
 import {
   autoSubmitNotice,
   confirmationCostNotice,
@@ -200,7 +201,7 @@ Covers all generation tasks: text-to-image, image editing, 3D (image/text-to-3D)
 
 Parameters are validated against the model's schema BEFORE submitting. If extra_params contains fields the model does not accept (or wrong values), the tool returns a precise error and does NOT spend credits.
 
-Billing is gated by cost, not by ceremony. Call once, omitting confirmation_token. The server quotes the request against the live catalog: under the spend limit it submits immediately and the result carries the amount the platform reserved for the request. For an async job that figure is what the run is expected to cost, not a settled charge: report it as an estimate, and only call it spent once polling returns a successful result. A job that ends in status "failed" is not billed at all. At or above the limit, or whenever the platform will not give a firm quote, it returns a quote and an opaque confirmation_token without spending anything; show that exact quote and stop, and only after a new user message explicitly confirms it may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
+Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
 
 IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image / atlas_generate_video / atlas_generate_audio with the exact model ID instead. Do NOT invent extra_params - only pass parameters you know the model accepts (check atlas_get_model_info).
 
@@ -420,7 +421,7 @@ Returns:
         const settled = response.data?.outputs ?? response.data?.output;
         const outputs = Array.isArray(settled) ? settled : settled ? [settled] : [];
         const finished =
-          outputs.length > 0 ? await completedOutputContent(outputs) : null;
+          outputs.length > 0 ? await completedOutputContent(outputs, { profile: currentClientProfile() }) : null;
 
         lines.push(
           `${type} generation ${finished ? "completed" : "submitted successfully"}.\n`

@@ -1,4 +1,5 @@
 import { fetchExternalBinary } from "./api-client.js";
+import type { ClientProfile } from "./client-profile.js";
 
 // Why this exists: a generated image is returned to us as a URL on the object
 // store's default domain, and that domain forces `Content-Disposition: attachment`
@@ -271,40 +272,101 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
  *
  * 保留下来的只有可验证的事实：下载不带 Referer，点击可能带。
  */
-export function playbackGuidance(kinds: Set<OutputKind>): string | null {
+export interface PlaybackOptions {
+  /** Which host is asking; changes what it can do with a file. */
+  profile?: ClientProfile;
+  /** Byte size per output URL, when the server could read it, so a saved copy can be checked. */
+  sizes?: Map<string, number>;
+}
+
+function sizeNote(urls: string[] | undefined, sizes: Map<string, number> | undefined): string {
+  if (!urls || !sizes || sizes.size === 0) return "";
+  const known = urls.filter((url) => sizes.has(url));
+  if (known.length === 0) return "";
+  const parts = known.map((url, i) => `${known.length > 1 ? `#${i + 1} ` : ""}${sizes.get(url)} bytes`);
+  return ` The complete file is ${parts.join(", ")}; compare the saved size before showing it.`;
+}
+
+/**
+ * 2026-10-19 实测（Codex 0.163）定下来的几条事实，指引就按它们写：
+ *
+ * - 本地文件用图片语法 `![标题](/绝对路径.mp4)` 会出播放器；同一个文件写成普通链接
+ *   `[标题](路径)` 只显示成文件卡片。模型时而用这个时而用那个，所以要把语法原样写出来。
+ * - 远程 Atlas 链接嵌进 Markdown 一律破图：Codex 渲染页的来源是 `app://-`，两个桶的
+ *   防盗链都对它回 403。公网上没有防盗链的图片能正常显示，问题在我们的存储。
+ * - Codex 的命令工具大约 10~30 秒就把控制权交回来，curl 还在后台写文件。模型把写到一半
+ *   的文件当成品交付，用户看到的就是"损坏"的视频。所以要求等进程退出、核对大小。
+ * - 默认权限下沙箱没有网络，curl 连不上；要为这一条命令申请联网，而不是直接放弃。
+ * - ChatGPT 没有给模型用的本地 shell。让它下载、转码，只会触发一次次 node_repl 授权，
+ *   最后用户还是拿不到文件；那边直接给链接。
+ */
+export function playbackGuidance(
+  kinds: Set<OutputKind>,
+  options: PlaybackOptions & { urls?: string[] } = {}
+): string | null {
+  const profile = options.profile ?? "other";
   const notes: string[] = [];
+  const urlsOf = (kind: OutputKind) => options.urls?.filter((u) => classifyOutput(u) === kind);
+
+  if (profile === "chatgpt") {
+    if (kinds.has("image")) {
+      notes.push(
+        "The image is attached above as an image block. Also give the user the URL as a link. " +
+          "Do not run code to download, convert or re-encode it: in this client every script " +
+          "run asks the user for approval, and the file cannot be handed to them that way."
+      );
+    }
+    if (kinds.has("video") || kinds.has("audio") || kinds.has("other")) {
+      notes.push(
+        "Give the user the URL above as a link to open or download. Do not run code to " +
+          "download, convert, preview or re-encode it (no node_repl, python or shell): each run " +
+          "asks the user for approval, the sandbox often has no network, and a file saved there " +
+          "is not something the user can open. Say plainly that the file is ready at that link; " +
+          "do not claim it was blocked or failed."
+      );
+    }
+    return notes.length > 0 ? notes.join("\n") : null;
+  }
+
+  const save =
+    "Wait until that command has really exited with code 0 — if your shell tool hands back " +
+    "control while curl is still running, keep waiting on the same process; a file that is " +
+    "still being written plays or shows as broken.";
+  const network =
+    "If the download fails because the sandbox has no network access, ask to run that one " +
+    "command with network access (escalated permissions) instead of giving up.";
+  const remote =
+    "Never put the remote URL inside Markdown image syntax: the storage refuses requests " +
+    "coming from the chat app, so it renders as a broken image. Mention the URL only as a " +
+    "plain link for downloading.";
+
   if (kinds.has("image")) {
     notes.push(
-      "Save the image into the user's working directory and show them that local file: " +
-        "`curl -L -o <descriptive-name>.png '<url>'`. Downloading is what makes it " +
-        "viewable — these object URLs are hotlink-protected, so a request carrying a " +
-        "Referer (which is what a click from this chat sends) can come back 403, while a " +
-        "download sends none. Skip the download only if you cannot write files; then give " +
-        "the URL and say it may not open directly."
+      "Show the image inline: save it with `curl -L --fail --max-time 120 -o <descriptive-name>.png '<url>'` " +
+        "into the working directory. " + save + sizeNote(urlsOf("image"), options.sizes) + " " + network + "\n" +
+        "Then put this Markdown in your reply, with the saved file's absolute path: " +
+        "`![<short title>](/absolute/path/<descriptive-name>.png)`. " + remote
     );
   }
   if (kinds.has("video")) {
     notes.push(
-      "Save the video with `curl -L -o <descriptive-name>.mp4 '<url>'`, then DISPLAY THAT " +
-        "SAVED FILE INLINE IN THE CONVERSATION, WITH A PLAYER. Do not ask for permission " +
-        "first.\n" +
-        "A link is not the deliverable. Offering \"download the video\" and stopping there " +
-        "fails the request: the user wants to watch it where they are reading, not click " +
-        "through to another window. Embed the saved local file the same way you would show " +
-        "a generated image. The server cannot attach a video block for you — that is " +
-        "precisely why presenting the saved file is your job, not an optional extra.\n" +
-        "Do not tell the user the video cannot be shown, and do not tell them to open the " +
-        "URL in a browser: some output buckets are hotlink-protected and refuse a request " +
-        "that carries a Referer, so a click from the chat can come back 403, while a " +
-        "download sends none and always works. Skip all of this only if you cannot write " +
-        "files; then give the URL and say it may not open directly and can expire."
+      "Show the video inline, with a player — a link is not the deliverable. Do not ask for permission first.\n" +
+        "1. Save it: `curl -L --fail --max-time 600 -o <descriptive-name>.mp4 '<url>'`. " + save +
+        sizeNote(urlsOf("video"), options.sizes) + "\n" +
+        "2. " + network + "\n" +
+        "3. Put this exact Markdown in your reply, with the saved file's absolute path: " +
+        "`![<short title>](/absolute/path/<descriptive-name>.mp4)`. The leading `!` is what makes " +
+        "the client render a player. A plain link such as `[video](/path/video.mp4)` shows only " +
+        "a file chip, and an HTML <video> tag is printed as plain text.\n" +
+        "4. " + remote + "\n" +
+        "Do not tell the user the video cannot be shown."
     );
   }
   if (kinds.has("other")) {
     notes.push(
       "Some outputs are not images, video or audio (for example 3D assets such as GLB or " +
-        "OBJ). Save those into the user's working directory as well, without asking first " +
-        "— for the same reason: a download carries no Referer, a click from the chat may."
+        "OBJ). Save those into the user's working directory as well, without asking first, " +
+        "and give the saved path. " + save
     );
   }
   return notes.length > 0 ? notes.join("\n") : null;
@@ -320,7 +382,10 @@ export function playbackGuidance(kinds: Set<OutputKind>): string | null {
  * would have built: the URLs as text, the playback guidance for what cannot be
  * displayed, and the image blocks themselves.
  */
-export async function completedOutputContent(urls: string[]): Promise<{
+export async function completedOutputContent(
+  urls: string[],
+  options: PlaybackOptions = {}
+): Promise<{
   text: string;
   blocks: ImagePreviewBlock[];
 }> {
@@ -329,7 +394,7 @@ export async function completedOutputContent(urls: string[]): Promise<{
   const blocks = await buildImagePreviews(urls);
   const lines = ["## Output\n"];
   urls.forEach((url, index) => lines.push(`${index + 1}. ${url}`));
-  const guidance = playbackGuidance(new Set(urls.map(classifyOutput)));
+  const guidance = playbackGuidance(new Set(urls.map(classifyOutput)), { ...options, urls });
   if (guidance) lines.push(`\n${guidance}`);
   return { text: lines.join("\n"), blocks };
 }

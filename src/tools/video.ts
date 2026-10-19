@@ -48,6 +48,8 @@ IMPORTANT: The "model" parameter requires an exact current model ID. If you don'
 
 You should also use atlas_get_model_info to see the full parameter list and schema for your chosen video model before calling this tool.
 
+Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+
 Args:
   - model (string, required): The exact video model ID. Use atlas_list_models to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. Parameters vary by model - use atlas_get_model_info to see available params. Common ones include:

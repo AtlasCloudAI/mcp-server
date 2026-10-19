@@ -195,4 +195,22 @@ test("托管模式：按客户端给出不同的展示说明", async (t) => {
     const chat = await call("chatgpt", "atlas_get_upload_url", { filename_hint: "ref.png" });
     assert.match(chat.text, /ask the user for a public link/);
   });
+  await t.test("生成工具的描述告诉模型本地文件先上传，不要自己调 REST 接口", async () => {
+    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      requestInit: { headers: { Authorization: "Bearer codex", Origin: "https://chatgpt.com" } },
+    });
+    const client = new Client({ name: "hosted-presentation-test", version: "1.0.0" });
+    await client.connect(transport);
+    try {
+      const { tools } = await client.listTools();
+      for (const name of ["atlas_generate_image", "atlas_generate_video", "atlas_quick_generate"]) {
+        const tool = tools.find((x) => x.name === name);
+        assert.ok(tool, name);
+        assert.match(String(tool.description), /atlas_get_upload_url/, name);
+        assert.match(String(tool.description), /do not call the Atlas REST API yourself/, name);
+      }
+    } finally {
+      await client.close();
+    }
+  });
 });

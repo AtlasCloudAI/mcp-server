@@ -294,8 +294,8 @@ Use this after submitting a generation request to check if the result is ready.
 
 The server waits up to about 20 seconds for an unfinished task before answering, so call it again right away while the status is still "processing" or "starting" — keep polling in the same turn until the task finishes.
 
-When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and any image is also attached as an image block. You should then:
-1. Present the image to the user. Any image is also attached as an image block; whether that block is displayed is up to the client, so do not assume the user has already seen it.
+When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and for most clients any image is also attached as an image block. You should then:
+1. Present the image to the user. An image block, when attached, may or may not be displayed by the client, so do not assume the user has already seen it.
 2. Follow the presentation notes in the result — they depend on the client. Where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video.
 
 Args:

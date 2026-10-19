@@ -30,26 +30,61 @@ function hostMatches(host: string, domains: string[]): boolean {
   return domains.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
-export function clientProfile(clientId: string | undefined): ClientProfile {
-  if (!clientId) return "other";
+type KnownClient = "chatgpt" | "codex" | "claude" | "claude-code";
+
+function knownClient(clientId: string | undefined): KnownClient | null {
+  if (!clientId) return null;
   let url: URL;
   try {
     url = new URL(clientId);
   } catch {
-    return "other";
+    return null;
   }
   const host = url.hostname.toLowerCase();
   const path = url.pathname.toLowerCase();
   if (hostMatches(host, OPENAI_HOSTS)) {
-    return /(^|\/)codex(\/|$)/.test(path) ? "shell" : "chat";
+    return /(^|\/)codex(\/|$)/.test(path) ? "codex" : "chatgpt";
   }
   if (hostMatches(host, ANTHROPIC_HOSTS)) {
-    return path.includes("claude-code") ? "shell" : "chat";
+    return path.includes("claude-code") ? "claude-code" : "claude";
   }
-  return "other";
+  return null;
+}
+
+export function clientProfile(clientId: string | undefined): ClientProfile {
+  switch (knownClient(clientId)) {
+    case "codex":
+    case "claude-code":
+      return "shell";
+    case "chatgpt":
+    case "claude":
+      return "chat";
+    default:
+      return "other";
+  }
 }
 
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
   return clientProfile(getRequestContext()?.authInfo.clientId);
+}
+
+/**
+ * Should a finished image also be attached as a base64 image block?
+ *
+ * Not for Codex. Codex (desktop 26.1013, CLI 0.163) calls MCP tools from a
+ * JavaScript cell and the model usually prints the whole result with `text(r)`,
+ * so an image block reaches it as text: about 40k tokens of base64 for one
+ * 1024px preview. Measured on 2026-10-19, the model then pasted that string back
+ * as `![...](data:image/webp;base64,...)` instead of saving the file. Codex shows
+ * a saved local file inline, which the guidance already asks for, so the block
+ * only costs context there. Every other client keeps it.
+ */
+export function wantsImageBlocks(clientId: string | undefined): boolean {
+  return knownClient(clientId) !== "codex";
+}
+
+/** wantsImageBlocks for the client behind the request being served. */
+export function currentClientWantsImageBlocks(): boolean {
+  return wantsImageBlocks(getRequestContext()?.authInfo.clientId);
 }

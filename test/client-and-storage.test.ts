@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clientProfile } from "../src/services/client-profile.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { clientProfile, wantsImageBlocks } from "../src/services/client-profile.js";
+import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
+import { buildImagePreviews } from "../src/services/media-preview.js";
+import { runWithRequestContext } from "../src/services/request-context.js";
 import { isAtlasStorageUrl, isPendingTransfer } from "../src/services/owned-storage.js";
 import { waitForPrediction } from "../src/services/prediction-wait.js";
 import type { PredictionResponse } from "../src/response-schemas.js";
@@ -12,6 +16,45 @@ test("按 OAuth client_id 区分聊天客户端、带 shell 的客户端和其�
   assert.equal(clientProfile("https://claude.ai/oauth/claude-code-client-metadata"), "shell");
   assert.equal(clientProfile("dcr-client-123"), "other");
   assert.equal(clientProfile(undefined), "other");
+});
+
+test("图片块只不给 Codex：它把块当文字读，会把 base64 原样贴回回复", () => {
+  assert.equal(wantsImageBlocks("https://chatgpt.com/oauth/codex/client.json"), false);
+  assert.equal(wantsImageBlocks("https://chatgpt.com/oauth/client.json"), true);
+  assert.equal(wantsImageBlocks("https://claude.ai/oauth/claude-code-client-metadata"), true);
+  assert.equal(wantsImageBlocks("https://claude.ai/oauth/mcp-oauth-client-metadata"), true);
+  assert.equal(wantsImageBlocks("dcr-client-123"), true);
+  assert.equal(wantsImageBlocks(undefined), true);
+});
+
+test("Codex 请求里不抓预览图；其他客户端照常去抓", async (t) => {
+  const logs: string[] = [];
+  t.mock.method(console, "error", (message: string) => logs.push(String(message)));
+  const contextFor = (clientId: string) => ({
+    authInfo: { token: "t", clientId, scopes: ["tasks:read"] } as AuthInfo,
+    subject: "user-1",
+    atlasApiKey: "k",
+    idempotencyStore: new InMemoryIdempotencyStore(),
+    idempotencyTtlSeconds: 60,
+    generationConfirmationSecret: "s".repeat(32),
+    generationConfirmationTtlSeconds: 600,
+  });
+  // example.com 不在预览白名单里：真去抓会在发请求前就被拒，记一条 fail，不碰网络。
+  const urls = ["https://example.com/out.png"];
+
+  const codex = await runWithRequestContext(contextFor("https://chatgpt.com/oauth/codex/client.json"), () =>
+    buildImagePreviews(urls)
+  );
+  assert.deepEqual(codex, []);
+  assert.ok(logs.some((l) => l.includes("skipped: client gets no image blocks")));
+  assert.ok(!logs.some((l) => l.includes("fail example.com")));
+
+  logs.length = 0;
+  const chat = await runWithRequestContext(contextFor("https://chatgpt.com/oauth/client.json"), () =>
+    buildImagePreviews(urls)
+  );
+  assert.deepEqual(chat, []);
+  assert.ok(logs.some((l) => l.includes("fail example.com/out.png")));
 });
 
 test("自家存储：atlascloud.ai 与 atlas-* 桶；其他阿里云桶和火山 TOS 不算", () => {

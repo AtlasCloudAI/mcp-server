@@ -1,5 +1,5 @@
 import { fetchExternalBinary } from "./api-client.js";
-import type { ClientProfile } from "./client-profile.js";
+import { currentClientWantsImageBlocks, type ClientProfile } from "./client-profile.js";
 
 // Why this exists: a generated image is returned to us as a URL on the object
 // store's default domain, and that domain forces `Content-Disposition: attachment`
@@ -13,6 +13,9 @@ import type { ClientProfile } from "./client-profile.js";
 //
 // The model sees the block too, which is the part that is not just cosmetic: it
 // can look at what it generated and say the hands are wrong.
+//
+// Codex has since changed how it calls tools, and no longer gets the block at all:
+// see wantsImageBlocks in client-profile.ts.
 
 const IMAGE_EXTENSIONS = new Set([
   "png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "heic", "heif", "tiff",
@@ -212,6 +215,12 @@ export async function buildImagePreviews(urls: string[]): Promise<ImagePreviewBl
   if (!previewsEnabled()) return [];
   const limit = maxPreviews();
   if (limit === 0) return [];
+  // Codex 拿到图片块只会当文字读（见 client-profile.ts 的 wantsImageBlocks），
+  // 这里连抓都不抓。
+  if (!currentClientWantsImageBlocks()) {
+    if (urls.length > 0) logPreview(`${urls.length} output(s), skipped: client gets no image blocks`);
+    return [];
+  }
   // 后缀只是线索，不是判据。签名过的对象 URL 经常没有扩展名
   // （".../generations/abc123?Expires=…"），按后缀筛会把它归成 other 直接丢掉 ——
   // 表现就是「有产出、0 张图、尝试 0 次」，而这恰恰是线上真实发生过的一行日志。

@@ -96,7 +96,7 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: 256k
     cert-manager.io/cluster-issuer: letsencrypt-dns01
 spec:
-  # 只有一个 host。dev 上那个 atlascloud-auth.dev.atlascloud.ai
+  # 只有一个 host。dev 上那个 auth.dev.example.com
   # 是自建授权页，已被官网 OIDC 取代，生产不要复刻。
   rules:
     - host: mcp.atlascloud.ai

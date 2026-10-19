@@ -24,8 +24,8 @@ of extending the browser interaction indefinitely.
 The script fails closed unless every check passes:
 
 - MCP name is exactly `atlascloud-staging`.
-- MCP resource is exactly `https://atlascloud-mcp.dev.atlascloud.ai/mcp`.
-- Authorization origin is exactly `https://atlascloud-auth.dev.atlascloud.ai/auth`.
+- MCP resource is exactly `https://mcp.dev.example.com/mcp`.
+- Authorization origin is exactly `https://auth.dev.example.com/auth`.
 - Requested scopes are only `openid`, `email`, `profile`, `offline_access`,
   and `tasks:read` (token contract v3 §4 — one platform-wide scope set).
 - `tasks:write` is rejected before the browser can open; it is granted through

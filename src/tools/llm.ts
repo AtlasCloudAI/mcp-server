@@ -34,6 +34,7 @@ import {
   completedAtOf,
   createdAtOf,
   hasUntransferredMedia,
+  isActive,
   isFinished,
   secondsSince,
   predictionOutputUrls,
@@ -351,8 +352,8 @@ Examples:
           outputUrls.forEach((url, i) => lines.push(`${i + 1}. ${url}`));
           lines.push(
             `\nThe file is finished but is still being copied to Atlas storage. Call ` +
-              `\`atlas_get_prediction\` again with this same ID in about 15 seconds and save the ` +
-              `permanent Atlas link it returns: that link downloads in seconds and stays available ` +
+              `\`atlas_get_prediction\` again with this same ID in about 15 seconds and use the ` +
+              `permanent Atlas link it returns instead: that link downloads in seconds and stays available ` +
               `for about 15 days, while the provider link above is slow from many networks and ` +
               `expires within 24 hours. Use the provider link only if the Atlas link has still not ` +
               `appeared after about 5 minutes. Keep going in this turn; do not stop here.`
@@ -362,14 +363,14 @@ Examples:
           outputUrls.forEach((url, i) => {
             lines.push(`${i + 1}. ${url}`);
           });
-          const sizes = profile === "chatgpt" ? new Map<string, number>() : await probeSizes(outputUrls);
+          const sizes = profile === "chat" ? new Map<string, number>() : await probeSizes(outputUrls);
           const guidance = playbackGuidance(kinds, { profile, sizes, urls: outputUrls });
           if (guidance) {
             lines.push(`\n${guidance}`);
           }
         }
 
-        if (status !== "unknown" && !isFinished(status) && status !== "failed") {
+        if (isActive(status)) {
           const runningFor = secondsSince(createdAtOf(result));
           lines.push(
             `\nThe task is still running` +
@@ -383,6 +384,13 @@ Examples:
               `plainly that the job is still running on Atlas and that replying "continue" (继续) ` +
               `will pick it up with the same ID — never imply it is finished or stuck. Do not submit ` +
               `the job again — that would start and bill a second one.`
+          );
+        }
+
+        if (!isActive(status) && !isFinished(status) && status !== "failed" && status !== "unknown") {
+          lines.push(
+            `\nStatus "${status}" is not a running state. Treat it as final: stop polling, tell the ` +
+              `user what it says, and do not resubmit unless they ask (failed or canceled jobs are not billed).`
           );
         }
 

@@ -23,6 +23,11 @@ const ACTIVE_STATUSES = new Set([
   "in_progress",
 ]);
 
+/** A status that means the job is still on its way, so polling should continue. */
+export function isActive(status: string): boolean {
+  return ACTIVE_STATUSES.has(status.toLowerCase());
+}
+
 export function isFinished(status: string): boolean {
   return status === "completed" || status === "succeeded";
 }
@@ -61,8 +66,9 @@ function transferHoldSeconds(): number {
  */
 export function hasUntransferredMedia(urls: string[], completedAt?: unknown): boolean {
   if (!holdUntransferredOutputs()) return false;
+  // No completion time means no way to bound the hold: hand the link over.
   const since = secondsSince(completedAt);
-  if (since !== null && since > transferHoldSeconds()) return false;
+  if (since === null || since > transferHoldSeconds()) return false;
   return urls.some((url) => classifyOutput(url) !== "other" && isPendingTransfer(url));
 }
 
@@ -74,10 +80,15 @@ function holdUntransferredOutputs(): boolean {
 export function predictionWaitSeconds(): number {
   const parsed = Number.parseInt(process.env.MCP_PREDICTION_WAIT_SECONDS ?? "", 10);
   if (!Number.isFinite(parsed)) return 20;
-  return Math.min(Math.max(parsed, 0), 45);
+  // Capped so the wait, an image preview fetch and the size probe stay inside a
+  // client's tool timeout (Codex defaults to 60 s).
+  return Math.min(Math.max(parsed, 0), 30);
 }
 
-const POLL_INTERVAL_MS = 3_000;
+// Each re-poll is a user prediction request, and while a job runs the platform asks
+// the upstream provider for its status on those requests. 5 s keeps the server's
+// loop no busier than an agent polling by hand.
+const POLL_INTERVAL_MS = 5_000;
 
 export interface WaitDependencies {
   sleep?: (ms: number) => Promise<void>;
@@ -101,23 +112,27 @@ export async function waitForPrediction(
   for (;;) {
     const status = result.data?.status ?? "";
     const keepWaiting =
-      ACTIVE_STATUSES.has(status) ||
+      isActive(status) ||
       (isFinished(status) &&
         hasUntransferredMedia(predictionOutputUrls(result), completedAtOf(result)));
     if (!keepWaiting || now() + POLL_INTERVAL_MS > deadline) break;
     await sleep(POLL_INTERVAL_MS);
-    result = await fetchOnce();
+    try {
+      result = await fetchOnce();
+    } catch {
+      // The first answer was good; a transient error on a re-check should not turn
+      // it into a failed tool call. Report what we have and let the agent poll again.
+      break;
+    }
   }
   return { result, waitedSeconds: Math.round((now() - started) / 1000) };
 }
 
-/** Byte sizes of finished video/audio outputs on Atlas storage, for a completeness check. */
+/** Byte sizes of finished media outputs on Atlas storage, for a completeness check. */
 export async function probeSizes(urls: string[]): Promise<Map<string, number>> {
   const sizes = new Map<string, number>();
-  const targets = urls.filter((url) => {
-    const kind = classifyOutput(url);
-    return (kind === "video" || kind === "audio") && isAtlasStorageUrl(url);
-  });
+  // Images too: half-written storyboards and edits were reproduced, not just videos.
+  const targets = urls.filter((url) => classifyOutput(url) !== "other" && isAtlasStorageUrl(url));
   const settled = await Promise.all(targets.slice(0, 4).map((url) => headContentLength(url)));
   targets.slice(0, 4).forEach((url, i) => {
     const size = settled[i];

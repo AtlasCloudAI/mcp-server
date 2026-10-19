@@ -48,7 +48,37 @@ export function isAtlasStorageUrl(url: string): boolean {
   );
 }
 
-/** True when a URL is a media link that has not reached Atlas storage yet. */
+/**
+ * Hosts whose outputs the platform hands over first and copies to Atlas storage
+ * a little later. Only aiproxy's slow-CDN path does that (Volcengine/BytePlus
+ * TOS, used by Seedance and Seedream); every other adapter copies before it
+ * reports completion, and some final deliveries legitimately live elsewhere (the
+ * AWS S3 bridge, or a provider URL whose copy failed for good). Holding those back
+ * would only stall the user, so the hold is limited to these hosts.
+ * MCP_DEFERRED_TRANSFER_HOSTS replaces the list (comma separated; a leading dot
+ * means the domain and everything under it).
+ */
+function deferredTransferHosts(): string[] {
+  const raw = process.env.MCP_DEFERRED_TRANSFER_HOSTS;
+  const list = raw === undefined || raw.trim() === "" ? ".volces.com" : raw;
+  return list
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** True when a URL is a provider link that the platform is still copying to Atlas storage. */
 export function isPendingTransfer(url: string): boolean {
-  return /^https?:\/\//i.test(url) && !isAtlasStorageUrl(url);
+  let host: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    host = parsed.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (isAtlasStorageUrl(url)) return false;
+  return deferredTransferHosts().some((allowed) =>
+    allowed.startsWith(".") ? host.endsWith(allowed) : host === allowed
+  );
 }

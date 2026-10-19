@@ -124,17 +124,26 @@ test("视频：等下载真正结束、写出带感叹号的图片语法、堵�
   // 默认权限沙箱没网：申请联网而不是放弃。
   assert.match(text, /escalated permissions/);
   assert.doesNotMatch(text, /cannot be displayed/i);
+  // 认不出的客户端（Claude 网页、DCR 客户端）可能没有 shell：旧指引一直留着这条退路。
+  assert.match(text, /If you have no shell or cannot write files/);
   assert.equal(playbackGuidance(new Set()), null);
+});
+
+test("音频：存到本地再给文件链接，不再落空", () => {
+  const text = playbackGuidance(new Set(["audio" as const]));
+  assert.ok(text, "纯音频结果以前走兜底文案，改版后不能变成什么都不说");
+  assert.match(text, /Save the audio/);
+  assert.match(text, /\[<short title>\]\(\/absolute\/path\//);
 });
 
 test("ChatGPT：不让模型跑脚本下载转码，直接给链接", () => {
   // 实测与群反馈：ChatGPT 里让模型下载/转码只会触发一次次 node_repl 授权，用户仍拿不到文件。
-  const text = playbackGuidance(new Set(["video" as const]), { profile: "chatgpt" });
+  const text = playbackGuidance(new Set(["video" as const]), { profile: "chat" });
   assert.ok(text);
   assert.match(text, /Do not run code to download/);
   assert.match(text, /no node_repl/);
   assert.doesNotMatch(text, /curl/);
-  const image = playbackGuidance(new Set(["image" as const]), { profile: "chatgpt" });
+  const image = playbackGuidance(new Set(["image" as const]), { profile: "chat" });
   assert.ok(image);
   assert.match(image, /attached above as an image block/);
 });

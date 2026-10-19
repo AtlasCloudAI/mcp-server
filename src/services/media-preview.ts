@@ -297,8 +297,9 @@ function sizeNote(urls: string[] | undefined, sizes: Map<string, number> | undef
  * - Codex 的命令工具大约 10~30 秒就把控制权交回来，curl 还在后台写文件。模型把写到一半
  *   的文件当成品交付，用户看到的就是"损坏"的视频。所以要求等进程退出、核对大小。
  * - 默认权限下沙箱没有网络，curl 连不上；要为这一条命令申请联网，而不是直接放弃。
- * - ChatGPT 没有给模型用的本地 shell。让它下载、转码，只会触发一次次 node_repl 授权，
- *   最后用户还是拿不到文件；那边直接给链接。
+ * - ChatGPT、Claude 网页这类聊天客户端没有给模型用的本地 shell。让它下载、转码，只会触发
+ *   一次次 node_repl 授权，最后用户还是拿不到文件；那边直接给链接。
+ * - 认不出的客户端按有 shell 处理，但要留一条退路：没有 shell 就给链接（旧指引一直有这句）。
  */
 export function playbackGuidance(
   kinds: Set<OutputKind>,
@@ -308,7 +309,7 @@ export function playbackGuidance(
   const notes: string[] = [];
   const urlsOf = (kind: OutputKind) => options.urls?.filter((u) => classifyOutput(u) === kind);
 
-  if (profile === "chatgpt") {
+  if (profile === "chat") {
     if (kinds.has("image")) {
       notes.push(
         "The image is attached above as an image block. Also give the user the URL as a link. " +
@@ -362,11 +363,25 @@ export function playbackGuidance(
         "Do not tell the user the video cannot be shown."
     );
   }
+  if (kinds.has("audio")) {
+    notes.push(
+      "Save the audio into the working directory with `curl -L --fail --max-time 300 -o " +
+        "<descriptive-name>.<ext> '<url>'`. " + save + sizeNote(urlsOf("audio"), options.sizes) + " " +
+        network + " Then give the saved file as a link with its absolute path, " +
+        "`[<short title>](/absolute/path/<descriptive-name>.<ext>)`, so the user can open and play it."
+    );
+  }
   if (kinds.has("other")) {
     notes.push(
       "Some outputs are not images, video or audio (for example 3D assets such as GLB or " +
         "OBJ). Save those into the user's working directory as well, without asking first, " +
         "and give the saved path. " + save
+    );
+  }
+  if (notes.length > 0) {
+    notes.push(
+      "If you have no shell or cannot write files, skip the download and give the URL as a plain " +
+        "link instead; say it may download rather than play, and that it expires in about 15 days."
     );
   }
   return notes.length > 0 ? notes.join("\n") : null;

@@ -27,9 +27,10 @@ function uploadNotes(profile: ClientProfile): string[] {
       "keep waiting on that same process — a running upload is not a failure.",
     "- A reference image does not need full resolution. Shrink anything over about 2 MB before " +
       "uploading (on macOS: `sips -Z 2048 -s format jpeg in.png --out ref.jpg`).",
-    "- If the upload fails or times out, call atlas_get_upload_url again for a fresh URL and retry once.",
+    "- Success is HTTP 200 with JSON containing `url`. If the upload fails or times out, call " +
+      "atlas_get_upload_url again for a fresh URL and retry once.",
   ];
-  if (profile === "chatgpt") {
+  if (profile === "chat") {
     notes.push(
       "- If the command cannot resolve or reach the upload host, this sandbox has no network. " +
         "Do not fall back to sending the file as base64 in a tool call (it is rejected as too " +
@@ -107,7 +108,7 @@ Returns:
       }
       const name = exampleFilename(filename_hint);
       const curlExample = [
-        `curl -sS --fail-with-body --max-time 180 -X POST "${issued.uploadUrl}"`,
+        `curl -sS --max-time 180 -w "\\nHTTP %{http_code}\\n" -X POST "${issued.uploadUrl}"`,
         `  -H "Content-Type: application/octet-stream"`,
         `  -H "${UPLOAD_FILENAME_HEADER}: ${name}"`,
         `  --data-binary @"/path/to/${name}"`,

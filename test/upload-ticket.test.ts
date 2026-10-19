@@ -110,7 +110,7 @@ test("信封绑在 subject 哈希上：把别人的 payload 拼上自己的签�
   );
 });
 
-test("从 request context 铸票：只有远程服务给了 uploadBaseUrl 才发，stdio 拿不到", () => {
+test("从 request context 铸票：只有远程服务给了 uploadBaseUrl 才发，stdio 拿不到", async () => {
   const baseContext = {
     authInfo: {
       token: "test-access-token",
@@ -126,9 +126,9 @@ test("从 request context 铸票：只有远程服务给了 uploadBaseUrl 才发
   };
 
   // stdio 形态：没有上传相关字段
-  assert.equal(runWithRequestContext(baseContext, () => issueUploadTicketFromContext()), undefined);
+  assert.equal(await runWithRequestContext(baseContext, () => issueUploadTicketFromContext()), undefined);
 
-  const issued = runWithRequestContext(
+  const issued = await runWithRequestContext(
     {
       ...baseContext,
       uploadBaseUrl: "https://mcp.example.test/upload/",
@@ -142,4 +142,36 @@ test("从 request context 铸票：只有远程服务给了 uploadBaseUrl 才发
   assert.equal(issued.maxBytes, 33_554_432);
   const ticket = issued.uploadUrl.slice("https://mcp.example.test/upload/".length);
   assert.equal(verifyUploadTicket(ticket, secret).atlasApiKey, token);
+});
+
+test("有票据存储时发短编号：URL 短，取回的完整票据能校验，未知编号判过期", async () => {
+  const { InMemoryUploadTicketStore } = await import("../src/services/upload-ticket-store.js");
+  const { resolveUploadTicket, verifyUploadTicket: verify } = await import("../src/services/upload-ticket.js");
+  const store = new InMemoryUploadTicketStore();
+  const issued = await runWithRequestContext(
+    {
+      authInfo: { token: "t", clientId: "c", scopes: ["tasks:write"] } as AuthInfo,
+      subject: "user-1",
+      atlasApiKey: token,
+      idempotencyStore: new InMemoryIdempotencyStore(),
+      idempotencyTtlSeconds: 60,
+      generationConfirmationSecret: secret,
+      generationConfirmationTtlSeconds: 600,
+      uploadBaseUrl: "https://mcp.example.test/upload/",
+      uploadTicketTtlSeconds: 600,
+      uploadMaxBytes: 33_554_432,
+      uploadTicketStore: store,
+    },
+    () => issueUploadTicketFromContext()
+  );
+  assert.ok(issued);
+  const id = issued.uploadUrl.slice("https://mcp.example.test/upload/".length);
+  // 长票据约 2000 个字符，2026-10-19 实测模型抄进 curl 时三次错两次。
+  assert.match(id, /^t_[A-Za-z0-9_-]{22}$/);
+  assert.ok(issued.uploadUrl.length < 80, `url length ${issued.uploadUrl.length}`);
+  const full = await resolveUploadTicket(id, store);
+  assert.equal(verify(full, secret).atlasApiKey, token);
+  await assert.rejects(resolveUploadTicket("t_AAAAAAAAAAAAAAAAAAAAAA", store), /expired or is unknown/);
+  // 长票据仍原样放行，旧链接在过期前照常可用。
+  assert.equal(await resolveUploadTicket(full, store), full);
 });

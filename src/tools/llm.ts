@@ -323,10 +323,14 @@ Examples:
     },
     async ({ prediction_id }) => {
       try {
-        const fetchOnce = () =>
+        const fetchOnce = (budget: { timeoutMs: number; maxRetries: number }) =>
           generationApi<PredictionResponse>(
             `/model/prediction/${encodeURIComponent(prediction_id)}`,
-            { responseSchema: predictionResponseSchema }
+            {
+              responseSchema: predictionResponseSchema,
+              timeout: budget.timeoutMs,
+              maxRetries: budget.maxRetries,
+            }
           );
         const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
         const status = result.data?.status || "unknown";

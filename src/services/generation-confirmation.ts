@@ -21,8 +21,6 @@ const confirmationPayloadSchema = z.object({
   expires_at: z.number().int().positive(),
 });
 
-type ConfirmationPayload = z.infer<typeof confirmationPayloadSchema>;
-
 export type ConfirmedModelPrice = ModelPrice & {
   actual: NonNullable<ModelPrice["actual"]>;
 };
@@ -100,23 +98,78 @@ export function issueGenerationConfirmation(
     pricing
   );
   const expiresAt = Date.now() + ttlSeconds * 1000;
-  const payload: ConfirmationPayload = {
-    version: 1,
-    subject_hash: subjectHash(subject),
-    tool_name: toolName,
-    idempotency_key: idempotencyKey,
-    request_fingerprint: requestFingerprint,
-    pricing_fingerprint: pricingFingerprint,
-    expires_at: expiresAt,
-  };
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
-    "base64url"
-  );
   return {
-    confirmationToken: `${encodedPayload}.${sign(encodedPayload, secret)}`,
+    confirmationToken: compactToken(
+      {
+        subjectHash: subjectHash(subject),
+        toolName,
+        idempotencyKey,
+        requestFingerprint,
+        pricingFingerprint,
+      },
+      expiresAt,
+      secret
+    ),
     expiresAt: new Date(expiresAt).toISOString(),
     pricing,
   };
+}
+
+// 令牌只带版本、过期时间和一段 128 位的签名，其余（用户、工具、幂等键、请求与价格指纹）
+// 由服务端在校验时从当前请求重新算出。旧格式把整段 JSON 编进令牌，长约 570 个字符，
+// 2026-10-19 在 test 上实测模型回传时抄丢了一个字符，用户被迫二次确认。现在约 35 个字符。
+const COMPACT_PREFIX = "c2";
+
+interface TokenFacts {
+  subjectHash: string;
+  toolName: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  pricingFingerprint: string;
+}
+
+function compactMac(facts: TokenFacts, expiresAt: number, secret: string): string {
+  const material = JSON.stringify([
+    COMPACT_PREFIX,
+    facts.subjectHash,
+    facts.toolName,
+    facts.idempotencyKey,
+    facts.requestFingerprint,
+    facts.pricingFingerprint,
+    expiresAt,
+  ]);
+  return createHmac("sha256", secret).update(material).digest().subarray(0, 16).toString("base64url");
+}
+
+function compactToken(facts: TokenFacts, expiresAt: number, secret: string): string {
+  return `${COMPACT_PREFIX}.${expiresAt.toString(36)}.${compactMac(facts, expiresAt, secret)}`;
+}
+
+const INVALID =
+  "Generation confirmation is invalid. Request a new quote. No billable request was submitted.";
+
+function verifyCompact(token: string, facts: TokenFacts, secret: string): void {
+  const [, expPart, mac, extra] = token.split(".");
+  if (!expPart || !mac || extra !== undefined || !/^[0-9a-z]+$/.test(expPart)) {
+    throw new GenerationConfirmationError(INVALID);
+  }
+  const expiresAt = Number.parseInt(expPart, 36);
+  if (!Number.isSafeInteger(expiresAt)) throw new GenerationConfirmationError(INVALID);
+  const expected = Buffer.from(compactMac(facts, expiresAt, secret));
+  const received = Buffer.from(mac);
+  if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+    // The facts are recomputed from this request, so a mismatch means the request,
+    // price or user changed — or the token was copied incorrectly.
+    throw new GenerationConfirmationError(
+      "Generation confirmation does not match this request: the arguments, price or user changed, " +
+        "or the token was not copied exactly. Request a new quote. No billable request was submitted."
+    );
+  }
+  if (expiresAt <= Date.now()) {
+    throw new GenerationConfirmationError(
+      "Generation confirmation expired. Request a new quote. No billable request was submitted."
+    );
+  }
 }
 
 export function verifyGenerationConfirmation(
@@ -128,6 +181,16 @@ export function verifyGenerationConfirmation(
 ): void {
   const pricing = currentPricing(modelPrice);
   const { subject, secret } = runtime();
+  if (token.startsWith(`${COMPACT_PREFIX}.`)) {
+    const { requestFingerprint, pricingFingerprint } = fingerprints(request, pricing);
+    verifyCompact(
+      token,
+      { subjectHash: subjectHash(subject), toolName, idempotencyKey, requestFingerprint, pricingFingerprint },
+      secret
+    );
+    return;
+  }
+  // Legacy JSON tokens issued before the compact format, still honoured until they expire.
   const [encodedPayload, encodedSignature, extra] = token.split(".");
   if (!encodedPayload || !encodedSignature || extra !== undefined) {
     throw new GenerationConfirmationError(

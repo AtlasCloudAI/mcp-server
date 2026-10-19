@@ -130,6 +130,18 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: atlas-registry-secret
+      # 令牌校验要按 MCP_OAUTH_JWKS_URI 拉 JWKS，启动自检也要拉同一个 host 的 discovery，
+      # 而集群 DNS 解析不了这两个 dev ingress 域名（它们只在公司内网 DNS 里，公网无 A 记录）。
+      # 拉不到 JWKS 时令牌校验是 fail-closed 的，也就是每个请求都会 401；启动自检失败更会直接
+      # crashloop。所以把域名指到 ingress 网关，让流量绕回自己的 ingress。
+      # IP = higress-system/higress-gateway 的 ClusterIP，集群重建后需要重新取：
+      #   kubectl -n higress-system get svc higress-gateway -o jsonpath='{.spec.clusterIP}'
+      # 网关证书的 SAN 覆盖这两个域名，所以严格 TLS 校验也能过。
+      hostAliases:
+        - ip: 10.233.13.210
+          hostnames:
+            - atlascloud-auth.dev.atlascloud.ai
+            - atlascloud-mcp.dev.atlascloud.ai
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -336,6 +348,15 @@ spec:
               value: "31536000"
             - name: AUTH_IDENTITY_MODE
               value: local-reviewer
+            # OpenAI 首选 CIMD（client_id 是客户端自托管的元数据文档地址），DCR 只是兜底。
+            # dev 打开它才能验 Codex 的真机连接；private_key_jwt 仍关着，所以 ChatGPT
+            # 继续走已经验过的 DCR。
+            - name: AUTH_CLIENT_ID_METADATA_ENABLED
+              value: "true"
+            - name: AUTH_CLIENT_ID_METADATA_HOSTS
+              value: chatgpt.com
+            - name: AUTH_CLIENT_ID_METADATA_ALLOW_PRIVATE_KEY_JWT
+              value: "false"
             - name: OIDC_JWKS_JSON
               valueFrom:
                 secretKeyRef:

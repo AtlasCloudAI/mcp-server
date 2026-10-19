@@ -260,8 +260,23 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
   });
 
   await t.test("stateless endpoint rejects GET/DELETE and oversized JSON", async () => {
-    assert.equal((await fetch(`${baseUrl}/mcp`)).status, 405);
-    assert.equal((await fetch(`${baseUrl}/mcp`, { method: "DELETE" })).status, 405);
+    // 没带凭据时先给发现用的挑战：MCP 客户端（Codex 就是）靠 GET /mcp 的 401 +
+    // WWW-Authenticate 找到 protected resource metadata。
+    for (const method of ["GET", "DELETE"]) {
+      const discovery = await fetch(`${baseUrl}/mcp`, { method });
+      assert.equal(discovery.status, 401, method);
+      const challenge = discovery.headers.get("www-authenticate") ?? "";
+      assert.match(challenge, /resource_metadata="http/, method);
+      assert.match(challenge, /error="invalid_token"/, method);
+    }
+    // 带了凭据就按「这个无状态端点只接受 POST」处理。
+    for (const method of ["GET", "DELETE"]) {
+      const response = await fetch(`${baseUrl}/mcp`, {
+        method,
+        headers: { Authorization: "Bearer all" },
+      });
+      assert.equal(response.status, 405, method);
+    }
 
     const oversized = await fetch(`${baseUrl}/mcp`, {
       method: "POST",

@@ -5,13 +5,30 @@ display_name: "Atlas Cloud 媒体生成"
 display_name_en: "Atlas Cloud Media Generation"
 description_zh: "用自然语言调用 Atlas Cloud 上 300+ 个模型，生成图片、视频、语音、音乐和 3D，并可查模型目录、参数与价格。"
 description_en: "Call 300+ Atlas Cloud models in natural language to generate images, video, speech, music and 3D, and to browse the catalog, parameters and pricing."
-version: 2.6.0
+version: 2.6.1
 author: Atlas Cloud
 ---
 
 # Atlas Cloud API Integration Guide
 
 Atlas Cloud is an AI API aggregation platform that provides access to 300+ image, video, audio (TTS · music · speech-to-text), 3D, and LLM models through a unified interface. This skill helps you quickly integrate Atlas Cloud API into any project.
+
+## Read this first when Atlas tools are in your tool list
+
+If your tool list includes Atlas Cloud MCP tools (`atlas_generate_image`, `atlas_generate_video`,
+`atlas_get_prediction`, `atlas_get_upload_url`, ...), you are running inside the Atlas Cloud plugin.
+Then, for anything the user wants generated:
+
+1. **Use only those tools.** Do not call `api.atlascloud.ai` yourself with curl or a script, and do
+   not look for `ATLASCLOUD_API_KEY` — there is none; the plugin already signed the user in. The
+   REST examples further down this page are for developers integrating Atlas into their own code.
+2. **Local files go through the upload tool.** For an image, video or audio file on the user's
+   machine, call `atlas_get_upload_url`, POST the file to the `upload_url` it returns (wait for that
+   curl to finish), and pass the `url` from its response to the generation tool. Never inline the
+   file as base64 or a `data:` URI.
+3. **Quote first, then generate, then show.** The generation tool returns the model and a live
+   price and stops; relay them and wait for a yes. Poll `atlas_get_prediction` in the same turn until
+   it finishes, save the result locally and show it with `![title](/absolute/path/file.ext)`.
 
 ## Quick Start
 

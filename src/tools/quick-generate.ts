@@ -207,6 +207,8 @@ IMPORTANT: If this tool fails to find a model, call atlas_list_models first to g
 
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
+Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+
 Args:
   - model_keyword (string, required): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword.
   - type (string, required): Generation type: "Image", "Video", or "Audio"

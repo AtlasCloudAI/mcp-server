@@ -52,6 +52,8 @@ NOTE: For speech-to-text (transcription / ASR), use atlas_transcribe_audio inste
 
 You should also use atlas_get_model_info to see the full parameter list and schema for your chosen audio model before calling this tool. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
 
+Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+
 Args:
   - model (string, required): The exact audio model ID. Use atlas_list_models with type="Audio" to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. For TTS the main field is usually "text" (the content to synthesize); for music models it is usually "prompt" and/or "lyrics". Use atlas_get_model_info to see available params.
@@ -203,6 +205,8 @@ IMPORTANT: The "model" parameter requires an exact current speech-to-text model 
 The audio must already be reachable through an HTTPS URL. This remote OpenAI plugin does not expose a local-file upload tool. If the user only has a local file, ask them to upload it through an approved Atlas Cloud or customer-controlled HTTPS location before continuing; do not invent or call atlas_upload_media.
 
 Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+
+Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
 
 Args:
   - model (string, required): The exact speech-to-text model ID.

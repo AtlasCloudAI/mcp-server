@@ -12,6 +12,7 @@ import {
   type CredentialEncryptionKey,
 } from "./credential-envelope.js";
 import { getRequestContext } from "./request-context.js";
+import { isShortTicket, newShortTicketId, type UploadTicketStore } from "./upload-ticket-store.js";
 
 /**
  * 上传票据。
@@ -188,7 +189,7 @@ export interface IssuedUploadUrl {
  * 在工具调用里铸票。只有远程 HTTP 服务会把 uploadBaseUrl 放进 request context；
  * stdio 没有中转端点，也不需要——它有直接收路径的 atlas_upload_media。
  */
-export function issueUploadTicketFromContext(): IssuedUploadUrl | undefined {
+export async function issueUploadTicketFromContext(): Promise<IssuedUploadUrl | undefined> {
   const context = getRequestContext();
   if (
     !context?.uploadBaseUrl ||
@@ -203,9 +204,35 @@ export function issueUploadTicketFromContext(): IssuedUploadUrl | undefined {
     secret: context.generationConfirmationSecret,
     ttlSeconds: context.uploadTicketTtlSeconds,
   });
+  let pathTicket = ticket;
+  if (context.uploadTicketStore) {
+    const id = newShortTicketId();
+    await context.uploadTicketStore.put(id, ticket, context.uploadTicketTtlSeconds);
+    pathTicket = id;
+  }
   return {
-    uploadUrl: `${context.uploadBaseUrl}${ticket}`,
+    uploadUrl: `${context.uploadBaseUrl}${pathTicket}`,
     expiresAt,
     maxBytes: context.uploadMaxBytes,
   };
+}
+
+/**
+ * 中转端点收到的路径段：短编号就去存储里取回完整票据，长票据原样返回。
+ * 取不到（过期或从没签发过）一律当作过期，让调用方重新要一张。
+ */
+export async function resolveUploadTicket(
+  value: string,
+  store: UploadTicketStore | undefined
+): Promise<string> {
+  if (!isShortTicket(value)) return value;
+  const ticket = store ? await store.get(value) : null;
+  if (!ticket) {
+    throw new UploadTicketError(
+      "upload_ticket_expired",
+      410,
+      "The upload URL has expired or is unknown. Call atlas_get_upload_url for a new one."
+    );
+  }
+  return ticket;
 }

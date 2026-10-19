@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { IdempotencyStore } from "./idempotency.js";
+import type { UploadTicketStore } from "./upload-ticket-store.js";
 
 export interface AtlasRequestContext {
   authInfo: AuthInfo;
@@ -19,6 +20,8 @@ export interface AtlasRequestContext {
   uploadBaseUrl?: string;
   uploadTicketTtlSeconds?: number;
   uploadMaxBytes?: number;
+  /** 短上传地址：完整票据存这里，URL 里只放编号。省略则发长票据。 */
+  uploadTicketStore?: UploadTicketStore;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

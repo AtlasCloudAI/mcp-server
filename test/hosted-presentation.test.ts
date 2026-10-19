@@ -189,6 +189,8 @@ test("托管模式：按客户端给出不同的展示说明", async (t) => {
 
   await t.test("上传：命令兼容旧版 curl；ChatGPT 没网时请用户给公开链接", async () => {
     const codex = await call("codex", "atlas_get_upload_url", { filename_hint: "ref.png" });
+    // 短上传地址：模型抄得准。
+    assert.match(String(codex.structured.upload_url), /\/upload\/t_[A-Za-z0-9_-]{22}$/);
     assert.doesNotMatch(String(codex.structured.curl_example), /--fail-with-body/);
     assert.match(String(codex.structured.curl_example), /-w "\\nHTTP %\{http_code\}\\n"/);
     assert.match(codex.text, /escalated permissions/);

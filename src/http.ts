@@ -20,6 +20,11 @@ import {
   type IdempotencyStore,
 } from "./services/idempotency.js";
 import { runWithRequestContext } from "./services/request-context.js";
+import {
+  createRedisUploadTicketStore,
+  InMemoryUploadTicketStore,
+  type UploadTicketStore,
+} from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
@@ -55,6 +60,8 @@ export interface HttpAppDependencies {
   readiness?: AuthorizationServerReadiness;
   /** 测试注入：上传中转转投 Atlas 时用的 fetch。 */
   uploadFetcher?: UploadFetcher;
+  /** 短上传地址的票据存储。省略时用进程内存储（单副本、测试）。 */
+  uploadTicketStore?: UploadTicketStore;
 }
 
 /**
@@ -111,6 +118,7 @@ export function createHttpApp(
   config: HttpServerConfig,
   dependencies: HttpAppDependencies
 ): Express {
+  const uploadTicketStore = dependencies.uploadTicketStore ?? new InMemoryUploadTicketStore();
   const resourceMetadataUrl = new URL(
     "/.well-known/oauth-protected-resource",
     config.publicMcpUrl
@@ -239,6 +247,7 @@ export function createHttpApp(
             uploadBaseUrl: config.publicUploadBaseUrl.toString(),
             uploadTicketTtlSeconds: config.uploadTicketTtlSeconds,
             uploadMaxBytes: config.uploadMaxBytes,
+            uploadTicketStore,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -278,7 +287,7 @@ export function createHttpApp(
     uploadPath,
     createPreAuthRateLimiter(config),
     createUploadRateLimiter(config),
-    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher })
+    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore })
   );
 
   app.use((_req, res) => {
@@ -342,6 +351,11 @@ export async function startHttpServer(
     },
   });
   const idempotencyStore = await createIdempotencyStore(config);
+  // 与幂等存储同一个 Redis：多副本时短上传地址也能在任一 pod 上取回票据。
+  const uploadTicketStore: UploadTicketStore =
+    config.idempotencyBackend === "redis"
+      ? await createRedisUploadTicketStore(config.redisUrl!)
+      : new InMemoryUploadTicketStore();
   let credentialResolver: AtlasCredentialResolver | undefined;
   let server: NodeHttpServer;
   try {
@@ -351,6 +365,7 @@ export async function startHttpServer(
       verifier: new JwtAccessTokenVerifier(config),
       idempotencyStore,
       credentialResolver,
+      uploadTicketStore,
     };
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
@@ -361,6 +376,7 @@ export async function startHttpServer(
     readiness.stop();
     await Promise.allSettled([
       idempotencyStore.close(),
+      uploadTicketStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
     ]);
     throw error;
@@ -375,6 +391,7 @@ export async function startHttpServer(
       server.close((error) => (error ? reject(error) : resolve()));
     });
     await idempotencyStore.close();
+    await uploadTicketStore.close();
     await credentialResolver?.close?.();
   };
   return { server, close };

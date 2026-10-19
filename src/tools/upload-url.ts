@@ -92,7 +92,7 @@ Returns:
       annotations: toolAnnotations("atlas_get_upload_url"),
     },
     async ({ filename_hint }) => {
-      const issued = issueUploadTicketFromContext();
+      const issued = await issueUploadTicketFromContext();
       if (!issued) {
         return {
           isError: true,

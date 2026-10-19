@@ -100,15 +100,27 @@ export interface WaitDependencies {
  * Atlas storage) fetch it again every few seconds until the wait budget runs out.
  * Returns the last answer, which may still be unfinished — the caller says so.
  */
+export interface FetchBudget {
+  /** Per-request timeout for this fetch. */
+  timeoutMs: number;
+  /** Retries allowed for this fetch. */
+  maxRetries: number;
+}
+
+// 一次请求默认 30 秒、重试 3 次，最坏两分多钟——会撑破客户端 60 秒的工具超时
+// （2026-10-19 test 上实测一次查询 90 秒超时）。首查 15 秒重试 1 次，等待期间的重查
+// 只用剩余预算、不重试，整次调用落在一分钟以内。
+const FIRST_FETCH: FetchBudget = { timeoutMs: 15_000, maxRetries: 1 };
+
 export async function waitForPrediction(
-  fetchOnce: () => Promise<PredictionResponse>,
+  fetchOnce: (budget: FetchBudget) => Promise<PredictionResponse>,
   dependencies: WaitDependencies = {}
 ): Promise<{ result: PredictionResponse; waitedSeconds: number }> {
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const now = dependencies.now ?? (() => Date.now());
   const started = now();
   const deadline = started + predictionWaitSeconds() * 1000;
-  let result = await fetchOnce();
+  let result = await fetchOnce(FIRST_FETCH);
   for (;;) {
     const status = result.data?.status ?? "";
     const keepWaiting =
@@ -117,8 +129,10 @@ export async function waitForPrediction(
         hasUntransferredMedia(predictionOutputUrls(result), completedAtOf(result)));
     if (!keepWaiting || now() + POLL_INTERVAL_MS > deadline) break;
     await sleep(POLL_INTERVAL_MS);
+    const remaining = deadline - now();
+    if (remaining < 2_000) break;
     try {
-      result = await fetchOnce();
+      result = await fetchOnce({ timeoutMs: Math.min(remaining, 10_000), maxRetries: 0 });
     } catch {
       // The first answer was good; a transient error on a re-check should not turn
       // it into a failed tool call. Report what we have and let the agent poll again.

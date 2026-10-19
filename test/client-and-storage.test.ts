@@ -132,3 +132,24 @@ test("等待上限最多 30 秒，留出图片预览和大小探测的时间", a
   delete process.env.MCP_PREDICTION_WAIT_SECONDS;
   assert.equal(predictionWaitSeconds(), 20);
 });
+
+test("服务端等待：首查带重试，等待期间的重查不重试、超时不超过剩余预算", async (t) => {
+  t.after(() => delete process.env.MCP_PREDICTION_WAIT_SECONDS);
+  process.env.MCP_PREDICTION_WAIT_SECONDS = "20";
+  let clock = 0;
+  const budgets: Array<{ timeoutMs: number; maxRetries: number }> = [];
+  await waitForPrediction(
+    async (budget) => {
+      budgets.push(budget);
+      return prediction("processing");
+    },
+    { sleep: async (ms) => { clock += ms; }, now: () => clock }
+  );
+  assert.equal(budgets[0]!.maxRetries, 1);
+  assert.ok(budgets[0]!.timeoutMs <= 15_000);
+  for (const b of budgets.slice(1)) {
+    assert.equal(b.maxRetries, 0);
+    assert.ok(b.timeoutMs <= 10_000);
+  }
+  assert.ok(budgets.length >= 3);
+});

@@ -93,40 +93,59 @@ test("缩放参数按存储厂商分派：阿里云用 x-oss-process，火山用
   assert.equal(withResizeParams("https://cdn.example.com/i/a.png"), null);
 });
 
-test("图片走「下载到本地再展示」，理由是下载不带 Referer", () => {
-  // atlas-media 桶实测：带 chatgpt.com 的 Referer 403，不带 206。
-  // 直接调 Atlas API 的那条 skill 路径一直好用，正是因为它把文件存到了本地。
+test("图片：存到本地，用图片语法引用绝对路径，不嵌远程链接", () => {
+  // 2026-10-19 Codex 0.163 实测：远程 Atlas 图片嵌进 Markdown 一律破图（渲染页来源 app://-，
+  // 两个桶的防盗链都回 403）；本地文件用图片语法正常显示。
   const note = playbackGuidance(new Set(["image" as const]));
   assert.ok(note);
-  assert.match(note, /curl -L -o/);
-  assert.match(note, /403/);
-  // 不能写文件的客户端要有退路，不能只剩一个打不开的链接。
-  assert.match(note, /cannot write files/i);
-
-  // 这里【不】断言「叫模型别渲染图片块」—— 2.4.1 那么写过，
-  // 线上结果是模型什么都不给。呈现是客户端的事，服务端不下这个判断。
+  assert.match(note, /curl -L --fail --max-time \d+ -o/);
+  assert.match(note, /!\[<short title>\]\(\/absolute\/path\//);
+  assert.match(note, /Never put the remote URL inside Markdown image syntax/);
+  // 这里【不】断言「叫模型别渲染图片块」—— 2.4.1 那么写过，线上结果是模型什么都不给。
   assert.doesNotMatch(note, /do not render|already seen/i);
 });
 
-test("视频给的是下载指引，不是「在浏览器里打开」", () => {
-  const text = playbackGuidance(new Set(["video" as const]));
+test("视频：等下载真正结束、写出带感叹号的图片语法、堵掉链接和 video 标签", () => {
+  const sizes = new Map([["https://atlas-media.oss-us-west-1.aliyuncs.com/a/v.mp4", 2039370]]);
+  const text = playbackGuidance(new Set(["video" as const]), {
+    sizes,
+    urls: ["https://atlas-media.oss-us-west-1.aliyuncs.com/a/v.mp4"],
+  });
   assert.ok(text);
-  // Codex 没有 video 内容类型，链接点开又是下载，所以唯一有用的建议是存到本地。
-  assert.match(text, /curl -L -o/);
-  // 必须是祈使句：以前写成 "Offer to save"，模型就只递个链接等用户点头。
-  assert.match(text, /^Save the video/);
+  assert.match(text, /a link is not the deliverable/i);
   assert.match(text, /do not ask for permission first/i);
-  // 以前开头是 "Video cannot be displayed in this conversation"，这个前提是错的：
-  // 存成本地文件后客户端能播（2026-10-08 实测）。说了反而把模型劝退。
+  // 实测：Codex 的命令工具在 curl 还在写文件时就交回控制权，模型交付了半个文件。
+  assert.match(text, /keep waiting on the same process/);
+  assert.match(text, /2039370 bytes/);
+  // 实测：图片语法出播放器；普通链接只是文件卡片；HTML video 标签被原样印成文字。
+  assert.match(text, /!\[<short title>\]\(\/absolute\/path\/<descriptive-name>\.mp4\)/);
+  assert.match(text, /The leading `!` is what makes/);
+  assert.match(text, /<video> tag is printed as plain text/);
+  // 默认权限沙箱没网：申请联网而不是放弃。
+  assert.match(text, /escalated permissions/);
   assert.doesNotMatch(text, /cannot be displayed/i);
-  // 光说「保存」不够：v2.7.1 实测模型存完只给一个「下载并播放视频」的链接。
-  // 必须把要的结果点名——在对话里内联显示、带播放器——并堵掉「给个链接就算完」。
-  assert.match(text, /DISPLAY THAT SAVED FILE INLINE IN THE CONVERSATION, WITH A PLAYER/);
-  assert.match(text, /A link is not the deliverable/);
-
-  // 图片的指引归上一个测试管（现在也要下载，理由不同：防盗链）。
-  // 这里只确认「什么产出都没有」时不硬塞一段话。
+  // 认不出的客户端（Claude 网页、DCR 客户端）可能没有 shell：旧指引一直留着这条退路。
+  assert.match(text, /If you have no shell or cannot write files/);
   assert.equal(playbackGuidance(new Set()), null);
+});
+
+test("音频：存到本地再给文件链接，不再落空", () => {
+  const text = playbackGuidance(new Set(["audio" as const]));
+  assert.ok(text, "纯音频结果以前走兜底文案，改版后不能变成什么都不说");
+  assert.match(text, /Save the audio/);
+  assert.match(text, /\[<short title>\]\(\/absolute\/path\//);
+});
+
+test("ChatGPT：不让模型跑脚本下载转码，直接给链接", () => {
+  // 实测与群反馈：ChatGPT 里让模型下载/转码只会触发一次次 node_repl 授权，用户仍拿不到文件。
+  const text = playbackGuidance(new Set(["video" as const]), { profile: "chat" });
+  assert.ok(text);
+  assert.match(text, /Do not run code to download/);
+  assert.match(text, /no node_repl/);
+  assert.doesNotMatch(text, /curl/);
+  const image = playbackGuidance(new Set(["image" as const]), { profile: "chat" });
+  assert.ok(image);
+  assert.match(image, /attached above as an image block/);
 });
 
 test("3D 等非视听产出也走下载指引", () => {
@@ -210,7 +229,7 @@ test("已完成的产出会同时给出 URL 文本与图片块位", async (t) =>
   assert.match(result.text, /1\. https:\/\/b\.oss-us-west-1\.aliyuncs\.com\/images\/a\.png/);
   assert.match(result.text, /2\. .*b\.mp4/);
   // 混了视频就要带上下载+内联显示的指引
-  assert.match(result.text, /DISPLAY THAT SAVED FILE INLINE IN THE CONVERSATION/);
+  assert.match(result.text, /Show the video inline, with a player/);
   // 取图失败时块为空，但绝不抛错
   assert.deepEqual(result.blocks, []);
 });

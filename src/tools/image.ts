@@ -14,6 +14,7 @@ import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
 } from "../services/media-preview.js";
+import { currentClientProfile } from "../services/client-profile.js";
 import {
   autoSubmitNotice,
   confirmationCostNotice,
@@ -39,7 +40,7 @@ export function registerImageTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing is gated by cost, not by ceremony. Call once, omitting confirmation_token. The server quotes the request against the live catalog: under the spend limit it submits immediately and the result carries the amount the platform reserved for the request. For an async job that figure is what the run is expected to cost, not a settled charge: report it as an estimate, and only call it spent once polling returns a successful result. A job that ends in status "failed" is not billed at all. At or above the limit, or whenever the platform will not give a firm quote, it returns a quote and an opaque confirmation_token without spending anything; show that exact quote and stop, and only after a new user message explicitly confirms it may you call again with the same idempotency_key, unchanged arguments, and confirmation_token.
+Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -148,7 +149,7 @@ Returns:
         // 同步完成的模型（结果已在提交响应里）不该被当成待轮询任务：
         // 直接给出结果与图片块，模型不必再多打一次接口，用户也立刻看到图。
         const finished =
-          result.outputs.length > 0 ? await completedOutputContent(result.outputs) : null;
+          result.outputs.length > 0 ? await completedOutputContent(result.outputs, { profile: currentClientProfile() }) : null;
 
         return {
           structuredContent: {

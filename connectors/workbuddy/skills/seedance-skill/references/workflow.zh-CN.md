@@ -157,6 +157,12 @@
 
 创作路线与提交方式相互独立。默认使用 Seedream 5.0 Pro 生图、Seedance 2.0 生视频；改模型前先核实其支持所需路线。
 
+**在 Atlas Cloud 插件里（Codex、ChatGPT、Claude、WorkBuddy）**，工具列表里的 Atlas MCP 工具就是 Atlas 执行路线，每个阶段都用它们；下面关于 API Key、安装 Skill 和脚本运行器的说明只适用于独立部署，忽略即可：
+
+- 分镜板、关键帧、参考图等所有静态图，一律用 `atlas_generate_image` 调 Atlas 图像模型生成（默认 Seedream 5.0 Pro）。不论哪个阶段、哪怕只是草稿，都不要用宿主自带的生图工具：用户要的是 Atlas 工作流，计费和结果都以此为准。
+- 生成工具会先返回实时报价并停下。转告第一次报价时，顺带说明后续每个阶段用哪个 Atlas 模型（例如「分镜：Seedream 5.0 Pro；视频：Seedance 2.0」），以及每一步提交前都会先报价，然后等用户确认。不要一开始就让用户挑模型或报预算。
+- 本地参考图用 `atlas_get_upload_url` 上传；用 `atlas_get_prediction` 轮询（返回后立刻再调，服务端已在两次查询之间等待），同一回合内一直查到该阶段结束。
+
 在智能体对话中，默认由 **Atlas Cloud Skill 直接执行生成**。它可以查模型、上传本地素材、提交图片或视频任务、轮询并取回结果。只有它实际提交了任务，才报告 `Execution: atlas-skill`。
 
 只有用户明确选择 MCP 且当前客户端暴露了生成工具时，才用 `atlas-mcp`。只有用户明确选择终端、脚本、CI 或批量执行时，才用 `atlas-cli`。若 Atlas Cloud Skill 缺失，先协助安装 `AtlasCloudAI/atlas-cloud-skills`，再选择替代路径。

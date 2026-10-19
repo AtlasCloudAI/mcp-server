@@ -86,6 +86,24 @@ export async function fetchQuote(
   return { usd: quote.price ?? null, partial: quote.estimate_partial === true };
 }
 
+/**
+ * Auto-submit limit for image, video, audio and workflow generation.
+ *
+ * Defaults to 0: every generation stops first and shows the user the model and its
+ * live price, and runs only after an explicit yes. Product decision of 2026-10-19,
+ * after testers found jobs had started — and been billed — before they knew which
+ * model was used or what it cost. MCP_GENERATION_AUTOSUBMIT_MAX_USD raises it.
+ * atlas_chat keeps its own limit (autoSubmitThresholdUsd): a per-message
+ * confirmation would make chat unusable, and its worst case is cents.
+ */
+export function generationAutoSubmitThresholdUsd(): number {
+  const raw = process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD;
+  if (raw === undefined || raw.trim() === "") return 0;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+}
+
 export function autoSubmitThresholdUsd(): number {
   const raw = process.env.MCP_AUTOSUBMIT_MAX_USD;
   if (raw === undefined || raw.trim() === "") return 20;
@@ -108,13 +126,22 @@ export async function evaluateSpend(
   requestBody: unknown,
   options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
 ): Promise<SpendDecision> {
-  const thresholdUsd = autoSubmitThresholdUsd();
+  const thresholdUsd = generationAutoSubmitThresholdUsd();
   if (thresholdUsd <= 0) {
+    // Every generation is confirmed with the user. Still fetch the live quote so the
+    // confirmation shows the real price for these parameters, not "unknown".
+    let quote: Quote | null = null;
+    try {
+      quote = await fetchQuote(requestBody, options);
+    } catch {
+      quote = null;
+    }
     return {
       autoSubmit: false,
-      quotedUsd: null,
+      quotedUsd: quote?.usd ?? null,
       thresholdUsd,
-      reason: "auto-submit disabled",
+      ...(quote?.partial ? { partial: true } : {}),
+      reason: "every generation is confirmed with the user",
     };
   }
 
@@ -311,6 +338,12 @@ export function confirmationCostNotice(decision: SpendDecision): string {
       `- **Estimated cost**: at least ${formatUsd(decision.quotedUsd)} — the platform could not ` +
       `see everything it needs to price this request (for example a reference video's length), ` +
       `so the real charge will be higher.`
+    );
+  }
+  if (decision.thresholdUsd <= 0) {
+    return (
+      `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
+      `every generation is confirmed with the user before it runs).`
     );
   }
   return (

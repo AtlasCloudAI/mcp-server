@@ -62,7 +62,7 @@ https://mcp-auth.atlascloud.ai/upstream/callback
 
   A staging validation of the same flow additionally needs the staging Auth
   host's callback registered, for example
-  `https://atlascloud-auth.dev.atlascloud.ai/upstream/callback`.
+  `https://auth.dev.example.com/upstream/callback`.
 - The authorization request always sends `response_type=code`, `state`,
   `nonce`, `code_challenge`, and `code_challenge_method=S256`.
 

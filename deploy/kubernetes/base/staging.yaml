@@ -130,20 +130,8 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: atlas-registry-secret
-      # 这里曾经有一段 hostAliases，把 atlascloud-auth.dev / atlascloud-mcp.dev 指到
-      # higress-gateway 的 ClusterIP，因为集群 DNS 解析不了它们，而 JWKS 拉不到时令牌
-      # 校验 fail-closed（每个请求 401），启动自检失败还会 crashloop。
-      #
-      # 授权服务器换成 Atlas 自己的 console.dev.atlascloud.ai 之后不需要了：
-      #   - console.dev / api.dev 都在 CoreDNS 的 hosts 块里（→ 172.16.254.157），
-      #     用 `kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}'` 可查；
-      #   - 本服务从不请求自己的公开域名，atlascloud-mcp.dev 当初只是"顺带"写上的。
-      #
-      # 删掉它同时拆掉一颗定时炸弹：那个 ClusterIP 是硬编码的，higress 的 Service 一旦
-      # 重建，IP 变了就会全线 401，且 pod 重启即 crashloop——而 IP 变更不会有任何告警。
-      #
-      # 如果将来又要连一个集群 DNS 解析不到的授权服务器，优先往 CoreDNS 的 hosts 块加，
-      # 而不是在这里钉 IP。
+      # 授权服务器的域名必须能从集群里解析：JWKS 拉不到时令牌校验 fail-closed（每个请求 401）。
+      # 集群 DNS 解析不到时，优先在集群 DNS 里加记录，不要在这里用 hostAliases 钉 IP。
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -153,7 +141,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:bdcbd38822b2ff02f05b74ed510d2ebc49d022f88d4960e87178f74677cbe5f0
+          image: registry.example.com/atlascloud-mcp:latest
           imagePullPolicy: IfNotPresent
           args: ["node", "dist/http.js"]
           securityContext:
@@ -171,19 +159,19 @@ spec:
             - name: PORT
               value: "3000"
             - name: MCP_PUBLIC_URL
-              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+              value: https://mcp.dev.example.com/mcp
             - name: MCP_OAUTH_ISSUER
-              value: https://atlascloud-auth.dev.atlascloud.ai
+              value: https://auth.dev.example.com
             - name: MCP_OAUTH_JWKS_URI
-              value: https://atlascloud-auth.dev.atlascloud.ai/jwks
+              value: https://auth.dev.example.com/jwks
             - name: MCP_OAUTH_ENDPOINT_HOSTS
-              value: atlascloud-auth.dev.atlascloud.ai
+              value: auth.dev.example.com
             - name: MCP_OAUTH_AUDIENCE
-              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+              value: https://mcp.dev.example.com/mcp
             - name: MCP_OAUTH_ALGORITHMS
               value: RS256
             - name: MCP_ALLOWED_HOSTS
-              value: atlascloud-mcp.dev.atlascloud.ai
+              value: mcp.dev.example.com
             - name: MCP_ALLOWED_ORIGINS
               value: https://chatgpt.com,https://chat.openai.com,https://platform.openai.com
             - name: MCP_TRUST_PROXY
@@ -221,7 +209,7 @@ spec:
               port: http
               httpHeaders:
                 - name: Host
-                  value: atlascloud-mcp.dev.atlascloud.ai
+                  value: mcp.dev.example.com
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -231,7 +219,7 @@ spec:
               port: http
               httpHeaders:
                 - name: Host
-                  value: atlascloud-mcp.dev.atlascloud.ai
+                  value: mcp.dev.example.com
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 3
@@ -304,7 +292,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: auth
-          image: registry.atlascloud.ai/vcv-dg/atlascloud-mcp-openai-plugin@sha256:5b9a71a5699980145eb9d1641085aa79c89cf28bfec299f3c0087a0267082d5a
+          image: registry.example.com/atlascloud-mcp:latest
           imagePullPolicy: IfNotPresent
           args: ["node", "dist/auth.js"]
           securityContext:
@@ -322,9 +310,9 @@ spec:
             - name: AUTH_PORT
               value: "3001"
             - name: OIDC_ISSUER_URL
-              value: https://atlascloud-auth.dev.atlascloud.ai
+              value: https://auth.dev.example.com
             - name: OIDC_MCP_RESOURCE
-              value: https://atlascloud-mcp.dev.atlascloud.ai/mcp
+              value: https://mcp.dev.example.com/mcp
             - name: OIDC_REDIS_URL
               valueFrom:
                 secretKeyRef:
@@ -333,7 +321,7 @@ spec:
             - name: OIDC_REDIS_PREFIX
               value: atlascloud:openai-plugin:oidc
             - name: AUTH_ALLOWED_HOSTS
-              value: atlascloud-auth.dev.atlascloud.ai
+              value: auth.dev.example.com
             - name: AUTH_TRUST_PROXY
               value: "1"
             - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
@@ -383,7 +371,7 @@ spec:
               port: http
               httpHeaders:
                 - name: Host
-                  value: atlascloud-auth.dev.atlascloud.ai
+                  value: auth.dev.example.com
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -393,7 +381,7 @@ spec:
               port: http
               httpHeaders:
                 - name: Host
-                  value: atlascloud-auth.dev.atlascloud.ai
+                  value: auth.dev.example.com
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 3
@@ -445,7 +433,7 @@ metadata:
 spec:
   ingressClassName: higress
   rules:
-    - host: atlascloud-mcp.dev.atlascloud.ai
+    - host: mcp.dev.example.com
       http:
         paths:
           - path: /
@@ -455,7 +443,7 @@ spec:
                 name: atlascloud-openai-mcp
                 port:
                   number: 80
-    - host: atlascloud-auth.dev.atlascloud.ai
+    - host: auth.dev.example.com
       http:
         paths:
           - path: /
@@ -467,8 +455,8 @@ spec:
                   number: 80
   tls:
     - hosts:
-        - atlascloud-mcp.dev.atlascloud.ai
-        - atlascloud-auth.dev.atlascloud.ai
+        - mcp.dev.example.com
+        - auth.dev.example.com
       secretName: atlascloud-openai-plugin-tls
 ---
 apiVersion: networking.k8s.io/v1

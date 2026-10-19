@@ -132,10 +132,21 @@ export function createHttpApp(
         credential = await dependencies.credentialResolver.resolve(req.auth);
       } catch (error) {
         if (error instanceof CredentialResolutionError) {
-          res.status(403).json({
-            error: "account_not_linked",
-            error_description: error.message,
-          });
+          // 401 (not 403) on purpose: the bearer token is valid, but the account
+          // behind it has no linked credential — re-running the OAuth flow now
+          // ensures one at consent time. RFC 6750 clients only re-authorize on
+          // 401 + invalid_token, so a 403 here would strand them with a token
+          // that can never work until the human intervenes.
+          res
+            .status(401)
+            .set(
+              "WWW-Authenticate",
+              `Bearer error="invalid_token", error_description="account is not linked to an Atlas Cloud credential; re-authorize to link it", resource_metadata="${resourceMetadataUrl}"`
+            )
+            .json({
+              error: "account_not_linked",
+              error_description: error.message,
+            });
           return;
         }
         throw error;

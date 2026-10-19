@@ -25,6 +25,16 @@ export interface AuthorizationUser {
   passwordHash: string;
 }
 
+/**
+ * Optional backend that maps a verified upstream identity onto the Atlas API
+ * key of the matching account, so a first-time user does not have to paste one.
+ * Absent means every new user links a key manually.
+ */
+export interface CredentialExchangeConfig {
+  url: URL;
+  token: string;
+}
+
 export interface AuthorizationServerConfig {
   nodeEnv: "development" | "test" | "production";
   releaseTier: "staging" | "production";
@@ -39,6 +49,7 @@ export interface AuthorizationServerConfig {
   identityMode: AuthorizationIdentityMode;
   users: readonly AuthorizationUser[];
   upstream?: UpstreamOidcConfig;
+  credentialExchange?: CredentialExchangeConfig;
   credentialEncryptionKeys: readonly CredentialEncryptionKey[];
   credentialRedisPrefix: string;
   allowedHosts: readonly string[];
@@ -105,6 +116,8 @@ const envSchema = z.object({
   AUTH_UPSTREAM_SCOPES: z.string().default("openid,email,profile"),
   AUTH_UPSTREAM_ENDPOINT_HOSTS: z.string().optional(),
   AUTH_CREDENTIAL_ENCRYPTION_KEYS_JSON: z.string().optional(),
+  AUTH_CREDENTIAL_EXCHANGE_URL: z.string().url().optional(),
+  AUTH_CREDENTIAL_EXCHANGE_TOKEN: z.string().min(32).max(512).optional(),
   AUTH_CREDENTIAL_REDIS_PREFIX: z
     .string()
     .regex(/^[A-Za-z0-9:_-]{1,96}$/)
@@ -242,6 +255,7 @@ export function loadAuthorizationServerConfig(
 
   let users: AuthorizationUser[] = [];
   let upstream: UpstreamOidcConfig | undefined;
+  let credentialExchange: CredentialExchangeConfig | undefined;
   let credentialEncryptionKeys: CredentialEncryptionKey[] = [];
   if (env.AUTH_IDENTITY_MODE === "local-reviewer") {
     if (!env.OIDC_USERS_JSON) {
@@ -332,6 +346,30 @@ export function loadAuthorizationServerConfig(
       endpointHosts,
       callbackUrl: new URL("/upstream/callback", issuer),
     };
+    // 凭据自动换取是可选增强：两个变量必须同时给出，只给一个属于配置错误——
+    // 静默忽略会让"以为开了自动绑定、实际每个人还在手贴 key"长期不被发现。
+    if (env.AUTH_CREDENTIAL_EXCHANGE_URL || env.AUTH_CREDENTIAL_EXCHANGE_TOKEN) {
+      if (!env.AUTH_CREDENTIAL_EXCHANGE_URL || !env.AUTH_CREDENTIAL_EXCHANGE_TOKEN) {
+        throw new Error(
+          "AUTH_CREDENTIAL_EXCHANGE_URL and AUTH_CREDENTIAL_EXCHANGE_TOKEN must be set together"
+        );
+      }
+      const exchangeUrl = new URL(env.AUTH_CREDENTIAL_EXCHANGE_URL);
+      requireCredentialFreeUrl("AUTH_CREDENTIAL_EXCHANGE_URL", exchangeUrl);
+      if (exchangeUrl.hash) {
+        throw new Error("AUTH_CREDENTIAL_EXCHANGE_URL must not contain a fragment");
+      }
+      // 这个请求携带一把能换出用户 API key 的密钥，公网必须走 TLS。
+      // 集群内 Service DNS（*.svc.cluster.local）不经过公网，允许明文 HTTP：
+      // 为满足 TLS 而把内部服务发布到公网 ingress，反而扩大暴露面。
+      if (
+        env.NODE_ENV === "production" &&
+        !exchangeUrl.hostname.toLowerCase().endsWith(".svc.cluster.local")
+      ) {
+        requireHttps("AUTH_CREDENTIAL_EXCHANGE_URL", exchangeUrl);
+      }
+      credentialExchange = { url: exchangeUrl, token: env.AUTH_CREDENTIAL_EXCHANGE_TOKEN };
+    }
   }
   if (new Set(users.map((user) => user.sub)).size !== users.length) {
     throw new Error("OIDC_USERS_JSON contains duplicate subjects");
@@ -362,6 +400,7 @@ export function loadAuthorizationServerConfig(
     identityMode: env.AUTH_IDENTITY_MODE,
     users,
     upstream,
+    credentialExchange,
     credentialEncryptionKeys,
     credentialRedisPrefix: env.AUTH_CREDENTIAL_REDIS_PREFIX,
     allowedHosts,

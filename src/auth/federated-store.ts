@@ -7,6 +7,14 @@ export interface FederatedAccount {
   sub: string;
   email: string;
   name: string;
+  /**
+   * The subject as asserted by the upstream provider, before it is folded into
+   * `sub` by hashing it together with the issuer. Retained so a credential
+   * exchange can name the identity in the upstream's own terms; the derived
+   * `sub` is a one-way hash and cannot be mapped back to an Atlas account.
+   * Optional so accounts stored before this field existed still parse.
+   */
+  upstreamSubject?: string;
 }
 
 export interface UpstreamAuthorizationState {
@@ -55,6 +63,7 @@ const accountSchema = z
     sub: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
     email: z.string().email().max(254),
     name: z.string().trim().min(1).max(128),
+    upstreamSubject: z.string().min(1).max(512).optional(),
   })
   .strict();
 const upstreamStateSchema = z

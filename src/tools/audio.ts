@@ -21,6 +21,7 @@ import {
   costEstimate,
   evaluateSpend,
   type SpendDecision,
+  confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
   generationOutputSchema,
@@ -115,7 +116,7 @@ Returns:
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
+                `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.`,
             }],
           };
@@ -269,7 +270,7 @@ Returns:
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
+                `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.`,
             }],
           };

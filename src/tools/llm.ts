@@ -13,6 +13,8 @@ import {
   evaluateChatSpend,
   formatUsd,
   type SpendDecision,
+  confirmationValidSeconds,
+  confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
   buildImagePreviews,
@@ -119,7 +121,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             })
             .optional(),
           confirmation_token: z.string().min(32).optional(),
-          confirmation_expires_at: z.string().datetime().optional(),
+          confirmation_valid_seconds: z.number().int().nonnegative().optional(),
           pricing: generationPricingSchema.optional(),
           // 停下来等确认时：这次请求的花费上限；完成时：按实际用量算的花费
           worst_case_cost_usd: z.number().optional(),
@@ -182,7 +184,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                 status: "confirmation_required" as const,
                 model: found.model,
                 confirmation_token: confirmation.confirmationToken,
-                confirmation_expires_at: confirmation.expiresAt,
+                confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
                 pricing: confirmation.pricing,
                 ...(spend.quotedUsd !== null ? { worst_case_cost_usd: spend.quotedUsd } : {}),
               },
@@ -193,7 +195,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                   `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
                   `${bound}\n` +
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `- **Confirmation expires**: ${confirmation.expiresAt}\n\n` +
+                  `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                   "Show this to the user and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.",
               }],
             };

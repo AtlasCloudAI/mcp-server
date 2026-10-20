@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Model, SubmitKind } from "./types.js";
+import { confirmationValidSeconds } from "./services/spend-policy.js";
 
 export const idempotencyKeySchema = z
   .string()
@@ -124,7 +125,7 @@ export const generationOutputSchema = {
   kind: z.enum(["image", "video", "audio", "transcription"]),
   status: z.enum(["confirmation_required", "submitted"]),
   confirmation_token: z.string().min(32).optional(),
-  confirmation_expires_at: z.string().datetime().optional(),
+  confirmation_valid_seconds: z.number().int().nonnegative().optional(),
   pricing: generationPricingSchema.optional(),
   // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
   estimated_cost_usd: z.number().optional(),
@@ -146,7 +147,7 @@ export type GenerationStructuredContent = Record<string, unknown> &
         kind: SubmitKind;
         status: "confirmation_required";
         confirmation_token: string;
-        confirmation_expires_at: string;
+        confirmation_valid_seconds: number;
         pricing: z.infer<typeof generationPricingSchema>;
       }
   );
@@ -197,7 +198,7 @@ export function generationConfirmationStructuredContent(
     kind,
     status: "confirmation_required",
     confirmation_token: confirmation.confirmationToken,
-    confirmation_expires_at: confirmation.expiresAt,
+    confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
     pricing: confirmation.pricing,
     ...(estimate && estimate.usd !== null
       ? { estimated_cost_usd: estimate.usd, ...(estimate.partial ? { estimate_partial: true } : {}) }

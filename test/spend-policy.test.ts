@@ -4,6 +4,8 @@ import {
   autoSubmitNotice,
   autoSubmitThresholdUsd,
   confirmationCostNotice,
+  confirmationValidityNotice,
+  confirmationValidSeconds,
   evaluateSpend,
   formatUsd,
   generationAutoSubmitThresholdUsd,
@@ -170,4 +172,26 @@ test("直接提交时文案给的是预估、不是已扣费，且要求告知�
     autoSubmitNotice({ autoSubmit: false, quotedUsd: 99, thresholdUsd: 20, reason: "" }),
     ""
   );
+});
+
+test("报价有效期说成时长，不给绝对时间，并要求模型照样回传令牌", () => {
+  const now = Date.parse("2026-10-20T02:35:30Z");
+  const expiresAt = "2026-10-20T03:35:30.000Z";
+  assert.equal(confirmationValidSeconds(expiresAt, now), 3600);
+  const notice = confirmationValidityNotice(expiresAt, now);
+  assert.match(notice, /about 60 minutes/);
+  assert.match(notice, /send the confirmation_token back/);
+  assert.doesNotMatch(notice, /2026|Z\b|UTC/);
+  // 已过期也不出负数
+  assert.equal(confirmationValidSeconds(expiresAt, now + 2 * 3600_000), 0);
+});
+
+test("工具总说明不再说低于限额直接提交、不要自己加确认", async () => {
+  const { createAtlasCloudServer } = await import("../src/server.js");
+  const server = createAtlasCloudServer("remote") as unknown as { server: { _instructions?: string } };
+  const instructions = String(server.server._instructions ?? "");
+  assert.match(instructions, /quote before anything runs/);
+  assert.match(instructions, /do not judge expiry from a clock/);
+  assert.doesNotMatch(instructions, /Do not add a confirmation step of your own/);
+  assert.doesNotMatch(instructions, /submits it straight away and reports the amount/);
 });

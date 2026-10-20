@@ -21,6 +21,7 @@ import {
   costEstimate,
   evaluateSpend,
   type SpendDecision,
+  confirmationReuseNotice,
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
@@ -117,7 +118,8 @@ Returns:
                   `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                   `${confirmationCostNotice(spend)}\n` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
+                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                   `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with the returned confirmation_token.`,
               },
             ],

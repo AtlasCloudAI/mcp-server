@@ -26,6 +26,12 @@ export type ConfirmedModelPrice = ModelPrice & {
 };
 
 export interface GenerationConfirmationQuote {
+  /**
+   * 原样回给调用方。确认提交必须带同一个幂等键，但 Codex 的模型常在 JavaScript 单元里
+   * 随手生成一个、存进局部变量，自己从没看到过这个值；下一轮确认时就拿不出来，只能
+   * 重新报价（2026-10-20 生产实测）。报价里写明这个值，模型照抄即可。
+   */
+  idempotencyKey: string;
   confirmationToken: string;
   expiresAt: string;
   pricing: ConfirmedModelPrice;
@@ -112,6 +118,7 @@ export function issueGenerationConfirmation(
     ),
     expiresAt: new Date(expiresAt).toISOString(),
     pricing,
+    idempotencyKey,
   };
 }
 

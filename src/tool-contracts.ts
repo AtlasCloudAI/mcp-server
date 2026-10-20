@@ -126,6 +126,7 @@ export const generationOutputSchema = {
   status: z.enum(["confirmation_required", "submitted"]),
   confirmation_token: z.string().min(32).optional(),
   confirmation_valid_seconds: z.number().int().nonnegative().optional(),
+  idempotency_key: z.string().optional(),
   pricing: generationPricingSchema.optional(),
   // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
   estimated_cost_usd: z.number().optional(),
@@ -148,6 +149,7 @@ export type GenerationStructuredContent = Record<string, unknown> &
         status: "confirmation_required";
         confirmation_token: string;
         confirmation_valid_seconds: number;
+        idempotency_key: string;
         pricing: z.infer<typeof generationPricingSchema>;
       }
   );
@@ -188,6 +190,7 @@ export function generationConfirmationStructuredContent(
   confirmation: {
     confirmationToken: string;
     expiresAt: string;
+    idempotencyKey: string;
     pricing: z.infer<typeof generationPricingSchema>;
   },
   estimate?: { usd: number | null; partial: boolean }
@@ -199,6 +202,7 @@ export function generationConfirmationStructuredContent(
     status: "confirmation_required",
     confirmation_token: confirmation.confirmationToken,
     confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
+    idempotency_key: confirmation.idempotencyKey,
     pricing: confirmation.pricing,
     ...(estimate && estimate.usd !== null
       ? { estimated_cost_usd: estimate.usd, ...(estimate.partial ? { estimate_partial: true } : {}) }

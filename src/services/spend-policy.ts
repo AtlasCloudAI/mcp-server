@@ -340,6 +340,14 @@ export function confirmationValidSeconds(expiresAt: string, now: number = Date.n
   return Math.max(0, Math.round((Date.parse(expiresAt) - now) / 1000));
 }
 
+/** 报价里写出这次的幂等键，确认时让模型原样传回（见 GenerationConfirmationQuote）。 */
+export function confirmationReuseNotice(idempotencyKey: string): string {
+  return (
+    `- **idempotency_key**: \`${idempotencyKey}\`. When the user confirms, send this exact value back ` +
+    `with the confirmation_token and unchanged arguments; do not generate a new one.`
+  );
+}
+
 export function confirmationValidityNotice(expiresAt: string, now: number = Date.now()): string {
   const minutes = Math.max(1, Math.round(confirmationValidSeconds(expiresAt, now) / 60));
   return (

@@ -78,3 +78,8 @@ test("部署前签发的旧格式令牌在过期前仍然有效", (t) => {
   const legacy = `${encoded}.${createHmac("sha256", secret).update(encoded).digest("base64url")}`;
   verifyGenerationConfirmation(legacy, "atlas_generate_image", KEY, REQUEST, PRICE);
 });
+
+test("签发报价时把幂等键一并返回，模型没记住也能从报价里读到", () => {
+  const quote = issueGenerationConfirmation("atlas_generate_image", KEY, REQUEST, PRICE);
+  assert.equal(quote.idempotencyKey, KEY);
+});

@@ -104,12 +104,23 @@ Returns:
         model: z
           .string()
           .min(1)
-          .describe("Exact model ID returned by atlas_list_models"),
+          .optional()
+          .describe("Exact model ID: the model_id value returned by atlas_list_models"),
+        // atlas_list_models 返回的字段叫 model_id，模型常原样照抄成参数名，
+        // 只认 model 的话每次都要先吃一个校验错误再重试（2026-10-20 生产 2 次）。
+        model_id: z.string().min(1).optional().describe("Same as model; either name is accepted"),
       },
       outputSchema: modelInfoOutputSchema,
       annotations: toolAnnotations("atlas_get_model_info"),
     },
-    async ({ model }) => {
+    async ({ model: modelParam, model_id }) => {
+      const model = modelParam ?? model_id;
+      if (!model) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Pass the model ID as `model` (the model_id value from atlas_list_models)." }],
+        };
+      }
       try {
         const found = await findModel(model);
         if (!found) {

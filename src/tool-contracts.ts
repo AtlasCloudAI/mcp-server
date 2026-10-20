@@ -11,11 +11,20 @@ export const idempotencyKeySchema = z
 
 export const generationConfirmationTokenSchema = z
   .string()
-  .min(32)
+  // 不设下限：抄短了的令牌要能进到处理函数，按报价记录找回；在参数校验这一层报
+  // "至少 32 个字符"只会让模型以为服务端发错了令牌（2026-10-20 生产实测）。
+  .min(1)
   .max(4096)
   .optional()
   .describe(
     "Opaque token returned by this tool's quote-only first call. Supply it only after the user explicitly confirms the exact model, validated parameters, and current pricing. Reuse the same idempotency_key and unchanged arguments."
+  );
+
+export const generationConfirmedSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "Set to true on the call after the user has explicitly confirmed the quote. Send the confirmation_token too if you have it; if it was lost or mistyped, the server finds the quote from the unchanged arguments."
   );
 
 export const predictionIdSchema = z

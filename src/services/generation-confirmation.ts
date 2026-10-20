@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { ModelPrice } from "../types.js";
 import { idempotencyFingerprint } from "./idempotency.js";
 import { getRequestContext } from "./request-context.js";
+import { InMemoryUploadTicketStore, type UploadTicketStore } from "./upload-ticket-store.js";
 
 const localConfirmationSecret = randomBytes(32).toString("base64url");
 
@@ -91,12 +92,12 @@ function sign(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload).digest("base64url");
 }
 
-export function issueGenerationConfirmation(
+export async function issueGenerationConfirmation(
   toolName: string,
   idempotencyKey: string,
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
-): GenerationConfirmationQuote {
+): Promise<GenerationConfirmationQuote> {
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(
@@ -104,6 +105,11 @@ export function issueGenerationConfirmation(
     pricing
   );
   const expiresAt = Date.now() + ttlSeconds * 1000;
+  await rememberQuote(
+    quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint),
+    { idempotencyKey, expiresAt },
+    ttlSeconds
+  );
   return {
     confirmationToken: compactToken(
       {
@@ -177,6 +183,98 @@ function verifyCompact(token: string, facts: TokenFacts, secret: string): void {
       "Generation confirmation expired. Request a new quote. No billable request was submitted."
     );
   }
+}
+
+/**
+ * 报价记录。
+ *
+ * 确认流程原本全靠模型把两样东西原样带回来：确认令牌和幂等键。实测模型抄不准随机字符串，
+ * 而且问题一再换个样子出现：570 字符的令牌抄错（2.9.2 压短），34 字符的令牌照样少抄 3 个
+ * （2026-10-20 生产，模型还据此断定"令牌格式有问题"放弃了），幂等键在 Codex 的 JavaScript
+ * 单元里随手生成、模型自己没看见，确认时拿不出来（同日生产，用户被迫确认两次）。
+ *
+ * 所以服务端在报价时记一笔：同一用户、同一工具、同样参数、同样价格 → 当时的幂等键。确认时
+ * 令牌对得上就照旧；对不上或没带，就按这四样找回报价。约束和令牌一样：必须先给这个用户报过
+ * 这一单的价，参数或价格一变就找不到。找回的是当时的幂等键，所以重复确认也只提交一次。
+ */
+const localQuotes = new InMemoryUploadTicketStore();
+
+function quoteStore(): UploadTicketStore {
+  return getRequestContext()?.quoteStore ?? localQuotes;
+}
+
+function quoteKey(
+  subjectDigest: string,
+  toolName: string,
+  requestFingerprint: string,
+  pricingFingerprint: string
+): string {
+  return createHash("sha256")
+    .update([subjectDigest, toolName, requestFingerprint, pricingFingerprint].join("\n"))
+    .digest("hex");
+}
+
+interface QuoteRecord {
+  idempotencyKey: string;
+  expiresAt: number;
+}
+
+async function rememberQuote(key: string, record: QuoteRecord, ttlSeconds: number): Promise<void> {
+  // 记不下来不影响报价本身：令牌那条路照样能确认。
+  try {
+    await quoteStore().put(key, JSON.stringify(record), ttlSeconds);
+  } catch (error) {
+    console.error(`[quote-store] put failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function recallQuote(key: string): Promise<QuoteRecord | null> {
+  try {
+    const raw = await quoteStore().get(key);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as QuoteRecord;
+    return record.expiresAt > Date.now() && typeof record.idempotencyKey === "string" ? record : null;
+  } catch (error) {
+    console.error(`[quote-store] get failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * 用户确认后的那次调用：返回这一单该用的幂等键。
+ *
+ * 先验令牌；验不过（抄错、没带、幂等键换了）再按参数和价格找回报价。两样都不成立才报错，
+ * 而且优先报令牌自己的错误（例如已过期），让模型知道该重新报价。
+ */
+export async function resolveConfirmedIdempotencyKey(
+  token: string | undefined,
+  toolName: string,
+  idempotencyKey: string,
+  request: Record<string, unknown>,
+  modelPrice: ModelPrice | undefined
+): Promise<string> {
+  let tokenError: unknown;
+  if (token) {
+    try {
+      verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
+      return idempotencyKey;
+    } catch (error) {
+      tokenError = error;
+    }
+  }
+  const pricing = currentPricing(modelPrice);
+  const { subject } = runtime();
+  const { requestFingerprint, pricingFingerprint } = fingerprints(request, pricing);
+  const record = await recallQuote(
+    quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint)
+  );
+  if (record) return record.idempotencyKey;
+  if (tokenError) throw tokenError;
+  throw new GenerationConfirmationError(
+    "No quote was found for these exact arguments and current price. Call again without " +
+      "confirmed or confirmation_token to get a quote, show it to the user, and wait for their " +
+      "confirmation. No billable request was submitted."
+  );
 }
 
 export function verifyGenerationConfirmation(

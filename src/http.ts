@@ -23,6 +23,7 @@ import { runWithRequestContext } from "./services/request-context.js";
 import {
   createRedisUploadTicketStore,
   InMemoryUploadTicketStore,
+  QUOTE_REDIS_PREFIX,
   type UploadTicketStore,
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
@@ -62,6 +63,7 @@ export interface HttpAppDependencies {
   uploadFetcher?: UploadFetcher;
   /** 短上传地址的票据存储。省略时用进程内存储（单副本、测试）。 */
   uploadTicketStore?: UploadTicketStore;
+  quoteStore?: UploadTicketStore;
 }
 
 /**
@@ -119,6 +121,7 @@ export function createHttpApp(
   dependencies: HttpAppDependencies
 ): Express {
   const uploadTicketStore = dependencies.uploadTicketStore ?? new InMemoryUploadTicketStore();
+  const quoteStore = dependencies.quoteStore ?? new InMemoryUploadTicketStore();
   const resourceMetadataUrl = new URL(
     "/.well-known/oauth-protected-resource",
     config.publicMcpUrl
@@ -248,6 +251,7 @@ export function createHttpApp(
             uploadTicketTtlSeconds: config.uploadTicketTtlSeconds,
             uploadMaxBytes: config.uploadMaxBytes,
             uploadTicketStore,
+            quoteStore,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -356,6 +360,11 @@ export async function startHttpServer(
     config.idempotencyBackend === "redis"
       ? await createRedisUploadTicketStore(config.redisUrl!)
       : new InMemoryUploadTicketStore();
+  // 报价记录同理：报价和确认可能落在不同 pod。
+  const quoteStore: UploadTicketStore =
+    config.idempotencyBackend === "redis"
+      ? await createRedisUploadTicketStore(config.redisUrl!, QUOTE_REDIS_PREFIX)
+      : new InMemoryUploadTicketStore();
   let credentialResolver: AtlasCredentialResolver | undefined;
   let server: NodeHttpServer;
   try {
@@ -366,6 +375,7 @@ export async function startHttpServer(
       idempotencyStore,
       credentialResolver,
       uploadTicketStore,
+      quoteStore,
     };
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
@@ -377,6 +387,7 @@ export async function startHttpServer(
     await Promise.allSettled([
       idempotencyStore.close(),
       uploadTicketStore.close(),
+      quoteStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
     ]);
     throw error;
@@ -392,6 +403,7 @@ export async function startHttpServer(
     });
     await idempotencyStore.close();
     await uploadTicketStore.close();
+    await quoteStore.close();
     await credentialResolver?.close?.();
   };
   return { server, close };

@@ -40,8 +40,8 @@ function withSubject<T>(subject: string, operation: () => T): T {
   );
 }
 
-test("generation confirmation accepts only the same user, tool, key, request, and price", () => {
-  const quote = withSubject("reviewer-one", () =>
+test("generation confirmation accepts only the same user, tool, key, request, and price", async () => {
+  const quote = await withSubject("reviewer-one", () =>
     issueGenerationConfirmation(
       "atlas_generate_image",
       idempotencyKey,
@@ -117,12 +117,12 @@ test("generation confirmation accepts only the same user, tool, key, request, an
   }
 });
 
-test("generation confirmation rejects tampering, expiry, and missing live pricing", () => {
+test("generation confirmation rejects tampering, expiry, and missing live pricing", async () => {
   const originalNow = Date.now;
   let now = originalNow();
   Date.now = () => now;
   try {
-    const quote = withSubject("reviewer-one", () =>
+    const quote = await withSubject("reviewer-one", () =>
       issueGenerationConfirmation(
         "atlas_generate_image",
         idempotencyKey,
@@ -163,8 +163,8 @@ test("generation confirmation rejects tampering, expiry, and missing live pricin
     Date.now = originalNow;
   }
 
-  assert.throws(
-    () =>
+  await assert.rejects(
+    async () =>
       withSubject("reviewer-one", () =>
         issueGenerationConfirmation(
           "atlas_generate_image",

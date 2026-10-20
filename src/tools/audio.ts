@@ -7,7 +7,7 @@ import {
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
-  verifyGenerationConfirmation,
+  resolveConfirmedIdempotencyKey,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
@@ -28,6 +28,7 @@ import {
   generationOutputSchema,
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
+  generationConfirmedSchema,
   generationStructuredContent,
   idempotencyKeySchema,
 } from "../tool-contracts.js";
@@ -44,7 +45,7 @@ This covers both TTS/voice models and music/song models. The live catalog determ
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -65,6 +66,7 @@ Returns:
       inputSchema: {
         idempotency_key: idempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
+        confirmed: generationConfirmedSchema,
         model: z.string().min(1).describe("Audio model ID"),
         params: z
           .record(z.unknown())
@@ -75,7 +77,7 @@ Returns:
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_audio"),
     },
-    async ({ idempotency_key, confirmation_token, model, params }) => {
+    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Audio",
@@ -93,11 +95,11 @@ Returns:
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
         let spend: SpendDecision | null = null;
-        if (!confirmation_token) {
+        if (!confirmation_token && !confirmed) {
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
-          const confirmation = issueGenerationConfirmation(
+          const confirmation = await issueGenerationConfirmation(
             "atlas_generate_audio",
             idempotency_key,
             confirmedRequest,
@@ -119,25 +121,21 @@ Returns:
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                `Show the user the estimated cost above and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.`,
+                `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
           };
         }
         // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
         // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
-        if (confirmation_token) {
-          verifyGenerationConfirmation(
-            confirmation_token,
-            "atlas_generate_audio",
-            idempotency_key,
-            confirmedRequest,
-            prepared.model.price
-          );
-        }
+        // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
+        const submitKey =
+          confirmation_token || confirmed
+            ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_audio", idempotency_key, confirmedRequest, prepared.model.price)
+            : idempotency_key;
         const result = await executeIdempotently(
           "atlas_generate_audio",
-          { idempotency_key, ...confirmedRequest },
-          idempotency_key,
+          { idempotency_key: submitKey, ...confirmedRequest },
+          submitKey,
           () => submitPreparedGeneration(prepared)
         );
 
@@ -205,9 +203,7 @@ Parameters are validated against the model's schema BEFORE the request is submit
 
 IMPORTANT: The "model" parameter requires an exact current speech-to-text model ID. Speech-to-text models are Audio-type models — use atlas_list_models with type="Audio" to find them. Do NOT guess model IDs.
 
-The audio must already be reachable through an HTTPS URL. This remote OpenAI plugin does not expose a local-file upload tool. If the user only has a local file, ask them to upload it through an approved Atlas Cloud or customer-controlled HTTPS location before continuing; do not invent or call atlas_upload_media.
-
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
 
 Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
 
@@ -220,6 +216,7 @@ Returns:
       inputSchema: {
         idempotency_key: idempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
+        confirmed: generationConfirmedSchema,
         model: z.string().min(1).describe("Speech-to-text model ID"),
         params: z
           .record(z.unknown())
@@ -230,7 +227,7 @@ Returns:
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_transcribe_audio"),
     },
-    async ({ idempotency_key, confirmation_token, model, params }) => {
+    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Audio",
@@ -248,11 +245,11 @@ Returns:
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
         let spend: SpendDecision | null = null;
-        if (!confirmation_token) {
+        if (!confirmation_token && !confirmed) {
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
-          const confirmation = issueGenerationConfirmation(
+          const confirmation = await issueGenerationConfirmation(
             "atlas_transcribe_audio",
             idempotency_key,
             confirmedRequest,
@@ -274,25 +271,21 @@ Returns:
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                `Show the user the estimated cost above and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.`,
+                `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
           };
         }
         // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
         // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
-        if (confirmation_token) {
-          verifyGenerationConfirmation(
-            confirmation_token,
-            "atlas_transcribe_audio",
-            idempotency_key,
-            confirmedRequest,
-            prepared.model.price
-          );
-        }
+        // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
+        const submitKey =
+          confirmation_token || confirmed
+            ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_transcribe_audio", idempotency_key, confirmedRequest, prepared.model.price)
+            : idempotency_key;
         const result = await executeIdempotently(
           "atlas_transcribe_audio",
-          { idempotency_key, ...confirmedRequest },
-          idempotency_key,
+          { idempotency_key: submitKey, ...confirmedRequest },
+          submitKey,
           () => submitPreparedGeneration(prepared)
         );
 

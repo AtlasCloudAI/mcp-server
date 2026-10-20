@@ -205,11 +205,19 @@ test("托管模式：按客户端给出不同的展示说明", async (t) => {
     await client.connect(transport);
     try {
       const { tools } = await client.listTools();
-      for (const name of ["atlas_generate_image", "atlas_generate_video", "atlas_quick_generate"]) {
+      for (const name of [
+        "atlas_generate_image",
+        "atlas_generate_video",
+        "atlas_generate_audio",
+        "atlas_transcribe_audio",
+        "atlas_quick_generate",
+      ]) {
         const tool = tools.find((x) => x.name === name);
         assert.ok(tool, name);
         assert.match(String(tool.description), /atlas_get_upload_url/, name);
         assert.match(String(tool.description), /do not call the Atlas REST API yourself/, name);
+        // 转写工具里曾残留"没有本地上传工具、请用户自己找地方传"，模型照做了（2026-10-20 test）。
+        assert.doesNotMatch(String(tool.description), /does not expose a local-file upload tool/, name);
       }
     } finally {
       await client.close();

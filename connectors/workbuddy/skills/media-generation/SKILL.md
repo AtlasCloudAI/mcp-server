@@ -5,7 +5,7 @@ display_name: "Atlas Cloud 媒体生成"
 display_name_en: "Atlas Cloud Media Generation"
 description_zh: "用自然语言调用 Atlas Cloud 上 300+ 个模型，生成图片、视频、语音、音乐和 3D，并可查模型目录、参数与价格。"
 description_en: "Call 300+ Atlas Cloud models in natural language to generate images, video, speech, music and 3D, and to browse the catalog, parameters and pricing."
-version: 2.6.3
+version: 2.6.4
 author: Atlas Cloud
 ---
 
@@ -26,14 +26,18 @@ Then, for anything the user wants generated:
    machine, call `atlas_get_upload_url`, POST the file to the `upload_url` it returns (wait for that
    curl to finish), and pass the `url` from its response to the generation tool. Never inline the
    file as base64 or a `data:` URI.
-3. **Never claim a result you did not get.** If the Atlas tools are missing from your tool list or
+3. **Never claim a result you did not get.** Atlas tools can take a few seconds to appear after a
+   chat starts. If they are missing when you first look, or a call fails with "is not a function",
+   wait about 5 seconds and look again, up to 3 times. If they are still missing after that, or
    keep failing, tell the user plainly that Atlas is not reachable right now and nothing was
    generated. Do not say an image or video was made unless a tool call returned it. Do not switch
    to another generator (such as a built-in image tool) instead: the user asked for Atlas, so ask
    them to sign in or retry rather than handing back a result from somewhere else.
 4. **Quote first, then generate, then show.** The generation tool returns the model and a live
-   price and stops; relay them and wait for a yes. Poll `atlas_get_prediction` in the same turn until
-   it finishes, save the result locally and show it with `![title](/absolute/path/file.ext)`.
+   price and stops; relay them and wait for a yes. When the user confirms, call again with the same
+   arguments, `confirmed: true`, and the idempotency_key and confirmation_token shown in the quote.
+   Poll `atlas_get_prediction` in the same turn until it finishes, save the result locally and show
+   it with `![title](/absolute/path/file.ext)`.
 
 ## Quick Start
 

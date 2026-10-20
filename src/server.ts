@@ -28,7 +28,7 @@ export function createAtlasCloudServer(
         "Use model discovery before generation when the model ID or parameters are uncertain. " +
         "Pick the model and parameters yourself from the user's request and the live catalog; ask only when something material is genuinely ambiguous. " +
         "Generation tools quote before anything runs. Call once without confirmation_token. If the result is confirmation_required, nothing was spent: show the user that exact model and cost and stop. " +
-        "Only after a new user message explicitly confirms it, call again with the returned confirmation_token, the same idempotency_key, and unchanged arguments. " +
+        "Only after a new user message explicitly confirms it, call again with unchanged arguments, confirmed: true, the same idempotency_key, and the returned confirmation_token; if the token was lost or mistyped, the server finds the quote from the unchanged arguments. " +
         "Send the token back even if you think it may have lapsed: the server checks expiry itself and says so if it has (only then quote again), so do not judge expiry from a clock. " +
         "If a call submits straight away instead (a charge under a configured auto-submit limit), tell the user the amount. " +
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +

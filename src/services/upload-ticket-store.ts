@@ -59,14 +59,18 @@ export class InMemoryUploadTicketStore implements UploadTicketStore {
 const REDIS_PREFIX = "atlascloud:mcp:upload-ticket:";
 
 export class RedisUploadTicketStore implements UploadTicketStore {
-  constructor(private readonly client: RedisClientType) {}
+  // 报价记录（generation-confirmation.ts）复用这个带过期的键值存储，只换前缀。
+  constructor(
+    private readonly client: RedisClientType,
+    private readonly prefix: string = REDIS_PREFIX
+  ) {}
 
   async put(id: string, ticket: string, ttlSeconds: number): Promise<void> {
-    await this.client.set(`${REDIS_PREFIX}${id}`, ticket, { EX: Math.max(1, ttlSeconds) });
+    await this.client.set(`${this.prefix}${id}`, ticket, { EX: Math.max(1, ttlSeconds) });
   }
 
   async get(id: string): Promise<string | null> {
-    return await this.client.get(`${REDIS_PREFIX}${id}`);
+    return await this.client.get(`${this.prefix}${id}`);
   }
 
   async close(): Promise<void> {
@@ -74,11 +78,16 @@ export class RedisUploadTicketStore implements UploadTicketStore {
   }
 }
 
-export async function createRedisUploadTicketStore(url: string): Promise<RedisUploadTicketStore> {
+export async function createRedisUploadTicketStore(
+  url: string,
+  prefix: string = REDIS_PREFIX
+): Promise<RedisUploadTicketStore> {
   const client: RedisClientType = createClient({ url });
   client.on("error", (error: Error) => {
-    console.error(`Redis upload ticket store error: ${error.message}`);
+    console.error(`Redis key-value store (${prefix}) error: ${error.message}`);
   });
   await client.connect();
-  return new RedisUploadTicketStore(client);
+  return new RedisUploadTicketStore(client, prefix);
 }
+
+export const QUOTE_REDIS_PREFIX = "atlascloud:mcp:quote:";

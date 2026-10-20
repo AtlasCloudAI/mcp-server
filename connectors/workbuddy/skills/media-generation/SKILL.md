@@ -28,7 +28,8 @@ Then, for anything the user wants generated:
    file as base64 or a `data:` URI.
 3. **Never claim a result you did not get.** Atlas tools can take a few seconds to appear after a
    chat starts. If they are missing when you first look, or a call fails with "is not a function",
-   wait about 5 seconds and look again, up to 3 times. If they are still missing after that, or
+   wait about 5 seconds and look again, up to 3 times. Look again on every new user message too;
+   never repeat an earlier "not connected" without checking. If they are still missing after that, or
    keep failing, tell the user plainly that Atlas is not reachable right now and nothing was
    generated. Do not say an image or video was made unless a tool call returned it. Do not switch
    to another generator (such as a built-in image tool) instead: the user asked for Atlas, so ask

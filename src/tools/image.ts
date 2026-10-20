@@ -7,7 +7,7 @@ import {
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
-  verifyGenerationConfirmation,
+  resolveConfirmedIdempotencyKey,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
@@ -21,12 +21,14 @@ import {
   costEstimate,
   evaluateSpend,
   type SpendDecision,
+  confirmationReuseNotice,
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
   generationOutputSchema,
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
+  generationConfirmedSchema,
   generationStructuredContent,
   idempotencyKeySchema,
 } from "../tool-contracts.js";
@@ -41,7 +43,7 @@ export function registerImageTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -60,6 +62,7 @@ Returns:
       inputSchema: {
         idempotency_key: idempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
+        confirmed: generationConfirmedSchema,
         model: z.string().min(1).describe("Image model ID"),
         params: z
           .record(z.unknown())
@@ -70,7 +73,7 @@ Returns:
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_image"),
     },
-    async ({ idempotency_key, confirmation_token, model, params }) => {
+    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Image",
@@ -92,11 +95,11 @@ Returns:
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
         let spend: SpendDecision | null = null;
-        if (!confirmation_token) {
+        if (!confirmation_token && !confirmed) {
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
-          const confirmation = issueGenerationConfirmation(
+          const confirmation = await issueGenerationConfirmation(
             "atlas_generate_image",
             idempotency_key,
             confirmedRequest,
@@ -117,8 +120,9 @@ Returns:
                   `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                   `${confirmationCostNotice(spend)}\n` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                  `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with the returned confirmation_token.`,
+                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
+                  `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
               },
             ],
           };
@@ -126,19 +130,16 @@ Returns:
 
         // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
         // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
-        if (confirmation_token) {
-          verifyGenerationConfirmation(
-            confirmation_token,
-            "atlas_generate_image",
-            idempotency_key,
-            confirmedRequest,
-            prepared.model.price
-          );
-        }
+        // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
+        const confirmedKey =
+          confirmation_token || confirmed
+            ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_image", idempotency_key, confirmedRequest, prepared.model.price)
+            : { idempotencyKey: idempotency_key };
+        const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_generate_image",
-          { idempotency_key, ...confirmedRequest },
-          idempotency_key,
+          { idempotency_key: submitKey, ...confirmedRequest },
+          submitKey,
           () => submitPreparedGeneration(prepared)
         );
 
@@ -181,6 +182,7 @@ Returns:
                 `Image generation usually takes 10-30 seconds (3D models can take 2-5 minutes).`
             },
             ...(finished ? finished.blocks : []),
+            ...(confirmedKey.notice ? [{ type: "text" as const, text: confirmedKey.notice }] : []),
           ],
         };
       } catch (error) {

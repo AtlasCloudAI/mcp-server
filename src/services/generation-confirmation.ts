@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { ModelPrice } from "../types.js";
 import { idempotencyFingerprint } from "./idempotency.js";
 import { getRequestContext } from "./request-context.js";
+import { InMemoryUploadTicketStore, type UploadTicketStore } from "./upload-ticket-store.js";
 
 const localConfirmationSecret = randomBytes(32).toString("base64url");
 
@@ -26,6 +27,12 @@ export type ConfirmedModelPrice = ModelPrice & {
 };
 
 export interface GenerationConfirmationQuote {
+  /**
+   * 原样回给调用方。确认提交必须带同一个幂等键，但 Codex 的模型常在 JavaScript 单元里
+   * 随手生成一个、存进局部变量，自己从没看到过这个值；下一轮确认时就拿不出来，只能
+   * 重新报价（2026-10-20 生产实测）。报价里写明这个值，模型照抄即可。
+   */
+  idempotencyKey: string;
   confirmationToken: string;
   expiresAt: string;
   pricing: ConfirmedModelPrice;
@@ -85,12 +92,12 @@ function sign(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload).digest("base64url");
 }
 
-export function issueGenerationConfirmation(
+export async function issueGenerationConfirmation(
   toolName: string,
   idempotencyKey: string,
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
-): GenerationConfirmationQuote {
+): Promise<GenerationConfirmationQuote> {
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(
@@ -98,6 +105,11 @@ export function issueGenerationConfirmation(
     pricing
   );
   const expiresAt = Date.now() + ttlSeconds * 1000;
+  await rememberQuote(
+    quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint),
+    { idempotencyKey, expiresAt },
+    ttlSeconds
+  );
   return {
     confirmationToken: compactToken(
       {
@@ -112,6 +124,7 @@ export function issueGenerationConfirmation(
     ),
     expiresAt: new Date(expiresAt).toISOString(),
     pricing,
+    idempotencyKey,
   };
 }
 
@@ -170,6 +183,132 @@ function verifyCompact(token: string, facts: TokenFacts, secret: string): void {
       "Generation confirmation expired. Request a new quote. No billable request was submitted."
     );
   }
+}
+
+/**
+ * 报价记录。
+ *
+ * 确认流程原本全靠模型把两样东西原样带回来：确认令牌和幂等键。实测模型抄不准随机字符串，
+ * 而且问题一再换个样子出现：570 字符的令牌抄错（2.9.2 压短），34 字符的令牌照样少抄 3 个
+ * （2026-10-20 生产，模型还据此断定"令牌格式有问题"放弃了），幂等键在 Codex 的 JavaScript
+ * 单元里随手生成、模型自己没看见，确认时拿不出来（同日生产，用户被迫确认两次）。
+ *
+ * 所以服务端在报价时记一笔：同一用户、同一工具、同样参数、同样价格 → 当时的幂等键。确认时
+ * 令牌对得上就照旧；对不上或没带，就按这四样找回报价。约束和令牌一样：必须先给这个用户报过
+ * 这一单的价，参数或价格一变就找不到。找回的是当时的幂等键，所以重复确认也只提交一次。
+ */
+const localQuotes = new InMemoryUploadTicketStore();
+
+function quoteStore(): UploadTicketStore {
+  return getRequestContext()?.quoteStore ?? localQuotes;
+}
+
+function quoteKey(
+  subjectDigest: string,
+  toolName: string,
+  requestFingerprint: string,
+  pricingFingerprint: string
+): string {
+  return createHash("sha256")
+    .update([subjectDigest, toolName, requestFingerprint, pricingFingerprint].join("\n"))
+    .digest("hex");
+}
+
+interface QuoteRecord {
+  idempotencyKey: string;
+  expiresAt: number;
+}
+
+// node-redis 断线重连期间命令会排队、不报错，await 会一直挂着；报价本身不该被它拖住。
+const QUOTE_STORE_TIMEOUT_MS = 800;
+
+function withTimeout<T>(operation: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`quote store timed out after ${ms}ms`)), ms);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function rememberQuote(key: string, record: QuoteRecord, ttlSeconds: number): Promise<void> {
+  // 记不下来不影响报价本身：令牌那条路照样能确认。
+  try {
+    await withTimeout(quoteStore().put(key, JSON.stringify(record), ttlSeconds), QUOTE_STORE_TIMEOUT_MS);
+  } catch (error) {
+    console.error(`[quote-store] put failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function recallQuote(key: string): Promise<QuoteRecord | null> {
+  try {
+    const raw = await withTimeout(quoteStore().get(key), QUOTE_STORE_TIMEOUT_MS);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as QuoteRecord;
+    return record.expiresAt > Date.now() && typeof record.idempotencyKey === "string" ? record : null;
+  } catch (error) {
+    console.error(`[quote-store] get failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+export interface ConfirmedKey {
+  idempotencyKey: string;
+  /** 用的是报价记录里的键、和调用方传来的不一样时，提醒模型这可能返回已有任务。 */
+  notice?: string;
+}
+
+/**
+ * 用户确认后的那次调用：决定这一单用哪个幂等键提交。
+ *
+ * 有报价记录就一律用记录里的键，令牌只在没有记录时起作用。否则会两条路各提交一次：同一组
+ * 参数先后报价两次（键 K1、K2，记录被覆盖成 K2），用 K1 的令牌确认提交了一单，模型再重试时
+ * 令牌抄错，按记录找回 K2 又提交一单（2026-10-20 审查实测）。现在同一用户、工具、请求、价格
+ * 只落到一个键上，重复确认由幂等存储挡掉。
+ *
+ * 没有记录（例如存储不可用）时退回令牌校验；两样都不成立才报错，并优先报令牌自己的错误
+ * （例如已过期），让模型知道该重新报价。
+ */
+export async function resolveConfirmedIdempotencyKey(
+  token: string | undefined,
+  toolName: string,
+  idempotencyKey: string,
+  request: Record<string, unknown>,
+  modelPrice: ModelPrice | undefined
+): Promise<ConfirmedKey> {
+  const pricing = currentPricing(modelPrice);
+  const { subject } = runtime();
+  const { requestFingerprint, pricingFingerprint } = fingerprints(request, pricing);
+  const record = await recallQuote(
+    quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint)
+  );
+  if (record) {
+    if (record.idempotencyKey === idempotencyKey) return { idempotencyKey };
+    return {
+      idempotencyKey: record.idempotencyKey,
+      notice:
+        `Note: this confirmed the earlier quote for these exact arguments (idempotency_key ` +
+        `${record.idempotencyKey}). If that quote was already submitted, the existing job is ` +
+        `returned and nothing new was generated or charged. To generate again, call without ` +
+        `confirmed or confirmation_token to get a new quote.`,
+    };
+  }
+  if (token) {
+    verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
+    return { idempotencyKey };
+  }
+  throw new GenerationConfirmationError(
+    "No quote was found for these exact arguments and current price. Call again without " +
+      "confirmed or confirmation_token to get a quote, show it to the user, and wait for their " +
+      "confirmation. No billable request was submitted."
+  );
 }
 
 export function verifyGenerationConfirmation(

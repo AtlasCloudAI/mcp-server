@@ -5,7 +5,7 @@ import { findModelByExactId } from "../services/doc-fetcher.js";
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
-  verifyGenerationConfirmation,
+  resolveConfirmedIdempotencyKey,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import {
@@ -14,6 +14,7 @@ import {
   formatUsd,
   type SpendDecision,
   confirmationValidSeconds,
+  confirmationReuseNotice,
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
@@ -26,6 +27,7 @@ import { handleError } from "../utils/error-handler.js";
 import type { ChatCompletionResponse } from "../types.js";
 import {
   generationConfirmationTokenSchema,
+  generationConfirmedSchema,
   generationPricingSchema,
   idempotencyKeySchema,
   predictionIdSchema,
@@ -61,7 +63,7 @@ export function registerLLMTools(
         title: "Chat with LLM",
         description: `Chat completion with an Atlas Cloud LLM (OpenAI-compatible), billed to the signed-in Atlas account. Use it when the user asks for an answer from a specific Atlas model (for example DeepSeek, Kimi, Qwen or GLM) or wants to compare models; the exact model ID is verified against the live Text catalog first.
 
-Billing follows the same spend gate as the generation tools. Call once without confirmation_token. The server bounds the worst-case cost of this exact request (input size, max_tokens and the model's highest per-token rates): under the auto-submit limit it runs straight away and reports the cost from actual token usage — pass that cost on to the user. At or above the limit, or when the model's rates are unknown, it returns the bound and a confirmation_token and spends nothing; show it and stop, and only after a new user message explicitly confirms may you call again with the same idempotency_key, unchanged arguments, and confirmation_token. Do not add a confirmation step of your own on top of this.
+Billing follows the same spend gate as the generation tools. Call once without confirmation_token. The server bounds the worst-case cost of this exact request (input size, max_tokens and the model's highest per-token rates): under the auto-submit limit it runs straight away and reports the cost from actual token usage — pass that cost on to the user. At or above the limit, or when the model's rates are unknown, it returns the bound and a confirmation_token and spends nothing; show it and stop, and only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). Do not add a confirmation step of your own on top of this.
 
 Args:
   - model (string, required): An exact current LLM model ID returned by atlas_list_models.
@@ -78,6 +80,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         inputSchema: {
           idempotency_key: idempotencyKeySchema,
           confirmation_token: generationConfirmationTokenSchema,
+        confirmed: generationConfirmedSchema,
           model: z.string().min(1).describe("Exact current LLM model ID"),
           messages: z
             .array(
@@ -122,6 +125,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             .optional(),
           confirmation_token: z.string().min(32).optional(),
           confirmation_valid_seconds: z.number().int().nonnegative().optional(),
+          idempotency_key: z.string().optional(),
           pricing: generationPricingSchema.optional(),
           // 停下来等确认时：这次请求的花费上限；完成时：按实际用量算的花费
           worst_case_cost_usd: z.number().optional(),
@@ -132,6 +136,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
       async ({
         idempotency_key,
         confirmation_token,
+        confirmed,
         model,
         messages,
         temperature,
@@ -165,11 +170,11 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             request_body: body,
           };
           let spend: SpendDecision | undefined;
-          if (!confirmation_token) {
+          if (!confirmation_token && !confirmed) {
             spend = evaluateChatSpend(found, { messages, max_tokens });
           }
           if (spend && !spend.autoSubmit) {
-            const confirmation = issueGenerationConfirmation(
+            const confirmation = await issueGenerationConfirmation(
               "atlas_chat",
               idempotency_key,
               confirmedRequest,
@@ -185,6 +190,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                 model: found.model,
                 confirmation_token: confirmation.confirmationToken,
                 confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
+                idempotency_key: confirmation.idempotencyKey,
                 pricing: confirmation.pricing,
                 ...(spend.quotedUsd !== null ? { worst_case_cost_usd: spend.quotedUsd } : {}),
               },
@@ -195,25 +201,23 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                   `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
                   `${bound}\n` +
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                  "Show this to the user and stop. After explicit confirmation in a new message, reuse the same idempotency_key and unchanged arguments with confirmation_token.",
+                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
+                  "Show this to the user and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.",
               }],
             };
           }
-          if (confirmation_token) {
-            verifyGenerationConfirmation(
-              confirmation_token,
-              "atlas_chat",
-              idempotency_key,
-              confirmedRequest,
-              found.price
-            );
-          }
+          // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
+          const confirmedKey =
+            confirmation_token || confirmed
+              ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_chat", idempotency_key, confirmedRequest, found.price)
+              : { idempotencyKey: idempotency_key };
+          const submitKey = confirmedKey.idempotencyKey;
 
           const response = await executeIdempotently(
             "atlas_chat",
-            { idempotency_key, ...confirmedRequest },
-            idempotency_key,
+            { idempotency_key: submitKey, ...confirmedRequest },
+            submitKey,
             () =>
               llmApi<ChatCompletionResponse>("/chat/completions", {
                 method: "POST",
@@ -273,7 +277,10 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               ...(response.usage ? { usage: response.usage } : {}),
               ...(costUsd !== null ? { cost_usd: costUsd } : {}),
             },
-            content: [{ type: "text", text: lines.join("\n") }],
+            content: [
+              { type: "text", text: lines.join("\n") },
+              ...(confirmedKey.notice ? [{ type: "text" as const, text: confirmedKey.notice }] : []),
+            ],
           };
         } catch (error) {
           return {

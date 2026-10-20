@@ -6,16 +6,25 @@ export const idempotencyKeySchema = z
   .string()
   .uuid()
   .describe(
-    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new UUID for a new generation."
+    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new UUID for a new generation. On the call after a quote, send the idempotency_key shown in the quote. If crypto is unavailable (a JavaScript cell may have none), build a random UUID another way, for example from Math.random; never reuse one for a different generation."
   );
 
 export const generationConfirmationTokenSchema = z
   .string()
-  .min(32)
+  // 不设下限：抄短了的令牌要能进到处理函数，按报价记录找回；在参数校验这一层报
+  // "至少 32 个字符"只会让模型以为服务端发错了令牌（2026-10-20 生产实测）。
+  .min(1)
   .max(4096)
   .optional()
   .describe(
     "Opaque token returned by this tool's quote-only first call. Supply it only after the user explicitly confirms the exact model, validated parameters, and current pricing. Reuse the same idempotency_key and unchanged arguments."
+  );
+
+export const generationConfirmedSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "Set to true on the call after the user has explicitly confirmed the quote. Send the confirmation_token too if you have it; if it was lost or mistyped, the server finds the quote from the unchanged arguments."
   );
 
 export const predictionIdSchema = z
@@ -126,6 +135,7 @@ export const generationOutputSchema = {
   status: z.enum(["confirmation_required", "submitted"]),
   confirmation_token: z.string().min(32).optional(),
   confirmation_valid_seconds: z.number().int().nonnegative().optional(),
+  idempotency_key: z.string().optional(),
   pricing: generationPricingSchema.optional(),
   // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
   estimated_cost_usd: z.number().optional(),
@@ -148,6 +158,7 @@ export type GenerationStructuredContent = Record<string, unknown> &
         status: "confirmation_required";
         confirmation_token: string;
         confirmation_valid_seconds: number;
+        idempotency_key: string;
         pricing: z.infer<typeof generationPricingSchema>;
       }
   );
@@ -188,6 +199,7 @@ export function generationConfirmationStructuredContent(
   confirmation: {
     confirmationToken: string;
     expiresAt: string;
+    idempotencyKey: string;
     pricing: z.infer<typeof generationPricingSchema>;
   },
   estimate?: { usd: number | null; partial: boolean }
@@ -199,6 +211,7 @@ export function generationConfirmationStructuredContent(
     status: "confirmation_required",
     confirmation_token: confirmation.confirmationToken,
     confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
+    idempotency_key: confirmation.idempotencyKey,
     pricing: confirmation.pricing,
     ...(estimate && estimate.usd !== null
       ? { estimated_cost_usd: estimate.usd, ...(estimate.partial ? { estimate_partial: true } : {}) }

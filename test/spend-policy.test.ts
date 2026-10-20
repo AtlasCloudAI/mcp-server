@@ -4,6 +4,7 @@ import {
   autoSubmitNotice,
   autoSubmitThresholdUsd,
   confirmationCostNotice,
+  confirmationReuseNotice,
   confirmationValidityNotice,
   confirmationValidSeconds,
   evaluateSpend,
@@ -194,4 +195,11 @@ test("工具总说明不再说低于限额直接提交、不要自己加确认",
   assert.match(instructions, /do not judge expiry from a clock/);
   assert.doesNotMatch(instructions, /Do not add a confirmation step of your own/);
   assert.doesNotMatch(instructions, /submits it straight away and reports the amount/);
+});
+
+test("报价里写出本次的幂等键，要求确认时原样传回", () => {
+  const notice = confirmationReuseNotice("8d66f088-d57c-42f7-b899-44eef0d7717a");
+  assert.match(notice, /8d66f088-d57c-42f7-b899-44eef0d7717a/);
+  assert.match(notice, /send this exact value back/);
+  assert.match(notice, /do not generate a new one/);
 });

@@ -22,6 +22,8 @@ export interface AtlasRequestContext {
   uploadMaxBytes?: number;
   /** 短上传地址：完整票据存这里，URL 里只放编号。省略则发长票据。 */
   uploadTicketStore?: UploadTicketStore;
+  /** 报价记录：确认时按参数找回报价，不靠模型抄回令牌（generation-confirmation.ts）。 */
+  quoteStore?: UploadTicketStore;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

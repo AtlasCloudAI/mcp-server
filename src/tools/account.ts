@@ -235,7 +235,7 @@ Examples:
     "atlas_get_model_usage",
     {
       title: "Get Model Usage",
-      description: `Get daily model usage buckets (requests, tokens, image/video counts) for the authenticated API key over a UTC date range.
+      description: `Get daily model usage buckets (requests, tokens, image/video counts) for the authenticated API key over a UTC date range. This has no money amounts: for "how much did I spend", call atlas_get_model_costs with the same dates.
 
 Omitting group_by returns total daily buckets. Use group_by to break usage down by model_type and/or model. API-key identifiers are not exposed by this plugin.
 

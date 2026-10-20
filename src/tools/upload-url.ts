@@ -57,7 +57,7 @@ Use this when the user has a local file (product photo, reference image, audio t
 Steps:
   1. Call this tool. It returns upload_url, expires_at and max_bytes.
   2. POST the raw file bytes to upload_url with the file name (keep the extension) in the ${UPLOAD_FILENAME_HEADER} header. The curl_example in the result is ready to run.
-  3. The response JSON has "url". Pass that URL to atlas_generate_image, atlas_generate_video or atlas_quick_generate.
+  3. The response JSON has "url". Pass that URL to atlas_generate_image, atlas_generate_video, atlas_generate_audio, atlas_transcribe_audio or atlas_quick_generate.
 
 Rules:
   - One URL serves several files until it expires (about 10 minutes); do not request a new one per file.

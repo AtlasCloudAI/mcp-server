@@ -131,10 +131,11 @@ Returns:
         // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
         // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
         // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
-        const submitKey =
+        const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_image", idempotency_key, confirmedRequest, prepared.model.price)
-            : idempotency_key;
+            : { idempotencyKey: idempotency_key };
+        const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_generate_image",
           { idempotency_key: submitKey, ...confirmedRequest },
@@ -181,6 +182,7 @@ Returns:
                 `Image generation usually takes 10-30 seconds (3D models can take 2-5 minutes).`
             },
             ...(finished ? finished.blocks : []),
+            ...(confirmedKey.notice ? [{ type: "text" as const, text: confirmedKey.notice }] : []),
           ],
         };
       } catch (error) {

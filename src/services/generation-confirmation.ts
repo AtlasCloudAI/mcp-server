@@ -219,10 +219,29 @@ interface QuoteRecord {
   expiresAt: number;
 }
 
+// node-redis 断线重连期间命令会排队、不报错，await 会一直挂着；报价本身不该被它拖住。
+const QUOTE_STORE_TIMEOUT_MS = 800;
+
+function withTimeout<T>(operation: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`quote store timed out after ${ms}ms`)), ms);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 async function rememberQuote(key: string, record: QuoteRecord, ttlSeconds: number): Promise<void> {
   // 记不下来不影响报价本身：令牌那条路照样能确认。
   try {
-    await quoteStore().put(key, JSON.stringify(record), ttlSeconds);
+    await withTimeout(quoteStore().put(key, JSON.stringify(record), ttlSeconds), QUOTE_STORE_TIMEOUT_MS);
   } catch (error) {
     console.error(`[quote-store] put failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -230,7 +249,7 @@ async function rememberQuote(key: string, record: QuoteRecord, ttlSeconds: numbe
 
 async function recallQuote(key: string): Promise<QuoteRecord | null> {
   try {
-    const raw = await quoteStore().get(key);
+    const raw = await withTimeout(quoteStore().get(key), QUOTE_STORE_TIMEOUT_MS);
     if (!raw) return null;
     const record = JSON.parse(raw) as QuoteRecord;
     return record.expiresAt > Date.now() && typeof record.idempotencyKey === "string" ? record : null;
@@ -240,11 +259,22 @@ async function recallQuote(key: string): Promise<QuoteRecord | null> {
   }
 }
 
+export interface ConfirmedKey {
+  idempotencyKey: string;
+  /** 用的是报价记录里的键、和调用方传来的不一样时，提醒模型这可能返回已有任务。 */
+  notice?: string;
+}
+
 /**
- * 用户确认后的那次调用：返回这一单该用的幂等键。
+ * 用户确认后的那次调用：决定这一单用哪个幂等键提交。
  *
- * 先验令牌；验不过（抄错、没带、幂等键换了）再按参数和价格找回报价。两样都不成立才报错，
- * 而且优先报令牌自己的错误（例如已过期），让模型知道该重新报价。
+ * 有报价记录就一律用记录里的键，令牌只在没有记录时起作用。否则会两条路各提交一次：同一组
+ * 参数先后报价两次（键 K1、K2，记录被覆盖成 K2），用 K1 的令牌确认提交了一单，模型再重试时
+ * 令牌抄错，按记录找回 K2 又提交一单（2026-10-20 审查实测）。现在同一用户、工具、请求、价格
+ * 只落到一个键上，重复确认由幂等存储挡掉。
+ *
+ * 没有记录（例如存储不可用）时退回令牌校验；两样都不成立才报错，并优先报令牌自己的错误
+ * （例如已过期），让模型知道该重新报价。
  */
 export async function resolveConfirmedIdempotencyKey(
   token: string | undefined,
@@ -252,24 +282,28 @@ export async function resolveConfirmedIdempotencyKey(
   idempotencyKey: string,
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
-): Promise<string> {
-  let tokenError: unknown;
-  if (token) {
-    try {
-      verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
-      return idempotencyKey;
-    } catch (error) {
-      tokenError = error;
-    }
-  }
+): Promise<ConfirmedKey> {
   const pricing = currentPricing(modelPrice);
   const { subject } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(request, pricing);
   const record = await recallQuote(
     quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint)
   );
-  if (record) return record.idempotencyKey;
-  if (tokenError) throw tokenError;
+  if (record) {
+    if (record.idempotencyKey === idempotencyKey) return { idempotencyKey };
+    return {
+      idempotencyKey: record.idempotencyKey,
+      notice:
+        `Note: this confirmed the earlier quote for these exact arguments (idempotency_key ` +
+        `${record.idempotencyKey}). If that quote was already submitted, the existing job is ` +
+        `returned and nothing new was generated or charged. To generate again, call without ` +
+        `confirmed or confirmation_token to get a new quote.`,
+    };
+  }
+  if (token) {
+    verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
+    return { idempotencyKey };
+  }
   throw new GenerationConfirmationError(
     "No quote was found for these exact arguments and current price. Call again without " +
       "confirmed or confirmation_token to get a quote, show it to the user, and wait for their " +

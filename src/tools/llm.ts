@@ -208,10 +208,11 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
           // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
-          const submitKey =
+          const confirmedKey =
             confirmation_token || confirmed
               ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_chat", idempotency_key, confirmedRequest, found.price)
-              : idempotency_key;
+              : { idempotencyKey: idempotency_key };
+          const submitKey = confirmedKey.idempotencyKey;
 
           const response = await executeIdempotently(
             "atlas_chat",
@@ -276,7 +277,10 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               ...(response.usage ? { usage: response.usage } : {}),
               ...(costUsd !== null ? { cost_usd: costUsd } : {}),
             },
-            content: [{ type: "text", text: lines.join("\n") }],
+            content: [
+              { type: "text", text: lines.join("\n") },
+              ...(confirmedKey.notice ? [{ type: "text" as const, text: confirmedKey.notice }] : []),
+            ],
           };
         } catch (error) {
           return {

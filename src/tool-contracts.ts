@@ -6,7 +6,7 @@ export const idempotencyKeySchema = z
   .string()
   .uuid()
   .describe(
-    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new UUID for a new generation. On the call after a quote, send the idempotency_key shown in the quote. Any well-formed UUID string works if you cannot generate a random one (a JavaScript cell may have no crypto)."
+    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new UUID for a new generation. On the call after a quote, send the idempotency_key shown in the quote. If crypto is unavailable (a JavaScript cell may have none), build a random UUID another way, for example from Math.random; never reuse one for a different generation."
   );
 
 export const generationConfirmationTokenSchema = z

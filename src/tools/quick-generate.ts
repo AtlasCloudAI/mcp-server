@@ -371,17 +371,18 @@ Returns:
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                `Show the user this resolved model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, reuse the same idempotency_key and unchanged arguments with confirmation_token.`,
+                `Show the user this resolved model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
           };
         }
         // 走到这里没有 token，说明是低于阈值直接提交的那条路——本来就没有
         // 报价可校验。有 token 才校验：它证明用户确认的正是这次的模型与价格。
         // 带了令牌或标明已确认：解析这一单该用的幂等键（令牌抄错、幂等键丢了时按报价记录找回）。
-        const submitKey =
+        const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_quick_generate", idempotency_key, confirmedRequest, foundModel.price)
-            : idempotency_key;
+            : { idempotencyKey: idempotency_key };
+        const submitKey = confirmedKey.idempotencyKey;
 
         // Step 5: Submit generation exactly once after confirmation.
         const endpoint = ENDPOINTS[type];
@@ -456,6 +457,7 @@ Returns:
           content: [
             { type: "text", text: lines.join("\n") },
             ...(finished ? finished.blocks : []),
+            ...(confirmedKey.notice ? [{ type: "text" as const, text: confirmedKey.notice }] : []),
           ],
         };
       } catch (error) {

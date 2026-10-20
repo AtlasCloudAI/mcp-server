@@ -55,7 +55,7 @@ test("development config loads the bounded remote contract", () => {
   assert.equal(config.publicMcpUrl.pathname, "/mcp");
   assert.deepEqual(config.oauthAlgorithms, ["RS256"]);
   assert.equal(config.idempotencyBackend, "memory");
-  assert.equal(config.generationConfirmationTtlSeconds, 600);
+  assert.equal(config.generationConfirmationTtlSeconds, 3600);
   assert.deepEqual(config.allowedOrigins, ["https://chatgpt.com"]);
   assert.deepEqual(config.oauthEndpointHosts, ["issuer.test"]);
 });

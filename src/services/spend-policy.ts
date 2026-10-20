@@ -325,6 +325,30 @@ export function autoSubmitNotice(decision: SpendDecision): string {
  * "the price". The real figure for these exact parameters is already in hand
  * from the quote that triggered the confirmation, so lead with that.
  */
+/**
+ * How long a quote stays valid, said as a duration.
+ *
+ * This used to print the expiry as an absolute UTC time. Codex tells the model
+ * the date and the user's time zone but not the clock time, and on 2026-10-20
+ * in production (user in Asia/Shanghai) the model compared "02:45Z" with the
+ * local time it assumed, decided a token minted seconds earlier had expired,
+ * re-quoted, and declared the new token expired too: the user could never
+ * confirm. The server checks expiry itself, so the model only needs a duration
+ * and an instruction to send the token back regardless.
+ */
+export function confirmationValidSeconds(expiresAt: string, now: number = Date.now()): number {
+  return Math.max(0, Math.round((Date.parse(expiresAt) - now) / 1000));
+}
+
+export function confirmationValidityNotice(expiresAt: string, now: number = Date.now()): string {
+  const minutes = Math.max(1, Math.round(confirmationValidSeconds(expiresAt, now) / 60));
+  return (
+    `- **Quote valid for**: about ${minutes} minutes. When the user confirms, send the ` +
+    `confirmation_token back even if you think it may have lapsed: the server checks expiry ` +
+    `itself and says so if it has, and only then do you quote again. Do not judge expiry from a clock.`
+  );
+}
+
 export function confirmationCostNotice(decision: SpendDecision): string {
   if (decision.quotedUsd === null) {
     return (

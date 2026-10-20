@@ -190,7 +190,9 @@ const envSchema = z.object({
     .int()
     .min(60)
     .max(3600)
-    .default(600),
+    // 原来 10 分钟。真人看到报价、想一想再回"确认"，常常超过 10 分钟；令牌绑定了
+    // 请求参数和价格，价格一变照样会被拒，所以放到上限 60 分钟。
+    .default(3600),
   // 上传中转（/upload/:ticket）：票据有效期、单文件上限、每张票每分钟的上传次数。
   // 上限默认 32MB——文件要整个进内存再包成 multipart 转投，pod 是 512Mi。比这大的
   // 视频仍走公网链接。ingress 的 proxy-body-size 与 Cloudflare 的上限都必须高于此值，

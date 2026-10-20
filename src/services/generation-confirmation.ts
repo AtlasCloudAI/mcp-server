@@ -67,7 +67,7 @@ function runtime(): {
       context?.generationConfirmationSecret ??
       process.env.MCP_GENERATION_CONFIRMATION_SECRET ??
       localConfirmationSecret,
-    ttlSeconds: context?.generationConfirmationTtlSeconds ?? 600,
+    ttlSeconds: context?.generationConfirmationTtlSeconds ?? 3600,
   };
 }
 

@@ -382,6 +382,32 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     } finally {
       await closeServer(small.server);
     }
+
+    // 转投超时、网络中断：给出明确的错误码和下一步，而不是笼统的 internal_server_error。
+    for (const [thrown, status, code] of [
+      [Object.assign(new Error("This operation was aborted"), { name: "AbortError" }), 504, "upstream_upload_timeout"],
+      [new TypeError("fetch failed"), 502, "upstream_upload_failed"],
+    ] as const) {
+      const failing = await startHarness({}, {
+        uploadFetcher: (async () => {
+          throw thrown;
+        }) as unknown as NonNullable<HttpAppDependencies["uploadFetcher"]>,
+      });
+      try {
+        const failingPath = await mintUploadPath(failing.baseUrl);
+        const response = await fetch(`${failing.baseUrl}${failingPath}`, {
+          method: "POST",
+          headers: { "x-atlas-filename": "clip.mp4" },
+          body: Buffer.from("video-bytes"),
+        });
+        assert.equal(response.status, status);
+        const body = (await response.json()) as { error: string; message: string };
+        assert.equal(body.error, code);
+        assert.match(body.message, /Retry once with the same upload_url/);
+      } finally {
+        await closeServer(failing.server);
+      }
+    }
   });
 
   await t.test("raw tools/list exposes per-tool OAuth security schemes", async () => {

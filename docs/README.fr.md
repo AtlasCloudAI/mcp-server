@@ -30,13 +30,13 @@
 
 <!-- ATLAS-MODELS:START lang=fr campaign=mcp-server -->
 <!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
-- 🎬 **Vidéo** (224) — Seedance 2.5 · MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash · MiniMax H3 · Wan-3.0-Prime
+- 🎬 **Vidéo** (226) — Seedance 2.5 · MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash · MiniMax H3 · Wan-3.0-Prime
 - 🎨 **Image** (140) — GPT Image 2.5 Sunburst · GPT Image 2.5 Flare · Seedream v4.7 · MAI-Image-2.6-Flash
 - 🧊 **3D** (14) — Seed3D 2.0 · Tripo H3.1 · Hunyuan 3D Rapid · Hunyuan 3D Pro
 - 💬 **LLM** (79) — DeepSeek V4.1 Flash 1017 · Gemini 4 Argon · DeepSeek V4.1 Flash · GLM 5.3 Flash
 - 🔊 **Audio (TTS · Musique · ASR)** (13) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **Explorer plus** — [les 502 modèles en ligne »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explorer plus** — [les 504 modèles en ligne »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **Modèles vidéo les plus récents** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

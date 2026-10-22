@@ -28,8 +28,8 @@
   "expertType": "agent",
   "agentName": "atlas-media-director",
   "displayName": {
-    "en": "AI Storyboard · Footage · Voiceover",
-    "zh": "AI 分镜 · 成片 · 配音一条龙"
+    "en": "Storyboard · Footage · Voiceover",
+    "zh": "分镜·成片·配音一条龙"
   },
   "profession": {
     "en": "Atlas Cloud Media Expert",

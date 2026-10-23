@@ -308,7 +308,7 @@
   "source_snapshot": {
     "repository": "https://github.com/AtlasCloudAI/mcp-server",
     "branch": "combo/oauth-exchange-20260907",
-    "server_version": "2.9.6",
+    "server_version": "2.9.7",
     "remote_tool_count": 15,
     "note": "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_upload_media, which is not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
     "plugin_repository": "https://github.com/AtlasCloudAI/atlas-cloud-plugin",

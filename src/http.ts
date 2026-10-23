@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { pathToFileURL } from "node:url";
+import { SERVER_VERSION } from "./version.js";
 import type { Server as NodeHttpServer } from "node:http";
 import type { Express, Request, RequestHandler, Response } from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -151,7 +152,7 @@ export function createHttpApp(
     res.status(200).type("text/plain").send(config.challengeToken);
   });
   app.get("/healthz", (_req, res) => {
-    res.status(200).json({ status: "ok", service: "atlascloud-ai-media" });
+    res.status(200).json({ status: "ok", service: "atlascloud-ai-media", version: SERVER_VERSION });
   });
   app.get("/readyz", async (_req, res) => {
     const authorizationServerReady = dependencies.readiness?.ready() ?? true;

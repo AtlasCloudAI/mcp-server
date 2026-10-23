@@ -32,7 +32,8 @@ export function createAtlasCloudServer(
         "Send the token back even if you think it may have lapsed: the server checks expiry itself and says so if it has (only then quote again), so do not judge expiry from a clock. " +
         "If a call submits straight away instead (a charge under a configured auto-submit limit), tell the user the amount. " +
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
-        "Never invent a model ID or submit if its live schema cannot be loaded and validated.",
+        "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
+        "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
     }
   );
 

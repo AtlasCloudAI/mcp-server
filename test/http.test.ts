@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { SERVER_VERSION } from "../src/version.js";
 import type { AddressInfo } from "node:net";
 import { request as httpRequest, type Server } from "node:http";
 import test from "node:test";
@@ -189,7 +190,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       (body.scopes_supported as string[]).includes("offline_access"),
       "不公示 offline_access，客户端拿不到 refresh token，令牌一过期就要重新授权"
     );
-    assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
+    const health = await fetch(`${baseUrl}/healthz`);
+    assert.equal(health.status, 200);
+    // 运维发版后要能一眼对上线上跑的是哪一版，不必去翻镜像 digest。
+    assert.equal(((await health.json()) as { version?: string }).version, SERVER_VERSION);
     assert.equal((await fetch(`${baseUrl}/readyz`)).status, 200);
   });
 

@@ -313,8 +313,10 @@ export function registerCardStatusTool(server: McpServer): void {
         prediction_id: predictionIdSchema.describe("Prediction ID shown on the card"),
       },
       annotations: { ...CARD_TOOL_POLICIES.atlas_card_status.annotations },
+      // 只给卡片调，不挂 resourceUri：它自己不渲染卡片（ChatGPT 对挂了的私有工具会提示
+      // 「无法渲染其小组件」）。
       _meta: {
-        ui: { resourceUri: GENERATION_CARD_URI, visibility: ["app"] },
+        ui: { visibility: ["app"] },
         "openai/widgetAccessible": true,
         "openai/visibility": "private",
       },

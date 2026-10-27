@@ -1,7 +1,7 @@
 // 报价确认卡：参数小标签、由生成工具结果拼卡片数据、包装层、工具元数据，
 // 以及卡片前端的报价兜底解析和过期判断。
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,7 +15,8 @@ import { cardFromToolResult, formatUsd } from "../ui/generation-card/card.js";
 import { failureState, initialQuoteState, quoteExpired, thrownErrorText } from "../ui/generation-card/quote.js";
 
 const UI_MIME = "text/html;profile=mcp-app";
-const CARD_URI = "ui://atlascloud/generation-card.html";
+// 地址里带页面内容哈希，跟着构建变，测试里读服务端导出的那个。
+let CARD_URI = "";
 
 function withEnv(values: Record<string, string | undefined>): () => void {
   const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
@@ -59,6 +60,11 @@ const VIDEO_ARGS = {
   model: "bytedance/seedance-2.5/text-to-video",
   params: { prompt: "a paper boat", resolution: "720p", duration: 5, ratio: "16:9", generate_audio: true },
 };
+
+
+before(async () => {
+  CARD_URI = (await import("../src/apps/generation-card.js")).GENERATION_CARD_URI;
+});
 
 test("参数小标签：按设计稿顺序，只认常见字段，认不出就不显示", () => {
   assert.deepEqual(

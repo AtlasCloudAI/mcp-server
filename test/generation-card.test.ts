@@ -17,7 +17,6 @@ import {
 } from "../ui/generation-card/card.js";
 
 const UI_MIME = "text/html;profile=mcp-app";
-const CARD_URI = "ui://atlascloud/generation-card.html";
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 
 let fake: Server;
@@ -153,6 +152,7 @@ function cardOf(result: { _meta?: Record<string, unknown> }): Record<string, unk
   return result._meta?.["atlascloud/card"] as Record<string, unknown> | undefined;
 }
 
+
 test("卡片默认关：不注册资源、不挂 ui 元数据、没有卡片工具，查结果也不带卡片数据", async () => {
   const restore = withEnv({ MCP_UI_CARDS: undefined, MCP_UI_SELFTEST: "1" });
   const { client, close } = await connect({ rendersCards: true });
@@ -174,6 +174,7 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
   const restore = withEnv({ MCP_UI_CARDS: "1", MCP_UI_SELFTEST: undefined });
   const { client, close } = await connect({ rendersCards: true });
   try {
+    const CARD_URI = (await import("../src/apps/generation-card.js")).GENERATION_CARD_URI;
     const { resources } = await client.listResources();
     const card = resources.find((resource) => resource.uri === CARD_URI);
     assert.ok(card, "card resource must be listed");

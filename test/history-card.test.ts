@@ -103,7 +103,9 @@ test("卡片关着：历史列表不挂卡片，也不带卡片数据", async ()
 test("卡片打开：历史列表带上列表卡数据——状态、缩略图、实际扣费、模型名、筛选", async () => {
   const { tools, result } = await listPredictions(true, { size: 3, state: "succeeded" });
   const tool = tools.find((t) => t.name === "atlas_list_predictions");
-  assert.equal((tool?._meta?.ui as { resourceUri?: string })?.resourceUri, "ui://atlascloud/generation-card.html");
+  const { GENERATION_CARD_URI } = await import("../src/apps/generation-card.js");
+  assert.equal((tool?._meta?.ui as { resourceUri?: string })?.resourceUri, GENERATION_CARD_URI);
+  assert.match(GENERATION_CARD_URI, /^ui:\/\/atlascloud\/generation-card-[0-9a-f]{12}\.html$/);
   assert.match(lastHistoryQuery, /state=succeeded/);
 
   const history = result._meta?.["atlascloud/history"] as {

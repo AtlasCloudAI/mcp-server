@@ -1,7 +1,8 @@
 // 浏览器端：每张卡一个沙箱 iframe + 一个 AppBridge，和真宿主走同一套协议。
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
 
-const CARD_URI = "ui://atlascloud/generation-card.html";
+// 卡片地址里带页面内容哈希，从工具列表里取（哪个工具挂了卡片就用它的地址）。
+let CARD_URI = "";
 const VARIANTS = [
   "image",
   "images",
@@ -105,6 +106,10 @@ async function callTool(name, args) {
 
 let resource;
 async function cardResource() {
+  if (!CARD_URI) {
+    const { tools } = await fetch("/api/tools").then((r) => r.json());
+    CARD_URI = tools.find((t) => t._meta?.ui?.resourceUri)?._meta.ui.resourceUri ?? "";
+  }
   if (!resource) {
     const body = await fetch(`/api/resource?uri=${encodeURIComponent(CARD_URI)}`).then((r) => r.json());
     resource = body.contents[0];

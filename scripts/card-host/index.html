@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Card host</title>
+    <style>
+      :root {
+        --card-width: 560px;
+        --canvas: #ecebe7;
+        --chat-bg: #ffffff;
+        --app-name: #5d5d5d;
+        --logo-bg: #1b2433;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: #222;
+      }
+      body[data-theme="dark"] {
+        --chat-bg: #212121;
+        --app-name: #b4b4b4;
+        --logo-bg: #2c3a52;
+      }
+      body[data-theme="dark"][data-host="claude"] {
+        --chat-bg: #262624;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        background: #fff;
+        border-bottom: 1px solid #ddd;
+        font-size: 13px;
+      }
+      header input {
+        width: 280px;
+      }
+      #grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 32px;
+        padding: 24px 16px 48px;
+        align-items: flex-start;
+      }
+      .pane h2 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+      .chat {
+        width: calc(var(--card-width) + 28px);
+        max-width: calc(100vw - 32px);
+        background: var(--chat-bg);
+        border-radius: 12px;
+        padding: 14px;
+        box-sizing: border-box;
+      }
+      .app-name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--app-name);
+        margin-bottom: 12px;
+      }
+      .logo {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        background: var(--logo-bg);
+        color: #fff;
+        font-size: 10px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+      }
+      .card-frame {
+        width: 100%;
+        height: 120px;
+        border: 0;
+        display: block;
+        background: transparent;
+        /* 卡片按宿主主题设 color-scheme；iframe 元素和它不一致时浏览器会给 iframe 铺不透明底色，
+           真宿主（ChatGPT 深色等）会把 iframe 设成同一个配色，这里照做。 */
+        color-scheme: light;
+      }
+      body[data-theme="dark"] .card-frame {
+        color-scheme: dark;
+      }
+      #log {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        width: 460px;
+        max-height: 220px;
+        overflow: auto;
+        background: rgba(20, 20, 20, 0.88);
+        color: #d6f5d6;
+        font: 11px/1.5 ui-monospace, Menlo, monospace;
+        padding: 8px 10px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label>Host <select id="host"><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option></select></label>
+      <label>Theme <select id="theme"><option value="light">light</option><option value="dark">dark</option></select></label>
+      <label>Width <select id="width"><option value="560">560</option><option value="358">358 (phone)</option></select></label>
+      <label>Sample <select id="variant"><option value="">all</option></select></label>
+      <label>Real task <input id="prediction" placeholder="prediction id (optional)" /></label>
+      <button id="load" type="button">Reload</button>
+    </header>
+    <div id="grid"></div>
+    <div id="log"></div>
+    <script type="module" src="/host.js"></script>
+  </body>
+</html>

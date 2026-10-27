@@ -11,6 +11,12 @@ import { registerUploadTools } from "./tools/upload.js";
 import { registerUploadUrlTool } from "./tools/upload-url.js";
 import { registerVideoTools } from "./tools/video.js";
 import { TOOL_POLICIES } from "./tool-policy.js";
+import {
+  generationCardEnabled,
+  registerCardStatusTool,
+  registerGenerationCardResource,
+} from "./apps/generation-card.js";
+import { registerCardSelftestTool } from "./apps/card-selftest.js";
 import { SERVER_VERSION } from "./version.js";
 
 export type ServerProfile = "stdio" | "remote";
@@ -50,6 +56,16 @@ export function createAtlasCloudServer(
   registerUploadUrlTool(server);
   if (profile === "stdio") {
     registerUploadTools(server);
+  }
+
+  if (generationCardEnabled()) {
+    registerGenerationCardResource(server);
+    registerCardStatusTool(server);
+    // 测试卡片只在开发环境用，生产永远不注册。
+    const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
+    if (selftest === "1" || selftest === "true" || selftest === "on") {
+      registerCardSelftestTool(server);
+    }
   }
 
   return server;

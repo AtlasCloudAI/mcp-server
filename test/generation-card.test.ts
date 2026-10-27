@@ -3,6 +3,7 @@
 //
 // Atlas 接口地址在模块加载时就定下来了，所以先起假接口、设环境变量，再动态 import 服务端。
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
@@ -188,6 +189,8 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
     assert.equal(get?._meta?.["ui/resourceUri"], CARD_URI);
     const status = tools.find((tool) => tool.name === "atlas_card_status");
     assert.deepEqual((status?._meta?.ui as { visibility?: string[] })?.visibility, ["app"]);
+    // 只给卡片调的工具不挂卡片：ChatGPT 对挂了 resourceUri 的私有工具会报「无法渲染」。
+    assert.equal((status?._meta?.ui as { resourceUri?: string })?.resourceUri, undefined);
     // 测试卡片要单独再开一个开关。
     assert.equal(tools.some((tool) => tool.name === "atlas_card_selftest"), false);
   } finally {
@@ -277,6 +280,21 @@ test("测试卡片：两个开关都开才注册，不调接口，结果标成�
   }
 });
 
+test("卡片媒体来源：默认三个生产来源，可用 MCP_UI_MEDIA_DOMAINS 追加（test 的 dev 桶）", async () => {
+  const { cardMediaDomains } = await import("../src/apps/generation-card.js");
+  assert.deepEqual(cardMediaDomains({}), [
+    "https://atlas-media.oss-us-west-1.aliyuncs.com",
+    "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
+    "https://static.atlascloud.ai",
+  ]);
+  const extended = cardMediaDomains({
+    MCP_UI_MEDIA_DOMAINS: " atlas-media-dev.oss-us-west-1.aliyuncs.com, https://atlas-img-dev.oss-us-west-1.aliyuncs.com/ ,https://static.atlascloud.ai",
+  });
+  assert.equal(extended.length, 5);
+  assert.ok(extended.includes("https://atlas-media-dev.oss-us-west-1.aliyuncs.com"));
+  assert.ok(extended.includes("https://atlas-img-dev.oss-us-west-1.aliyuncs.com"));
+});
+
 test("远端放行：卡片工具按自己的策略查 scope，未知工具不放行", async () => {
   const { remoteToolPolicy } = await import("../src/tool-policy.js");
   assert.equal(remoteToolPolicy("atlas_card_status")?.scope, "tasks:read");
@@ -307,6 +325,13 @@ test("卡片前端：优先读 _meta 里的卡片数据，没有就从 structure
     "transfer_pending"
   );
   assert.equal(cardFromToolResult({ content: [] }), undefined);
+});
+
+test("卡片页面不带 Referer 请求媒体：宿主沙箱域名会被存储防盗链 403", () => {
+  // 2026-10-27 实测：static.atlascloud.ai 的图片和 atlas-media 桶对 Referer
+  // *.web-sandbox.oaiusercontent.com 回 403，不带 Referer 回 200。
+  const html = readFileSync(new URL("../ui/generation-card/index.html", import.meta.url), "utf8");
+  assert.match(html, /<meta name="referrer" content="no-referrer"/);
 });
 
 test("卡片前端：金额、任务 ID、单张价的格式", () => {

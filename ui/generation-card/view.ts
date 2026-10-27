@@ -262,6 +262,7 @@ function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     src: media.url,
     alt: `${KIND_LABEL[media.kind]} from ${modelLabel(card)}`,
     decoding: "async",
+    referrerpolicy: "no-referrer",
   });
   img.addEventListener("error", () => swap(previewBlocked(card, media, actions)), { once: true });
   return h(
@@ -275,7 +276,7 @@ function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap:
 
 function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
   const caption = h("p", { class: "caption" }, captionText(card, media));
-  const video = h("video", { src: `${media.url}#t=0.1`, preload: "metadata", playsinline: "" });
+  const video = h("video", { src: `${media.url}#t=0.1`, preload: "metadata", playsinline: "", referrerpolicy: "no-referrer" });
   video.playsInline = true;
   const play = h("button", {
     type: "button",
@@ -318,7 +319,7 @@ function waveHeights(seed: string, count: number): number[] {
 }
 
 function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
-  const audio = h("audio", { src: media.url, preload: "metadata" });
+  const audio = h("audio", { src: media.url, preload: "metadata", referrerpolicy: "no-referrer" });
   const time = h("span", { class: "audio-time" }, "0:00 / –:––");
   const bars = waveHeights(media.url, 30).map((height) => h("span", { style: `height:${height}px` }));
   const wave = h("div", { class: "wave", role: "slider", "aria-label": "Seek", tabindex: "0" }, ...bars);
@@ -403,11 +404,17 @@ function tileMedia(media: CardMedia, alt: string): HTMLElement {
     box.replaceChildren("Preview isn't available");
   };
   if (media.kind === "image") {
-    const img = h("img", { src: media.url, alt, decoding: "async", loading: "lazy" });
+    const img = h("img", { src: media.url, alt, decoding: "async", loading: "lazy", referrerpolicy: "no-referrer" });
     img.addEventListener("error", fail, { once: true });
     box.append(img);
   } else if (media.kind === "video") {
-    const video = h("video", { src: `${media.url}#t=0.1`, preload: "metadata", muted: true, playsinline: "" });
+    const video = h("video", {
+      src: `${media.url}#t=0.1`,
+      preload: "metadata",
+      muted: true,
+      playsinline: "",
+      referrerpolicy: "no-referrer",
+    });
     video.addEventListener("error", fail, { once: true });
     box.append(video);
   } else {

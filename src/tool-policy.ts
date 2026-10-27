@@ -209,3 +209,36 @@ export function toolAnnotations(name: AtlasToolName): ToolAnnotations {
 export function isAtlasToolName(value: string): value is AtlasToolName {
   return Object.prototype.hasOwnProperty.call(TOOL_POLICIES, value);
 }
+
+// 对话内卡片自己调用的工具（MCP Apps 的 visibility: ["app"]，模型看不到）。
+// 只在 MCP_UI_CARDS 打开时注册，所以不进 TOOL_POLICIES：那张表是对外公示、
+// 契约测试逐个核对的 16 个工具。远端放行和 scope 检查仍然按这里的策略走。
+export type CardToolName = "atlas_card_status" | "atlas_card_selftest";
+
+export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
+  atlas_card_status: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads one Atlas prediction so the generation card can refresh itself; changes nothing.",
+  },
+  atlas_card_selftest: {
+    scope: null,
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Development only: renders the card with sample media and calls no Atlas API.",
+  },
+};
+
+/** 远端按工具名查策略：公开工具表优先，其次是卡片工具；都不是就不放行。 */
+export function remoteToolPolicy(name: string): ToolPolicy | undefined {
+  if (isAtlasToolName(name)) return TOOL_POLICIES[name];
+  if (Object.prototype.hasOwnProperty.call(CARD_TOOL_POLICIES, name)) {
+    return CARD_TOOL_POLICIES[name as CardToolName];
+  }
+  return undefined;
+}

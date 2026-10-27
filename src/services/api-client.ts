@@ -603,3 +603,30 @@ export async function headContentLength(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Whether a media URL still answers a HEAD request: true for 2xx, false for an
+ * explicit 403/404/410 (an expired or deleted object), null when it could not be
+ * told (network error, timeout, any other status). Callers treat null as "fine".
+ */
+export async function headStillServes(
+  url: string,
+  options: { fetcher?: typeof fetch; timeoutMs?: number } = {}
+): Promise<boolean | null> {
+  const fetcher = options.fetcher ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3_000);
+  try {
+    const response = await fetcher(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+    });
+    if (response.ok) return true;
+    return [403, 404, 410].includes(response.status) ? false : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

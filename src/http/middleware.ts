@@ -3,7 +3,7 @@ import { resolveAdvertisedScopes } from "../config.js";
 import type { Request, RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import type { HttpServerConfig } from "../config.js";
-import { isAtlasToolName, TOOL_POLICIES } from "../tool-policy.js";
+import { remoteToolPolicy } from "../tool-policy.js";
 import { isExactAllowedHost } from "./host-validation.js";
 
 /**
@@ -201,11 +201,12 @@ export function enforceToolScopes(
 ): RequestHandler {
   return (req, res, next) => {
     for (const name of calledToolNames(req)) {
-      if (!isAtlasToolName(name) || !TOOL_POLICIES[name].remote) {
+      const policy = remoteToolPolicy(name);
+      if (!policy?.remote) {
         res.status(404).json({ error: "tool_not_available" });
         return;
       }
-      const requiredScope = TOOL_POLICIES[name].scope;
+      const requiredScope = policy.scope;
       // null = 契约 v3 §4.2 的匿名可读目录：端点级认证已经足够，不再要求 scope。
       if (requiredScope !== null && !req.auth?.scopes.includes(requiredScope)) {
         res.setHeader(

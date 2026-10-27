@@ -35,6 +35,13 @@ import {
 import { toolAnnotations } from "../tool-policy.js";
 import { currentClientProfile } from "../services/client-profile.js";
 import {
+  CARD_META_KEY,
+  clientRendersCards,
+  generationCardEnabled,
+  generationCardToolMeta,
+  predictionCardData,
+} from "../apps/generation-card.js";
+import {
   completedAtOf,
   createdAtOf,
   hasUntransferredMedia,
@@ -329,6 +336,7 @@ Examples:
         metrics: z.record(z.unknown()).optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
+      ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ prediction_id }) => {
       try {
@@ -383,7 +391,18 @@ Examples:
           }
         }
 
-        if (isActive(status)) {
+        // 宿主会渲染卡片时，卡片自己刷新到出结果；模型再查一次只会在对话里多一张卡。
+        const cardTracksTask = isActive(status) && clientRendersCards(server);
+        if (cardTracksTask) {
+          lines.push(
+            `\nThe task is still running. The user sees a live Atlas card for it that refreshes ` +
+              `itself and shows the result as soon as it is ready, so do not call ` +
+              `\`atlas_get_prediction\` again for this task in this turn. Tell the user in one short ` +
+              `sentence that the card will update when it finishes. If they later ask about the ` +
+              `result, call \`atlas_get_prediction\` with this same ID. Do not submit the job ` +
+              `again — that would start and bill a second one.`
+          );
+        } else if (isActive(status)) {
           const runningFor = secondsSince(createdAtOf(result));
           lines.push(
             `\nThe task is still running` +
@@ -414,7 +433,12 @@ Examples:
           lines.push("```");
         }
 
+        const cardMeta = generationCardEnabled()
+          ? { [CARD_META_KEY]: await predictionCardData(prediction_id, result) }
+          : undefined;
+
         return {
+          ...(cardMeta ? { _meta: cardMeta } : {}),
           structuredContent: {
             prediction_id,
             status,

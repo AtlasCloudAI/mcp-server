@@ -3,6 +3,7 @@ import { registerAccountTools } from "./tools/account.js";
 import { registerAudioTools } from "./tools/audio.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerImageTools } from "./tools/image.js";
+import { registerImportChatFilesTool } from "./tools/import-chat-files.js";
 import { registerLLMTools } from "./tools/llm.js";
 import { registerModelTools } from "./tools/models.js";
 import { registerPredictionTools } from "./tools/predictions.js";
@@ -26,13 +27,15 @@ export function createAtlasCloudServer(
     {
       instructions:
         "Use model discovery before generation when the model ID or parameters are uncertain. " +
+        "For marketing content such as product ads, UGC videos, try-on or e-commerce listing images, check atlas_list_models with type \"Workflow\" first: those ready-made workflows usually fit better than assembling base models. " +
         "Pick the model and parameters yourself from the user's request and the live catalog; ask only when something material is genuinely ambiguous. " +
         "Generation tools quote before anything runs. Call once without confirmation_token. If the result is confirmation_required, nothing was spent: show the user that exact model and cost and stop. " +
         "Only after a new user message explicitly confirms it, call again with unchanged arguments, confirmed: true, the same idempotency_key, and the returned confirmation_token; if the token was lost or mistyped, the server finds the quote from the unchanged arguments. " +
         "Send the token back even if you think it may have lapsed: the server checks expiry itself and says so if it has (only then quote again), so do not judge expiry from a clock. " +
         "If a call submits straight away instead (a charge under a configured auto-submit limit), tell the user the amount. " +
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
-        "Never invent a model ID or submit if its live schema cannot be loaded and validated.",
+        "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
+        "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
     }
   );
 
@@ -48,6 +51,7 @@ export function createAtlasCloudServer(
   // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
   // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。
   registerUploadUrlTool(server);
+  registerImportChatFilesTool(server);
   if (profile === "stdio") {
     registerUploadTools(server);
   }

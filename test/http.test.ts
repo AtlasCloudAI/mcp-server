@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { SERVER_VERSION } from "../src/version.js";
 import type { AddressInfo } from "node:net";
 import { request as httpRequest, type Server } from "node:http";
 import test from "node:test";
@@ -189,7 +190,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       (body.scopes_supported as string[]).includes("offline_access"),
       "不公示 offline_access，客户端拿不到 refresh token，令牌一过期就要重新授权"
     );
-    assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
+    const health = await fetch(`${baseUrl}/healthz`);
+    assert.equal(health.status, 200);
+    // 运维发版后要能一眼对上线上跑的是哪一版，不必去翻镜像 digest。
+    assert.equal(((await health.json()) as { version?: string }).version, SERVER_VERSION);
     assert.equal((await fetch(`${baseUrl}/readyz`)).status, 200);
   });
 
@@ -235,7 +239,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("official MCP client initializes and lists exactly 15 remote tools", async () => {
+  await t.test("official MCP client initializes and lists exactly 16 remote tools", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: {
         headers: {
@@ -248,7 +252,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
+      assert.equal(listed.tools.length, 16);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
         [...REMOTE_TOOL_NAMES].sort()
@@ -437,6 +441,9 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
         expected
       );
     }
+    // 加 securitySchemes 时不能把工具自己的 _meta 冲掉：ChatGPT 靠 fileParams 才会把附件交过来
+    const importTool = tools.find((tool) => tool.name === "atlas_import_chat_files");
+    assert.deepEqual((importTool?._meta as Record<string, unknown>)["openai/fileParams"], ["files"]);
   });
 
   await t.test("a server-side client sees the same tools, and atlas_chat needs tasks:write", async () => {
@@ -448,7 +455,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
+      assert.equal(listed.tools.length, 16);
       assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...REMOTE_TOOL_NAMES].sort());
       const chat = listed.tools.find((tool) => tool.name === "atlas_chat");
       assert.ok(chat, "atlas_chat must be listed for Claude");

@@ -197,7 +197,7 @@ test("托管模式：按客户端给出不同的展示说明", async (t) => {
     const chat = await call("chatgpt", "atlas_get_upload_url", { filename_hint: "ref.png" });
     assert.match(chat.text, /ask the user for a public link/);
   });
-  await t.test("生成工具的描述告诉模型本地文件先上传，不要自己调 REST 接口", async () => {
+  await t.test("生成工具的描述讲清本地文件先上传，且不写给模型的流程指令", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
       requestInit: { headers: { Authorization: "Bearer codex", Origin: "https://chatgpt.com" } },
     });
@@ -215,7 +215,11 @@ test("托管模式：按客户端给出不同的展示说明", async (t) => {
         const tool = tools.find((x) => x.name === name);
         assert.ok(tool, name);
         assert.match(String(tool.description), /atlas_get_upload_url/, name);
-        assert.match(String(tool.description), /do not call the Atlas REST API yourself/, name);
+        assert.match(String(tool.description), /no API key is involved/, name);
+        // ChatGPT 把描述里的流程指令判成「存在可疑指令」（2026-10-23 报价、提交两步都被标）。
+        // 流程留在服务端总说明和报价结果里，描述只陈述事实。
+        assert.doesNotMatch(String(tool.description), /Show the user|and stop|Only after a new user message|do not ask the user/i, name);
+        assert.match(String(tool.description), /only prices the request/, name);
         // 转写工具里曾残留"没有本地上传工具、请用户自己找地方传"，模型照做了（2026-10-20 test）。
         assert.doesNotMatch(String(tool.description), /does not expose a local-file upload tool/, name);
       }

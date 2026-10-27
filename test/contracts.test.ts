@@ -24,7 +24,7 @@ import { buildQuickGenerateParams } from "../src/tools/quick-generate.js";
 import { exactModelById } from "../src/services/doc-fetcher.js";
 import type { Model } from "../src/types.js";
 
-test("stdio exposes all 16 tools with exact annotations and output schemas", async () => {
+test("stdio exposes all 17 tools with exact annotations and output schemas", async () => {
   const server = createAtlasCloudServer("stdio");
   const client = new Client({ name: "contract-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -36,7 +36,7 @@ test("stdio exposes all 16 tools with exact annotations and output schemas", asy
     ) as { version: string };
     assert.equal(client.getServerVersion()?.version, packageManifest.version);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 16);
+    assert.equal(listed.tools.length, 17);
     assert.deepEqual(
       listed.tools.map((tool) => tool.name).sort(),
       [...ALL_TOOL_NAMES].sort()
@@ -114,6 +114,14 @@ test("OpenAI review annotations distinguish first-party reads from billable writ
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
+        openWorldHint: true,
+      });
+    } else if (name === "atlas_import_chat_files") {
+      // 只把用户附上的文件存进他自己的 Atlas，不计费、不改动已有内容（同 Higgsfield 的上传类工具）。
+      assert.deepEqual(policy.annotations, {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
         openWorldHint: true,
       });
     } else if (name === "atlas_upload_media") {

@@ -294,6 +294,12 @@ test("域名名单：默认是 OpenAI 自家域名，可用环境变量覆盖", 
   ]);
   assert.ok(isAllowedChatFileHost(new URL(ATTACHMENT), ["oaiusercontent.com"]));
   assert.ok(!isAllowedChatFileHost(new URL("https://oaiusercontent.com.evil.io/x"), ["oaiusercontent.com"]));
+  // ChatGPT 实际给的附件地址（2026-10-27 实测）：OpenAI 自己的 Azure 存储账号。
+  assert.ok(isAllowedChatFileHost(new URL("https://oaisdmntprwestus.blob.core.windows.net/files/x"), ["oaiusercontent.com"]));
+  assert.ok(isAllowedChatFileHost(new URL("https://oaisdmntprjapaneastdr.blob.core.windows.net/f"), []));
+  // 其它 Azure 存储账号不放行。
+  assert.ok(!isAllowedChatFileHost(new URL("https://evilaccount.blob.core.windows.net/x"), ["oaiusercontent.com"]));
+  assert.ok(!isAllowedChatFileHost(new URL("https://oaisdmntprwestus.blob.core.windows.net.evil.io/x"), []));
 });
 
 test("工具：声明 ChatGPT 文件参数，文件对象四个字段齐全，调用返回结构化结果", async (t) => {

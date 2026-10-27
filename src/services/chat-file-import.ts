@@ -97,8 +97,6 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   "image/png": "png",
   "image/webp": "webp",
   "image/gif": "gif",
-  "image/heic": "heic",
-  "image/heif": "heif",
   "video/mp4": "mp4",
   "video/quicktime": "mov",
   "video/webm": "webm",
@@ -121,8 +119,6 @@ const MEDIA_TYPE_BY_EXTENSION: Record<string, ChatFileMediaType> = {
   png: "image",
   webp: "image",
   gif: "image",
-  heic: "image",
-  heif: "image",
   mp4: "video",
   mov: "video",
   webm: "video",
@@ -133,6 +129,18 @@ const MEDIA_TYPE_BY_EXTENSION: Record<string, ChatFileMediaType> = {
   ogg: "audio",
   flac: "audio",
 };
+
+/**
+ * iPhone 的 HEIC/HEIF 照片：Atlas 能存，但只当普通 media 存（不进 images 目录），大多数
+ * 生成模型也不收（2026-10-27 实测上传）。在免费的导入这一步就拦下，免得报价、扣费之后才失败。
+ */
+const HEIC_EXTENSIONS = new Set(["heic", "heif"]);
+const HEIC_MIMES = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"]);
+const HEIC_REASON =
+  "HEIC/HEIF photos cannot be used by the generation models. Ask the user to attach the photo as JPEG or PNG instead.";
+
+/** 宿主没给出具体类型时常见的占位值，不能据此判定不是媒体。 */
+const GENERIC_MIMES = new Set(["application/octet-stream", "binary/octet-stream"]);
 
 class ChatFileError extends Error {}
 
@@ -170,18 +178,32 @@ function safeBaseName(name: string | undefined): string | undefined {
 /** 决定这个文件叫什么、是哪类媒体；不是图片、视频、音频就拒绝。 */
 export function resolveChatFileName(
   file: Pick<ChatFile, "file_id" | "file_name" | "mime_type">,
-  responseContentType?: string
+  responseContentType?: string,
+  bytes?: Uint8Array
 ): { fileName: string; mediaType: ChatFileMediaType } {
   const declaredName = safeBaseName(file.file_name);
   const declaredExt = extensionOf(declaredName);
-  const mime = normalizeMime(file.mime_type) ?? normalizeMime(responseContentType);
+  const declaredMime = normalizeMime(file.mime_type);
+  const mime =
+    (declaredMime && !GENERIC_MIMES.has(declaredMime) ? declaredMime : undefined) ??
+    normalizeMime(responseContentType) ??
+    declaredMime;
+  const sniffed = bytes ? sniffExtension(bytes) : undefined;
+  if (
+    (declaredExt && HEIC_EXTENSIONS.has(declaredExt)) ||
+    (mime && HEIC_MIMES.has(mime)) ||
+    (sniffed && HEIC_EXTENSIONS.has(sniffed))
+  ) {
+    throw new ChatFileError(HEIC_REASON);
+  }
   const ext =
     declaredExt && MEDIA_TYPE_BY_EXTENSION[declaredExt]
       ? declaredExt
-      : mime
-        ? EXTENSION_BY_MIME[mime]
-        : undefined;
-  const mediaType = ext ? MEDIA_TYPE_BY_EXTENSION[ext] : undefined;
+      : (mime ? EXTENSION_BY_MIME[mime] : undefined) ?? sniffed;
+  // 同一个扩展名可能是两类（webm 既有视频也有纯音频），类型以 MIME 为准
+  const mimeMediaType =
+    mime && EXTENSION_BY_MIME[mime] ? (mime.split("/")[0] as ChatFileMediaType) : undefined;
+  const mediaType = ext ? (mimeMediaType ?? MEDIA_TYPE_BY_EXTENSION[ext]) : undefined;
   if (!ext || !mediaType) {
     throw new ChatFileError(
       `Only images, videos and audio can be used as generation inputs${mime ? ` (this file is ${mime})` : ""}.`
@@ -199,9 +221,12 @@ export function resolveChatFileName(
 /** 声明的类型明确不是媒体（比如 PDF）就不必下载。 */
 function rejectDeclaredNonMedia(file: Pick<ChatFile, "file_name" | "mime_type">): void {
   const ext = extensionOf(safeBaseName(file.file_name));
-  if (ext && MEDIA_TYPE_BY_EXTENSION[ext]) return;
   const mime = normalizeMime(file.mime_type);
-  if (mime && !/^(image|video|audio)\//.test(mime)) {
+  if ((ext && HEIC_EXTENSIONS.has(ext)) || (mime && HEIC_MIMES.has(mime))) {
+    throw new ChatFileError(HEIC_REASON);
+  }
+  if (ext && MEDIA_TYPE_BY_EXTENSION[ext]) return;
+  if (mime && !GENERIC_MIMES.has(mime) && !/^(image|video|audio)\//.test(mime)) {
     throw new ChatFileError(
       `Only images, videos and audio can be used as generation inputs (this file is ${mime}).`
     );
@@ -250,6 +275,11 @@ async function downloadChatFile(
     timeoutMs: number;
   }
 ): Promise<{ bytes: Uint8Array; contentType?: string }> {
+  if (/^(?:sandbox:|file:|\/)/i.test(downloadUrl.trim()) || downloadUrl.includes("/mnt/data/")) {
+    throw new ChatFileError(
+      "This is a path inside the chat's own sandbox, which Atlas Cloud cannot reach. Only files the user attached to the chat can be imported; ask the user to attach the file."
+    );
+  }
   let url: URL;
   try {
     url = new URL(downloadUrl);
@@ -299,6 +329,36 @@ async function downloadChatFile(
   }
 }
 
+function ascii(bytes: Uint8Array, start: number, length: number): string {
+  return String.fromCharCode(...bytes.subarray(start, start + length));
+}
+
+/** 名字和类型都没说清时，按文件头认几种常见格式。认不出返回 undefined。 */
+export function sniffExtension(bytes: Uint8Array): string | undefined {
+  if (bytes.length < 12) return undefined;
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
+  if (bytes[0] === 0x89 && ascii(bytes, 1, 3) === "PNG") return "png";
+  if (ascii(bytes, 0, 4) === "GIF8") return "gif";
+  if (ascii(bytes, 0, 4) === "RIFF") {
+    const kind = ascii(bytes, 8, 4);
+    if (kind === "WEBP") return "webp";
+    if (kind === "WAVE") return "wav";
+    return undefined;
+  }
+  if (ascii(bytes, 4, 4) === "ftyp") {
+    const brand = ascii(bytes, 8, 4);
+    if (["heic", "heix", "hevc", "heim", "heis", "mif1", "msf1"].includes(brand)) return "heic";
+    if (brand === "qt  ") return "mov";
+    if (brand === "M4A ") return "m4a";
+    return "mp4";
+  }
+  if (ascii(bytes, 0, 4) === "OggS") return "ogg";
+  if (ascii(bytes, 0, 4) === "fLaC") return "flac";
+  if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
+  if (ascii(bytes, 0, 3) === "ID3" || (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0)) return "mp3";
+  return undefined;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -324,7 +384,7 @@ export async function importChatFiles(
         maxBytes: options.maxBytes,
         allowedHosts: options.allowedHosts,
       });
-      const { fileName, mediaType } = resolveChatFileName(file, contentType);
+      const { fileName, mediaType } = resolveChatFileName(file, contentType, bytes);
       const result = await uploadMediaBuffer(bytes, fileName, options.apiKey, {
         ...(options.uploadFetcher ? { fetcher: options.uploadFetcher } : {}),
       });

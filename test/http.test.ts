@@ -441,6 +441,9 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
         expected
       );
     }
+    // 加 securitySchemes 时不能把工具自己的 _meta 冲掉：ChatGPT 靠 fileParams 才会把附件交过来
+    const importTool = tools.find((tool) => tool.name === "atlas_import_chat_files");
+    assert.deepEqual((importTool?._meta as Record<string, unknown>)["openai/fileParams"], ["files"]);
   });
 
   await t.test("a server-side client sees the same tools, and atlas_chat needs tasks:write", async () => {

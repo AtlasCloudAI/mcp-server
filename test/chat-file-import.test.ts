@@ -8,6 +8,7 @@ import {
   importChatFiles,
   isAllowedChatFileHost,
   resolveChatFileName,
+  sniffExtension,
   type ChatFileImportOptions,
   type DownloadFetcher,
 } from "../src/services/chat-file-import.js";
@@ -210,6 +211,79 @@ test("文件名和类型的推断", () => {
     mediaType: "audio",
   });
   assert.throws(() => resolveChatFileName({ file_id: "f", file_name: "notes.txt" }), /Only images/);
+});
+
+test("webm 按 MIME 区分音频和视频", () => {
+  assert.equal(resolveChatFileName({ file_id: "f", file_name: "memo.webm", mime_type: "audio/webm" }).mediaType, "audio");
+  assert.equal(resolveChatFileName({ file_id: "f", file_name: "clip.webm", mime_type: "video/webm" }).mediaType, "video");
+});
+
+/** 补齐到 16 字节，够文件头识别用。 */
+function header(...parts: Array<number[] | string>): Uint8Array {
+  const bytes = parts.flatMap((part) => (typeof part === "string" ? [...part].map((c) => c.charCodeAt(0)) : part));
+  while (bytes.length < 16) bytes.push(0);
+  return new Uint8Array(bytes);
+}
+
+test("按文件头识别常见格式", () => {
+  assert.equal(sniffExtension(header([0xff, 0xd8, 0xff, 0xe0])), "jpg");
+  assert.equal(sniffExtension(header([0x89], "PNG")), "png");
+  assert.equal(sniffExtension(header("RIFF", [0, 0, 0, 0], "WEBP")), "webp");
+  assert.equal(sniffExtension(header("RIFF", [0, 0, 0, 0], "WAVE")), "wav");
+  assert.equal(sniffExtension(header([0, 0, 0, 0x18], "ftypisom")), "mp4");
+  assert.equal(sniffExtension(header([0, 0, 0, 0x14], "ftypqt  ")), "mov");
+  assert.equal(sniffExtension(header([0, 0, 0, 0x18], "ftypheic")), "heic");
+  assert.equal(sniffExtension(header("ID3")), "mp3");
+  assert.equal(sniffExtension(header("%PDF-1.7")), undefined);
+  assert.equal(sniffExtension(new Uint8Array([0xff, 0xd8])), undefined);
+});
+
+test("宿主只给 octet-stream 时照样下载，按文件头认出图片", async () => {
+  const jpeg = header([0xff, 0xd8, 0xff, 0xe0]);
+  const download = fakeDownload({
+    [ATTACHMENT]: () =>
+      new Response(jpeg, { status: 200, headers: { "content-type": "application/octet-stream" } }),
+  });
+  const upload = fakeUpload();
+  const result = await importChatFiles(
+    [{ download_url: ATTACHMENT, file_id: "file_9", mime_type: "application/octet-stream" }],
+    options({ downloadFetcher: download, uploadFetcher: upload })
+  );
+  assert.deepEqual(result.failed, []);
+  assert.equal(result.imported[0]!.file_name, "file_9.jpg");
+  assert.equal(result.imported[0]!.media_type, "image");
+});
+
+test("HEIC 照片不转存，提示换成 JPEG/PNG；声明了就不下载，没声明也按文件头拦", async () => {
+  const heic = header([0, 0, 0, 0x18], "ftypheic");
+  const download = fakeDownload({
+    [ATTACHMENT]: () => new Response(heic, { status: 200, headers: { "content-type": "application/octet-stream" } }),
+  });
+  const upload = fakeUpload();
+  const declared = await importChatFiles(
+    [{ download_url: ATTACHMENT, file_id: "file_h1", file_name: "IMG_0001.HEIC" }],
+    options({ downloadFetcher: download, uploadFetcher: upload })
+  );
+  assert.match(declared.failed[0]!.reason, /HEIC\/HEIF.*JPEG or PNG/);
+  assert.deepEqual(download.calls, []);
+  const sniffed = await importChatFiles(
+    [{ download_url: ATTACHMENT, file_id: "file_h2" }],
+    options({ downloadFetcher: download, uploadFetcher: upload })
+  );
+  assert.match(sniffed.failed[0]!.reason, /HEIC\/HEIF/);
+  assert.deepEqual(upload.received, []);
+});
+
+test("模型传来沙箱里的路径时，说明那不是附件、请用户附上文件", async () => {
+  const download = fakeDownload({});
+  for (const path of ["/mnt/data/product.png", "sandbox:/mnt/data/product.png", "file:///tmp/a.png"]) {
+    const result = await importChatFiles(
+      [{ download_url: path, file_id: "file_s", file_name: "product.png" }],
+      options({ downloadFetcher: download })
+    );
+    assert.match(result.failed[0]!.reason, /sandbox.*attach the file/, path);
+  }
+  assert.deepEqual(download.calls, []);
 });
 
 test("域名名单：默认是 OpenAI 自家域名，可用环境变量覆盖", () => {

@@ -28,6 +28,7 @@ const listResponseSchema = z
               name: z.string(),
               modality: z.string().optional(),
               categoryCode: z.string().optional(),
+              isDraft: z.unknown().optional(),
               i18n: z
                 .record(z.object({ name: z.string().optional(), intro: z.string().optional() }).passthrough())
                 .optional(),
@@ -123,7 +124,7 @@ export function modelIdFromTemplateId(templateId: string): string | undefined {
 
 /** 把列表项和详情合成一条；拿不到模型 ID 或是草稿时返回 null。 */
 export function toWorkflowTemplate(item: ListItem, detail: Detail | null): WorkflowTemplate | null {
-  if (detail && isDraft(detail.isDraft)) return null;
+  if (isDraft(item.isDraft) || (detail && isDraft(detail.isDraft))) return null;
   const model = detail?.model ?? modelIdFromTemplateId(item.templateId);
   if (!model) return null;
   const slots = detail?.slots ?? [];

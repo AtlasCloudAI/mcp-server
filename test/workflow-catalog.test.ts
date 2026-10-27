@@ -47,6 +47,7 @@ test("工作流目录：详情拿不到时按模板 ID 推出模型 ID；草稿�
   assert.equal(modelIdFromTemplateId("other"), undefined);
   assert.equal(toWorkflowTemplate(item, null)?.model, "atlascloud/studio/ugc-ad");
   assert.equal(toWorkflowTemplate(item, { ...detail, isDraft: true }), null);
+  assert.equal(toWorkflowTemplate({ ...item, isDraft: true }, null), null);
   assert.equal(toWorkflowTemplate({ ...item, templateId: "x" }, null), null);
 });
 

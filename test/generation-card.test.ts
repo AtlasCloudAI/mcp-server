@@ -183,6 +183,13 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
     assert.equal(content.mimeType, UI_MIME);
     assert.match(content.text ?? "", /Atlas Cloud/);
     assert.ok(content._meta?.ui?.csp?.resourceDomains.includes("https://atlas-media.oss-us-west-1.aliyuncs.com"));
+    // 宿主手里的旧地址（上一个构建的哈希、最早不带哈希的）也读得到当前页面。
+    for (const old of ["ui://atlascloud/generation-card-000000000000.html", "ui://atlascloud/generation-card.html"]) {
+      const earlier = (await client.readResource({ uri: old })).contents[0] as { uri: string; mimeType?: string; text?: string };
+      assert.equal(earlier.uri, old);
+      assert.equal(earlier.mimeType, UI_MIME);
+      assert.equal(earlier.text, content.text);
+    }
 
     const { tools } = await client.listTools();
     const get = tools.find((tool) => tool.name === "atlas_get_prediction");

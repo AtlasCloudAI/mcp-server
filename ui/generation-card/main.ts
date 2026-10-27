@@ -12,6 +12,7 @@ import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
+import { type Uploader, createUploader, uploadFromToolResult } from "./upload.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -38,6 +39,8 @@ let toolArgs: Record<string, unknown> | undefined;
 let quoteTimer: ReturnType<typeof setTimeout> | undefined;
 // 历史列表卡：有它时 card 是「点开的那一条」，没点开时 card 为空、显示列表。
 let history: HistoryView | undefined;
+// 上传卡：文件和上传进度都在它自己手里（File 对象不能拿来比较），按它的版本号判断要不要重画。
+let uploader: Uploader | undefined;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -105,6 +108,15 @@ function diagnostics(): HTMLElement {
 }
 
 function render(force = false): void {
+  if (uploader) {
+    const key = `upload:${uploader.version}:${notice ?? ""}`;
+    if (!force && key === renderedKey) return;
+    renderedKey = key;
+    root.classList.remove("wide");
+    root.replaceChildren(uploader.view());
+    if (uploader.data.sample) root.append(diagnostics());
+    return;
+  }
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
   const historyOpts = history ? historyOptions() : undefined;
@@ -475,6 +487,17 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (params) => {
+  const upload = params.isError ? undefined : uploadFromToolResult(params);
+  if (upload) {
+    uploader = createUploader(upload, {
+      app,
+      render: () => render(),
+      notice: (text) => setNotice(text),
+      noticeText: () => notice,
+    });
+    render();
+    return;
+  }
   const list = params.isError ? undefined : historyFromToolResult(params);
   if (list) {
     history = { data: list, loading: false };

@@ -410,6 +410,73 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
+  await t.test("upload card: cards on → the tool opens the card, the card may reach the relay, any origin can upload", async () => {
+    const saved = process.env.MCP_UI_CARDS;
+    process.env.MCP_UI_CARDS = "1";
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+      requestInit: { headers: { Authorization: "Bearer all", Origin: "https://chatgpt.com" } },
+    });
+    // 声明能渲染 MCP Apps 卡片，像 ChatGPT 一样。
+    const client = new Client(
+      { name: "upload-card-test", version: "1.0.0" },
+      { capabilities: { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } } }
+    );
+    await client.connect(transport);
+    let uploadPath = "";
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === "atlas_get_upload_url");
+      const resourceUri = (tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri;
+      assert.match(String(resourceUri), /^ui:\/\/atlascloud\/generation-card-/);
+      assert.equal(tool?._meta?.["openai/widgetAccessible"], true);
+
+      const minted = await client.callTool({ name: "atlas_get_upload_url", arguments: {} });
+      const card = minted._meta?.["atlascloud/upload"] as Record<string, unknown>;
+      assert.equal(card.view, "upload");
+      assert.equal(card.upload_url, (minted.structuredContent as { upload_url: string }).upload_url);
+      assert.equal(typeof card.max_bytes, "number");
+      assert.equal(card.max_files, 10);
+      // 卡片在传：模型别再让用户贴附件、别自己跑 curl。
+      const text = (minted.content as Array<{ text?: string }>)[0]?.text ?? "";
+      assert.match(text, /upload card/i);
+      assert.doesNotMatch(text, /curl/);
+      uploadPath = new URL(String(card.upload_url)).pathname;
+
+      // 卡片页面声明能连上传中转的 origin，不然宿主的 CSP 会挡住卡片里的上传。
+      const read = await client.readResource({ uri: String(resourceUri) });
+      const meta = read.contents[0]?._meta as { ui?: { csp?: { connectDomains?: string[] } }; "openai/widgetCSP"?: { connect_domains?: string[] } };
+      assert.deepEqual(meta.ui?.csp?.connectDomains, ["http://127.0.0.1"]);
+      assert.deepEqual(meta["openai/widgetCSP"]?.connect_domains, ["http://127.0.0.1"]);
+    } finally {
+      await client.close();
+      if (saved === undefined) delete process.env.MCP_UI_CARDS;
+      else process.env.MCP_UI_CARDS = saved;
+    }
+
+    // 卡片沙箱的来源列不完：上传中转对任何来源放行（凭据在票据里），其余路径照旧只认白名单。
+    const sandbox = "https://abc123.web-sandbox.oaiusercontent.com";
+    const preflight = await fetch(`${baseUrl}${uploadPath}`, {
+      method: "OPTIONS",
+      headers: { Origin: sandbox, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type" },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+    assert.match(String(preflight.headers.get("access-control-allow-headers")), /Content-Type/);
+    const posted = await fetch(`${baseUrl}${uploadPath}?filename=ref.png`, {
+      method: "POST",
+      headers: { Origin: sandbox, "content-type": "image/png" },
+      body: Buffer.from("png"),
+    });
+    assert.equal(posted.status, 200);
+    assert.equal(posted.headers.get("access-control-allow-origin"), "*");
+    const mcp = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { Origin: sandbox, "content-type": "application/json" },
+      body: rpcBody("initialize"),
+    });
+    assert.equal(mcp.status, 403);
+  });
+
   await t.test("raw tools/list exposes per-tool OAuth security schemes", async () => {
     const response = await fetch(`${baseUrl}/mcp`, {
       method: "POST",

@@ -7,6 +7,12 @@ import {
 } from "../services/upload-ticket.js";
 import { currentClientProfile, type ClientProfile } from "../services/client-profile.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  clientRendersCards,
+  generationCardEnabled,
+  generationCardToolMeta,
+} from "../apps/generation-card.js";
+import { UPLOAD_CARD_NOTE, UPLOAD_META_KEY, uploadCardData } from "../apps/upload-card.js";
 
 // 只用来填 curl 示例：去掉路径和会破坏 shell 引号的字符。
 function exampleFilename(hint: string | undefined): string {
@@ -59,6 +65,8 @@ Steps:
   2. POST the raw file bytes to upload_url with the file name (keep the extension) in the ${UPLOAD_FILENAME_HEADER} header. The curl_example in the result is ready to run.
   3. The response JSON has "url". Pass that URL to atlas_generate_image, atlas_generate_video, atlas_generate_audio, atlas_transcribe_audio or atlas_quick_generate.
 
+In chat apps that show Atlas cards (ChatGPT, Claude), the result opens an upload card instead: the user picks their files in the card and the card uploads them and hands you the URLs. Call this tool when the task needs the user's own image, video or audio and you have no URL for it yet; then wait for the user to add the files in the card.
+
 Rules:
   - One URL serves several files until it expires (about 10 minutes); do not request a new one per file.
   - Uploads are free; nothing is billed until a generation is submitted with the returned URL.
@@ -90,6 +98,8 @@ Returns:
         curl_example: z.string(),
       },
       annotations: toolAnnotations("atlas_get_upload_url"),
+      // 卡片打开时挂上传卡；卡片里的「Upload again」也调这个工具换一张新地址。
+      ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ filename_hint }) => {
       const issued = await issueUploadTicketFromContext();
@@ -115,6 +125,23 @@ Returns:
       ].join(" \\\n");
       const expiresAt = new Date(issued.expiresAt).toISOString();
       const megabytes = Math.floor(issued.maxBytes / 1_048_576);
+      const cardMeta = generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: uploadCardData(issued) } } : {};
+      const structuredContent = {
+        upload_url: issued.uploadUrl,
+        method: "POST" as const,
+        filename_header: UPLOAD_FILENAME_HEADER,
+        expires_at: expiresAt,
+        max_bytes: issued.maxBytes,
+        curl_example: curlExample,
+      };
+      // 客户端会渲染卡片：用户在卡片里传，模型不用（ChatGPT 里也没法）自己跑 curl。
+      if (clientRendersCards(server)) {
+        return {
+          ...cardMeta,
+          structuredContent,
+          content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${megabytes} MB.` }],
+        };
+      }
       const text = [
         "# Upload URL",
         "",
@@ -132,14 +159,8 @@ Returns:
         ...uploadNotes(currentClientProfile()),
       ].join("\n");
       return {
-        structuredContent: {
-          upload_url: issued.uploadUrl,
-          method: "POST" as const,
-          filename_header: UPLOAD_FILENAME_HEADER,
-          expires_at: expiresAt,
-          max_bytes: issued.maxBytes,
-          curl_example: curlExample,
-        },
+        ...cardMeta,
+        structuredContent,
         content: [{ type: "text", text }],
       };
     }

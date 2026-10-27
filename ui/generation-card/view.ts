@@ -88,10 +88,10 @@ export function button(
   );
 }
 
-export function badge(label: string, opts: { spinner?: boolean; danger?: boolean } = {}): HTMLElement {
+export function badge(label: string, opts: { spinner?: boolean; danger?: boolean; success?: boolean } = {}): HTMLElement {
   return h(
     "span",
-    { class: `badge${opts.danger ? " danger" : ""}` },
+    { class: `badge${opts.danger ? " danger" : ""}${opts.success ? " success" : ""}` },
     opts.spinner ? h("span", { html: ICON_SPINNER, style: "display:inline-flex" }) : null,
     label
   );

@@ -33,8 +33,9 @@ function uploadNotes(profile: ClientProfile): string[] {
   if (profile === "chat") {
     notes.push(
       "- If the command cannot resolve or reach the upload host, this sandbox has no network. " +
-        "Do not fall back to sending the file as base64 in a tool call (it is rejected as too " +
-        "large); ask the user for a public link to the file instead."
+        "Files the user attached in this chat can be stored with atlas_import_chat_files instead, " +
+        "which needs no sandbox network. Do not send the file as base64 in a tool call (it is " +
+        "rejected as too large); for anything else, ask the user for a public link."
     );
   } else {
     notes.push(

@@ -3,6 +3,7 @@ import { registerAccountTools } from "./tools/account.js";
 import { registerAudioTools } from "./tools/audio.js";
 import { registerDocsTools } from "./tools/docs.js";
 import { registerImageTools } from "./tools/image.js";
+import { registerImportChatFilesTool } from "./tools/import-chat-files.js";
 import { registerLLMTools } from "./tools/llm.js";
 import { registerModelTools } from "./tools/models.js";
 import { registerPredictionTools } from "./tools/predictions.js";
@@ -50,6 +51,7 @@ export function createAtlasCloudServer(
   // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
   // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。
   registerUploadUrlTool(server);
+  registerImportChatFilesTool(server);
   if (profile === "stdio") {
     registerUploadTools(server);
   }

@@ -500,3 +500,18 @@ p {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* 测试卡片的诊断区（只在 atlas_card_selftest 的示例卡片上出现）。 */
+.diagnostics {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--ac-text-3);
+}
+
+.diagnostics pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--ac-mono);
+}

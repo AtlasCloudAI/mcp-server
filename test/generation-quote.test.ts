@@ -12,7 +12,7 @@ import {
   withGenerationCard,
 } from "../src/apps/generation-quote.js";
 import { cardFromToolResult, formatUsd } from "../ui/generation-card/card.js";
-import { initialQuoteState, quoteExpired } from "../ui/generation-card/quote.js";
+import { failureState, initialQuoteState, quoteExpired, thrownErrorText } from "../ui/generation-card/quote.js";
 
 const UI_MIME = "text/html;profile=mcp-app";
 const CARD_URI = "ui://atlascloud/generation-card.html";
@@ -223,4 +223,34 @@ test("卡片前端：报价过期判断、初始状态、金额两位小数", ()
   assert.equal(formatUsd(24.12), "$24.12");
   assert.equal(formatUsd(0.003), "$0.003");
   assert.equal(formatUsd(0.2593), "$0.2593");
+});
+
+test("卡片前端：ChatGPT 把工具报错变成调用失败时，取出原文并显示对应状态", () => {
+  // 10-27 在 test 环境的 ChatGPT 里抓到的真实报错（call_mcp 返回 400）。
+  const wrap = (text: string) =>
+    new Error(
+      `Error code: INVALID_ARGUMENT; Error: RuntimeException: Error calling MCP tool: [TextContent(type='text', text='${text}', annotations=None, meta=None)]`
+    );
+  const notRouted = thrownErrorText(wrap("Error: model[black-forest-labs/flux-schnell] router not found"));
+  assert.equal(notRouted, "model[black-forest-labs/flux-schnell] router not found");
+  assert.deepEqual(failureState(notRouted), { phase: "error", message: notRouted });
+
+  const uncertain = thrownErrorText(
+    wrap(
+      "Error: A previous request with this idempotency key ended without a confirmed response; check predictions or billing before starting a new request"
+    )
+  );
+  assert.deepEqual(failureState(uncertain), { phase: "uncertain" });
+
+  assert.deepEqual(
+    failureState(thrownErrorText(wrap("Generation confirmation expired. Request a new quote. No billable request was submitted."))),
+    { phase: "expired" }
+  );
+  assert.deepEqual(
+    failureState("Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing"),
+    { phase: "low_balance" }
+  );
+  // 取不到里层文字时用整条信息；什么都没有时不编造原因。
+  assert.equal(thrownErrorText(new Error("Request timed out")), "Request timed out");
+  assert.deepEqual(failureState(thrownErrorText(undefined)), { phase: "error", message: undefined });
 });

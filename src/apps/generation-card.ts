@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -29,9 +30,16 @@ import { handleError } from "../utils/error-handler.js";
 
 // 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
 // ChatGPT 和 Claude 都按 _meta.ui.resourceUri 认它。设计稿见 Figma「MCP 对话内组件 · 跟随宿主」
-// 的「生成进度」和「作品图库」两节。报价确认和上传后续再接。
+// 的「生成进度」「作品图库」「报价确认」，以及全屏视图里的历史列表。上传还没接。
 
-export const GENERATION_CARD_URI = "ui://atlascloud/generation-card.html";
+/**
+ * 卡片页面的地址带上页面内容的哈希。ChatGPT 按地址缓存卡片页面：2026-10-27 在 test 上换了新镜像、
+ * 点了「刷新工具」，新对话里仍是旧页面。页面一变地址就变，挂在工具上的地址也跟着变，宿主只能去拉新的。
+ */
+export const GENERATION_CARD_URI = `ui://atlascloud/generation-card-${createHash("sha256")
+  .update(loadCardHtml())
+  .digest("hex")
+  .slice(0, 12)}.html`;
 
 /** 结果里给卡片的数据放在这个 _meta 键下：不进模型上下文，卡片拿不到时再从 structuredContent 推。 */
 export const CARD_META_KEY = "atlascloud/card";

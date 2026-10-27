@@ -145,11 +145,19 @@ const GENERIC_MIMES = new Set(["application/octet-stream", "binary/octet-stream"
 class ChatFileError extends Error {}
 
 /** 与 api-client 的外部地址检查同一套规矩：只许 https 443、不许带账号密码、域名在名单里。 */
+/**
+ * ChatGPT 附件实际放在 OpenAI 自己的 Azure 存储账号上，download_url 直接就是
+ * https://oaisdmntpr<区域>.blob.core.windows.net/...（2026-10-27 在 ChatGPT 里实测，第 0 跳就是它）。
+ * ChatGPT 给卡片沙箱的 CSP 里列着同一批账号名。只认这个前缀的账号，不放开整个 blob.core.windows.net。
+ */
+const CHAT_FILE_AZURE_ACCOUNT = /^oaisdmntpr[a-z0-9]+\.blob\.core\.windows\.net$/;
+
 export function isAllowedChatFileHost(url: URL, allowedHosts: string[]): boolean {
   if (url.protocol !== "https:") return false;
   if (url.username !== "" || url.password !== "") return false;
   if (url.port !== "" && url.port !== "443") return false;
   const host = url.hostname.toLowerCase();
+  if (CHAT_FILE_AZURE_ACCOUNT.test(host)) return true;
   return allowedHosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 

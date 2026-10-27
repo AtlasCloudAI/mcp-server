@@ -9,12 +9,26 @@ export interface CardMedia {
 }
 
 export type CardState =
+  | "quote"
   | "queued"
   | "running"
   | "succeeded"
   | "failed"
   | "canceled"
   | "transfer_pending";
+
+/** 报价卡确认要的东西，见 src/apps/generation-card.ts 的 QuoteInfo。 */
+export interface QuoteInfo {
+  tool: string;
+  arguments: Record<string, unknown>;
+  idempotency_key: string;
+  confirmation_token: string;
+  expires_at?: string;
+  estimated_usd?: number;
+  partial?: boolean;
+  settings: string[];
+  problem?: "insufficient_balance";
+}
 
 export interface CardData {
   state: CardState;
@@ -30,12 +44,14 @@ export interface CardData {
   completed_at?: string;
   media_expired?: boolean;
   sample?: boolean;
+  quote?: QuoteInfo;
 }
 
 export const CARD_META_KEY = "atlascloud/card";
 const SITE_URL = "https://www.atlascloud.ai";
 
 const STATES = new Set<CardState>([
+  "quote",
   "queued",
   "running",
   "succeeded",
@@ -106,13 +122,56 @@ function stateOf(status: string, transferPending: boolean): CardState {
     return transferPending ? "transfer_pending" : "succeeded";
   }
   if (["queued", "created", "waiting"].includes(s)) return "queued";
-  if (["starting", "processing", "running", "pending", "in_progress"].includes(s)) return "running";
+  if (["submitted", "starting", "processing", "running", "pending", "in_progress"].includes(s)) return "running";
   if (s === "canceled" || s === "cancelled") return "canceled";
   return "failed";
 }
 
-/** 工具结果 → 卡片数据。认不出来返回 undefined。 */
-export function cardFromToolResult(result: unknown): CardData | undefined {
+const KIND_TYPE: Record<string, string> = { image: "Image", video: "Video", audio: "Audio" };
+
+/** 宿主没把 _meta 转过来时，用报价的 structuredContent 加上本次调用的工具名和参数拼报价卡。 */
+function quoteFromStructured(
+  structured: Record<string, unknown>,
+  call: { tool?: string; args?: Record<string, unknown> }
+): CardData | undefined {
+  if (structured.status !== "confirmation_required") return undefined;
+  const token = structured.confirmation_token;
+  const key = structured.idempotency_key;
+  const seconds = typeof structured.confirmation_valid_seconds === "number" ? structured.confirmation_valid_seconds : 0;
+  const args = Object.fromEntries(
+    Object.entries(call.args ?? {}).filter(([name]) => !["confirmation_token", "confirmed", "idempotency_key"].includes(name))
+  );
+  return {
+    state: "quote",
+    prediction_id: "",
+    media: [],
+    ...(typeof structured.model_id === "string" ? { model_id: structured.model_id } : {}),
+    ...(typeof structured.model_name === "string" ? { model_name: structured.model_name } : {}),
+    ...(typeof structured.kind === "string" && KIND_TYPE[structured.kind] ? { model_type: KIND_TYPE[structured.kind] } : {}),
+    open_url: SITE_URL,
+    // 没有工具名就没法在卡里确认，只显示报价、请用户在对话里回复。
+    ...(call.tool && typeof token === "string" && typeof key === "string"
+      ? {
+          quote: {
+            tool: call.tool,
+            arguments: args,
+            idempotency_key: key,
+            confirmation_token: token,
+            ...(seconds > 0 ? { expires_at: new Date(Date.now() + seconds * 1000).toISOString() } : {}),
+            ...(typeof structured.estimated_cost_usd === "number" ? { estimated_usd: structured.estimated_cost_usd } : {}),
+            ...(structured.estimate_partial === true ? { partial: true } : {}),
+            settings: [],
+          },
+        }
+      : {}),
+  };
+}
+
+/** 工具结果 → 卡片数据。认不出来返回 undefined。call 是这次调用的工具名和参数（报价兜底用）。 */
+export function cardFromToolResult(
+  result: unknown,
+  call: { tool?: string; args?: Record<string, unknown> } = {}
+): CardData | undefined {
   const r = record(result);
   if (!r) return undefined;
   const fromMeta = record(r._meta)?.[CARD_META_KEY];
@@ -120,6 +179,8 @@ export function cardFromToolResult(result: unknown): CardData | undefined {
   const structured = record(r.structuredContent);
   if (!structured) return undefined;
   if (isCardData(structured.card)) return structured.card;
+  const quote = quoteFromStructured(structured, call);
+  if (quote) return quote;
   if (typeof structured.prediction_id !== "string" || typeof structured.status !== "string") {
     return undefined;
   }
@@ -158,8 +219,9 @@ export function modelLabel(card: CardData): string {
   return card.model_name || card.model_id || "Atlas Cloud";
 }
 
-/** 美元金额：至少两位小数，最多四位，去掉多余的 0（$0.03、$1.34、$0.2593）。 */
+/** 美元金额：1 美元以上两位小数（$1.51），以下最多四位、去掉多余的 0（$0.003、$0.2593）。 */
 export function formatUsd(value: number): string {
+  if (value >= 1) return `$${value.toFixed(2)}`;
   let text = value.toFixed(4).replace(/0+$/, "");
   const decimals = text.split(".")[1]?.length ?? 0;
   if (decimals < 2) text = value.toFixed(2);

@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/ext-apps";
 import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
+import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -30,6 +31,10 @@ let polling = false;
 let pollStartedAt = Date.now();
 let notice: string | undefined;
 let renderedKey = "";
+// 报价卡：当前处在哪一步（待确认、提交中、过期……），以及这次调用的参数（宿主丢了 _meta 时兜底用）。
+let quoteState: QuoteState = { phase: "ready" };
+let toolArgs: Record<string, unknown> | undefined;
+let quoteTimer: ReturnType<typeof setTimeout> | undefined;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,11 +103,12 @@ function diagnostics(): HTMLElement {
 function render(force = false): void {
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
-  const key = JSON.stringify({ card, pendingId, loadError, opts });
+  const key = JSON.stringify({ card, pendingId, loadError, opts, quoteState });
   if (!force && key === renderedKey) return;
   renderedKey = key;
   let view: HTMLElement;
-  if (card) view = renderCard(card, opts, actions);
+  if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
+  else if (card) view = renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
   root.replaceChildren(view);
@@ -122,14 +128,37 @@ function setNotice(text: string | undefined, ttlMs = 4000): void {
   }
 }
 
-function accept(result: unknown): boolean {
-  const next = cardFromToolResult(result);
-  if (!next) return false;
+function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
+  const parsed = cardFromToolResult(result, { tool: app.getHostContext()?.toolInfo?.tool.name, args: toolArgs });
+  if (!parsed) return false;
+  // carry：报价卡确认后把预估价带到进度卡上（服务端提交结果里没有价格）。
+  // 之后每次刷新，同一个任务没给价格就沿用手上的，出结果时换成实际扣费。
+  const kept =
+    card && card.prediction_id === parsed.prediction_id && card.price_usd !== undefined
+      ? { price_usd: card.price_usd }
+      : {};
+  const next = { ...kept, ...carry, ...parsed };
+  if (parsed.price_usd !== undefined) next.price_usd = parsed.price_usd;
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
   card = card?.sample ? { ...next, sample: true } : next;
   loadError = undefined;
+  if (card.state === "quote") watchQuote(card);
   render();
   return true;
+}
+
+/** 新报价：回到待确认，到点自动变成「已过期」。 */
+function watchQuote(quoteCard: CardData): void {
+  quoteState = initialQuoteState(quoteCard);
+  if (quoteTimer) clearTimeout(quoteTimer);
+  const at = quoteCard.quote?.expires_at ? Date.parse(quoteCard.quote.expires_at) : NaN;
+  if (!Number.isFinite(at) || quoteState.phase !== "ready") return;
+  quoteTimer = setTimeout(() => {
+    if (card === quoteCard && quoteState.phase === "ready" && quoteExpired(quoteCard.quote)) {
+      quoteState = { phase: "expired" };
+      render();
+    }
+  }, Math.max(0, at - Date.now()) + 250);
 }
 
 async function refreshOnce(): Promise<void> {
@@ -286,6 +315,19 @@ const actions: CardActions = {
   },
 };
 
+const quoteActions = createQuoteActions({
+  app,
+  card: () => card,
+  setState(state) {
+    quoteState = state;
+    render();
+  },
+  accept,
+  startPolling: () => void pollLoop(),
+  notice: (text) => setNotice(text),
+  openUrl: (url) => void openUrl(url),
+});
+
 function applyContext(context: McpUiHostContext | undefined): void {
   if (!context) return;
   if (context.theme) applyDocumentTheme(context.theme);
@@ -308,6 +350,7 @@ function systemTheme(): void {
 }
 
 app.ontoolinput = (params) => {
+  toolArgs = params.arguments;
   const id = params.arguments?.prediction_id;
   if (typeof id === "string" && !card) {
     pendingId = id;

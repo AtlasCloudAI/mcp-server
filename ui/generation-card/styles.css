@@ -515,3 +515,36 @@ p {
   word-break: break-all;
   font-family: var(--ac-mono);
 }
+
+/* ---- 报价确认 ---- */
+
+.chips {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--ac-badge-bg);
+  color: var(--ac-text-2);
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.quote-price {
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-price.unavailable {
+  font-size: 17px;
+  line-height: 22px;
+}

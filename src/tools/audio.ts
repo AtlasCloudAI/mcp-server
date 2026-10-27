@@ -33,6 +33,10 @@ import {
   idempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
 
 export function registerAudioTools(server: McpServer): void {
   server.registerTool(
@@ -76,8 +80,9 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_audio"),
+      ...generationToolCardMeta(),
     },
-    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
+    withGenerationCard(server, "atlas_generate_audio", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Audio",
@@ -188,7 +193,7 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 
   server.registerTool(

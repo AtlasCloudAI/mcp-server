@@ -136,12 +136,37 @@ export interface CardMedia {
 }
 
 export type CardState =
+  | "quote"
   | "queued"
   | "running"
   | "succeeded"
   | "failed"
   | "canceled"
   | "transfer_pending";
+
+/**
+ * 报价卡（state = "quote"）确认生成要的全部东西。卡片拿它原样再调一次同一个工具，
+ * 加上 confirmed、confirmation_token 和同一个幂等键——和模型在对话里确认走的是同一条路，
+ * 服务端照常核对报价；重复确认由幂等存储挡掉，不会多出一单。
+ */
+export interface QuoteInfo {
+  /** 要再调一次的生成工具名。 */
+  tool: string;
+  /** 这次调用的参数，去掉了确认相关的三个字段。 */
+  arguments: Record<string, unknown>;
+  idempotency_key: string;
+  confirmation_token: string;
+  /** 报价失效时间（ISO）。过了就只能重新报价。 */
+  expires_at?: string;
+  /** 按这次参数实算的预估价；拿不到时卡片显示「无法报价」。 */
+  estimated_usd?: number;
+  /** 预估不完整（只算了一部分）。 */
+  partial?: boolean;
+  /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
+  settings: string[];
+  /** 只在测试卡片上用：直接显示某个问题状态。 */
+  problem?: "insufficient_balance";
+}
 
 export interface GenerationCardData {
   state: CardState;
@@ -162,6 +187,8 @@ export interface GenerationCardData {
   media_expired?: boolean;
   /** 测试卡片的示例数据：卡片不去刷新，也不往对话里发消息。 */
   sample?: boolean;
+  /** 只在 state = "quote" 时有。 */
+  quote?: QuoteInfo;
 }
 
 const THREE_D_EXTENSIONS = new Set(["glb", "gltf", "obj", "usdz", "fbx", "stl", "ply"]);

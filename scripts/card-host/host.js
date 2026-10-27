@@ -14,7 +14,51 @@ const VARIANTS = [
   "canceled",
   "blocked",
   "expired",
+  "quote",
+  "quote_partial",
+  "quote_unpriced",
+  "quote_expired",
+  "quote_low_balance",
 ];
+
+// 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），
+// 卡片点 Generate 时按场景回「已提交」、「报价过期」或「余额不足」。
+const QUOTE_MOCKS = {
+  "quote-submit": "submit",
+  "quote-expires": "expired",
+  "quote-no-balance": "balance",
+};
+
+function mockQuoteCaller(outcome) {
+  let polls = 0;
+  const unsample = (result, overrides = {}) => {
+    const card = { ...result._meta["atlascloud/card"], ...overrides };
+    delete card.sample;
+    return { ...result, _meta: { "atlascloud/card": card } };
+  };
+  return async (name, args) => {
+    if (name === "atlas_card_selftest" || (name === "atlas_generate_video" && !args.confirmed)) {
+      return unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
+    }
+    if (name === "atlas_generate_video") {
+      log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
+      await new Promise((r) => setTimeout(r, 1200));
+      if (outcome === "expired") {
+        return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
+      }
+      if (outcome === "balance") {
+        return { isError: true, content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing" }] };
+      }
+      return unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+    }
+    if (name === "atlas_card_status") {
+      polls += 1;
+      await new Promise((r) => setTimeout(r, 1500));
+      return unsample(await callTool("atlas_card_selftest", { variant: polls < 2 ? "running" : "video" }), { prediction_id: "mock_quote" });
+    }
+    return callTool(name, args);
+  };
+}
 
 const $ = (selector) => document.querySelector(selector);
 const logEl = $("#log");
@@ -178,12 +222,18 @@ async function renderAll() {
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: id }));
   }
   const only = $("#variant").value;
+  for (const [label, outcome] of Object.entries(QUOTE_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_generate_video", { model: "bytedance/seedance-2.5/text-to-video", idempotency_key: "mock-key" }, mockQuoteCaller(outcome)));
+  }
   if (!only || only === "poll") {
     const pane = hostFrame("mock · running → refresh → result");
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
   }
-  for (const variant of only ? (only === "poll" ? [] : [only]) : VARIANTS) {
+  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS ? [] : [only]) : VARIANTS) {
     const pane = hostFrame(`atlas_card_selftest · ${variant}`);
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
@@ -192,7 +242,7 @@ async function renderAll() {
 }
 
 const variantSelect = $("#variant");
-for (const variant of ["poll", ...VARIANTS]) {
+for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...VARIANTS]) {
   const option = document.createElement("option");
   option.value = variant;
   option.textContent = variant;

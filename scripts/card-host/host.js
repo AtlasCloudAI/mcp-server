@@ -29,7 +29,15 @@ const QUOTE_MOCKS = {
   "quote-expires": "expired",
   "quote-no-balance": "balance",
   "quote-fail-retry": "fail",
+  // ChatGPT 的做法：工具报错时不回错误结果，而是让卡片这次调用直接失败（报错原文夹在信息里）。
+  "quote-chatgpt-error": "throw-route",
+  "quote-chatgpt-uncertain": "throw-uncertain",
 };
+
+const chatgptStyleError = (text) =>
+  new Error(
+    `Error code: INVALID_ARGUMENT; Error: RuntimeException: Error calling MCP tool: [TextContent(type='text', text='${text}', annotations=None, meta=None)]`
+  );
 
 function mockQuoteCaller(outcome) {
   let polls = 0;
@@ -46,6 +54,12 @@ function mockQuoteCaller(outcome) {
     if (name === "atlas_generate_video") {
       log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
       await new Promise((r) => setTimeout(r, 1200));
+      if (outcome === "throw-route") throw chatgptStyleError("Error: model[black-forest-labs/flux-schnell] router not found");
+      if (outcome === "throw-uncertain") {
+        throw chatgptStyleError(
+          "Error: A previous request with this idempotency key ended without a confirmed response; check predictions or billing before starting a new request"
+        );
+      }
       if (outcome === "expired") {
         return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
       }

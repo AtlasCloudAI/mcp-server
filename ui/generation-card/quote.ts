@@ -4,12 +4,12 @@
 // 不替用户往对话里发「确认」——那句话在 ChatGPT 里会被它自带的生图接走。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type CardData, type QuoteInfo, cardFromToolResult, formatUsd, modelLabel, typeLabel } from "./card.js";
+import { type CardData, type QuoteInfo, formatUsd, modelLabel, newIdempotencyKey, typeLabel } from "./card.js";
 import { type ViewOptions, badge, button, h, head, row } from "./view.js";
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 
-export type QuotePhase = "ready" | "submitting" | "expired" | "low_balance" | "error";
+export type QuotePhase = "ready" | "submitting" | "expired" | "low_balance" | "uncertain" | "error";
 
 export interface QuoteState {
   phase: QuotePhase;
@@ -30,10 +30,18 @@ export interface QuoteDeps {
 }
 
 export interface QuoteActions {
+  /** 带确认令牌提交这份报价。 */
   confirm(): void;
+  /** 用同一个幂等键重新报价（报价过期时：那一单从没提交过）。 */
   requote(): void;
+  /**
+   * 用新的幂等键重新报价。提交出过错之后只能这样：防重复扣费的锁会挡住同一个键的任何重试。
+   * 只报价、不扣费，用户还要再确认一次。
+   */
+  requoteFresh(): void;
   editSettings(): void;
   topUp(): void;
+  openInAtlas(): void;
 }
 
 function priceLabel(quote: QuoteInfo | undefined): string | null {
@@ -43,6 +51,28 @@ function priceLabel(quote: QuoteInfo | undefined): string | null {
 function errorText(result: { content?: unknown }): string {
   const blocks = (result.content ?? []) as Array<{ type: string; text?: string }>;
   return blocks.find((block) => block.type === "text")?.text?.replace(/^Error:\s*/, "").slice(0, 240) ?? "";
+}
+
+/**
+ * 卡片发起的工具调用失败时拿到的原因。ChatGPT 不把工具的错误结果交回卡片，而是让这次调用
+ * 直接失败，报错原文夹在错误信息里（10-27 test 实测）：
+ *   Error calling MCP tool: [TextContent(type='text', text='Error: …', …)]
+ * 取出里面那段 text；取不到就用整条信息。
+ */
+export function thrownErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const inner = message.match(/text=(['"])([\s\S]*?)\1,\s*annotations/) ?? message.match(/text=(['"])([\s\S]*?)\1/);
+  const text = inner ? inner[2] : message;
+  return text.replace(/^Error:\s*/, "").trim().slice(0, 240);
+}
+
+/** 按报错原文决定卡片显示哪种状态。 */
+export function failureState(text: string): QuoteState {
+  if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
+  if (/insufficient balance|top up/i.test(text)) return { phase: "low_balance" };
+  // 防重复扣费的锁：上一次提交没拿到确认的结果，可能已经开跑，也可能没有。
+  if (/ended without a confirmed response|still in progress/i.test(text)) return { phase: "uncertain" };
+  return { phase: "error", message: text || undefined };
 }
 
 /** 报价已过期：先看卡片自己的计时，没有计时就等服务端说。 */
@@ -60,7 +90,7 @@ export function initialQuoteState(card: CardData): QuoteState {
 export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   const sample = () => deps.card()?.sample === true;
 
-  async function call(withConfirmation: boolean): Promise<void> {
+  async function call(withConfirmation: boolean, freshKey = false): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote) return;
     if (sample()) {
@@ -73,15 +103,12 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         name: quote.tool,
         arguments: {
           ...quote.arguments,
-          idempotency_key: quote.idempotency_key,
+          idempotency_key: freshKey ? newIdempotencyKey() : quote.idempotency_key,
           ...(withConfirmation ? { confirmation_token: quote.confirmation_token, confirmed: true } : {}),
         },
       });
       if (result.isError) {
-        const text = errorText(result);
-        if (/expired/i.test(text)) deps.setState({ phase: "expired" });
-        else if (/insufficient balance|top up/i.test(text)) deps.setState({ phase: "low_balance" });
-        else deps.setState({ phase: "error", message: text || "Atlas Cloud didn't accept this request." });
+        deps.setState(failureState(errorText(result)));
         return;
       }
       const before = deps.card();
@@ -99,14 +126,16 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       deps.setState({ phase: "ready" });
       if (after && withConfirmation) tellModel(deps.app, before, after);
       deps.startPolling();
-    } catch {
-      deps.setState({ phase: "error", message: "Couldn't reach Atlas Cloud. Nothing was submitted." });
+    } catch (error) {
+      // 不能说「什么都没提交」：请求可能已经到了服务端（ChatGPT 把工具报错也当成调用失败）。
+      deps.setState(failureState(thrownErrorText(error)));
     }
   }
 
   return {
     confirm: () => void call(true),
     requote: () => void call(false),
+    requoteFresh: () => void call(false, true),
     editSettings() {
       if (sample()) {
         deps.notice("This is a sample card, so nothing was sent.");
@@ -117,6 +146,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
     topUp: () => deps.openUrl(BILLING_URL),
+    openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
   };
 }
 
@@ -173,7 +203,28 @@ export function renderQuoteCard(
         "div",
         { class: "actions" },
         button("Top up", "primary", actions.topUp),
-        opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null
+        quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "uncertain") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Not sure it started", badge("Check first")),
+      subtitle,
+      h(
+        "p",
+        { class: "desc" },
+        "The last attempt didn't finish cleanly, so this job may or may not be running. Check your generations before trying again — retrying here won't start a second one."
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        button("Open in Atlas", "primary", actions.openInAtlas),
+        quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
       ),
       notice(opts)
     );
@@ -183,10 +234,10 @@ export function renderQuoteCard(
     return h(
       "section",
       { class: "card" },
-      head("Couldn't start the generation", badge("Not submitted", { danger: true })),
+      head("Couldn't start the generation", badge("Failed", { danger: true })),
       subtitle,
-      h("p", { class: "desc" }, state.message ?? "Nothing was charged."),
-      quote ? h("div", { class: "actions" }, button("Try again", "primary", actions.confirm)) : null,
+      h("p", { class: "desc" }, state.message ?? "Atlas Cloud didn't accept this request."),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
       notice(opts)
     );
   }

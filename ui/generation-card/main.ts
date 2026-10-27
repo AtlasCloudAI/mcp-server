@@ -8,7 +8,7 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
-import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive } from "./card.js";
+import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, newIdempotencyKey } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
@@ -41,15 +41,6 @@ let history: HistoryView | undefined;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 新的 UUID v4 幂等键。randomUUID 只在安全上下文里有，退回用 getRandomValues 拼。 */
-function newIdempotencyKey(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
 function hostCaps() {
   return app.getHostCapabilities() ?? {};

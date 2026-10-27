@@ -9,13 +9,16 @@
   --ac-text-2: var(--color-text-secondary, #5d5d5d);
   --ac-text-3: var(--color-text-tertiary, #8f8f8f);
   --ac-border: var(--color-border-primary, #e3e3e3);
-  --ac-surface: var(--color-background-secondary, #f4f4f4);
-  --ac-badge-bg: var(--color-background-tertiary, #ececec);
+  /* 浅底色（媒体留白、播放条、标签、参数小标签）用正文色按比例调出来，不读宿主的
+     background-secondary/tertiary：ChatGPT 下发的这两个和卡片底色一样，
+     标签、小标签会没有底（10-27 test 实测）。正文色跟宿主走，所以深浅色都对。 */
+  --ac-surface: color-mix(in srgb, var(--ac-text) 4.5%, transparent);
+  --ac-badge-bg: color-mix(in srgb, var(--ac-text) 8%, transparent);
   --ac-primary-bg: var(--color-background-inverse, #161616);
   --ac-primary-text: var(--color-text-inverse, #ffffff);
   --ac-secondary-border: var(--color-border-secondary, #d9d9d9);
   --ac-secondary-text: var(--color-text-secondary, #4a4a4a);
-  --ac-danger-bg: var(--color-background-danger, #fdecec);
+  --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 12%, transparent);
   --ac-danger-text: var(--color-text-danger, #d03434);
   --ac-wave-rest: #c9c9c9;
   --ac-font: var(
@@ -41,13 +44,13 @@
   --ac-text-2: var(--color-text-secondary, #b4b4b4);
   --ac-text-3: var(--color-text-tertiary, #8f8f8f);
   --ac-border: var(--color-border-primary, #3a3a3a);
-  --ac-surface: var(--color-background-secondary, #2a2a2a);
-  --ac-badge-bg: var(--color-background-tertiary, #333333);
+  --ac-surface: color-mix(in srgb, var(--ac-text) 7%, transparent);
+  --ac-badge-bg: color-mix(in srgb, var(--ac-text) 12%, transparent);
   --ac-primary-bg: var(--color-background-inverse, #f3f3f3);
   --ac-primary-text: var(--color-text-inverse, #161616);
   --ac-secondary-border: var(--color-border-secondary, #4a4a4a);
   --ac-secondary-text: var(--color-text-secondary, #d0d0d0);
-  --ac-danger-bg: var(--color-background-danger, #3b1f1f);
+  --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 18%, transparent);
   --ac-danger-text: var(--color-text-danger, #ff8a8a);
   --ac-wave-rest: #5a5a5a;
   color-scheme: dark;

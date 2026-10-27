@@ -20,6 +20,9 @@
   --ac-secondary-text: var(--color-text-secondary, #4a4a4a);
   --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 12%, transparent);
   --ac-danger-text: var(--color-text-danger, #d03434);
+  --ac-success-text: var(--color-text-success, #1a7f37);
+  --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 12%, transparent);
+  --ac-card-bg: var(--color-background-primary, #ffffff);
   --ac-wave-rest: #c9c9c9;
   --ac-font: var(
     --font-sans,
@@ -52,6 +55,9 @@
   --ac-secondary-text: var(--color-text-secondary, #d0d0d0);
   --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 18%, transparent);
   --ac-danger-text: var(--color-text-danger, #ff8a8a);
+  --ac-success-text: var(--color-text-success, #5cc87a);
+  --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 18%, transparent);
+  --ac-card-bg: var(--color-background-primary, #212121);
   --ac-wave-rest: #5a5a5a;
   color-scheme: dark;
 }
@@ -420,6 +426,11 @@ p {
   color: var(--ac-danger-text);
 }
 
+.badge.success {
+  background: var(--ac-success-bg);
+  color: var(--ac-success-text);
+}
+
 .badge svg {
   width: 12px;
   height: 12px;
@@ -703,4 +714,162 @@ button.history-row:focus-visible {
 #root.wide {
   max-width: 720px;
   margin: 0 auto;
+}
+
+/* ---- 上传卡 ---- */
+
+.upload-drop {
+  width: 100%;
+  margin-top: 12px;
+  padding: 22px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 1.5px dashed var(--ac-secondary-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ac-text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.upload-drop:hover,
+.card.upload.dragging .upload-drop {
+  border-color: var(--ac-text-3);
+  background: var(--ac-surface);
+}
+
+.card.upload.dragging {
+  border-color: var(--ac-text-3);
+}
+
+.upload-drop:focus-visible,
+.upload-remove:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.upload-drop-icon svg {
+  width: 22px;
+  height: 22px;
+  color: var(--ac-text-2);
+  display: block;
+}
+
+.upload-drop-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.upload-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.upload-drop-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.upload-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.upload-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+}
+
+.upload-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.upload-thumb-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.upload-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-row.bad .upload-sub {
+  color: var(--ac-danger-text);
+}
+
+.upload-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--ac-text-3);
+}
+
+.upload-mark svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.upload-mark.ok {
+  color: var(--ac-success-text);
+}
+
+.upload-remove {
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.upload-remove:hover {
+  color: var(--ac-danger-text);
 }

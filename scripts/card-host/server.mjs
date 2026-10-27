@@ -61,9 +61,43 @@ function send(res, status, body, type = "application/json") {
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 }
 
+// 模拟上传中转（上传卡在测试宿主里传到这里，不碰真实存储）。地址最后一段是场景：
+//   ok      慢慢收完再回地址；fail-once 第一次回 502、之后成功；
+//   expired 回 410（卡片该去换新地址，换来的是 ok）；toolarge 回 413。
+const failedOnce = new Set();
+async function mockUpload(req, res, mode) {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "Content-Type, X-Atlas-Filename");
+  if (req.method === "OPTIONS") return send(res, 204, "");
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    await new Promise((r) => setTimeout(r, 15)); // 放慢接收，卡片才看得到进度
+  }
+  const url = new URL(req.url ?? "/", "http://x");
+  const name = url.searchParams.get("filename") ?? "file";
+  await new Promise((r) => setTimeout(r, 800)); // 中转转存到 Atlas 的那几秒
+  if (mode === "expired") return send(res, 410, { error: "upload_ticket_expired" });
+  if (mode === "toolarge") return send(res, 413, { error: "upload_too_large" });
+  if (mode === "fail-once" && !failedOnce.has(name)) {
+    failedOnce.add(name);
+    return send(res, 502, { error: "upstream_upload_failed" });
+  }
+  return send(res, 200, {
+    url: `https://static.atlascloud.ai/model/example/material/product-shot-01.jpg?mock=${encodeURIComponent(name)}`,
+    filename: name,
+    size_bytes: size,
+    media_type: "image",
+  });
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (url.pathname.startsWith("/mock-upload/")) {
+      return await mockUpload(req, res, url.pathname.slice("/mock-upload/".length));
+    }
     if (req.method === "GET" && url.pathname === "/") {
       return send(res, 200, readFileSync(join(here, "index.html"), "utf8"), "text/html; charset=utf-8");
     }

@@ -21,7 +21,35 @@ const VARIANTS = [
   "quote_expired",
   "quote_low_balance",
   "history",
+  "upload",
+  "upload_uploading",
+  "upload_done",
+  "upload_problem",
+  "upload_failed",
+  "upload_expired",
 ];
+
+// 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，
+// 选文件后真的走 XHR 上传。卡片换新地址（调 atlas_get_upload_url）时给一张 ok 的地址。
+const UPLOAD_MOCKS = {
+  "upload-ok": "ok",
+  "upload-fail-once": "fail-once",
+  "upload-link-expired": "expired",
+  "upload-too-large": "toolarge",
+};
+
+function mockUploadCaller(mode) {
+  const withUrl = async (m) => {
+    const result = await callTool("atlas_card_selftest", { variant: "upload" });
+    const data = { ...result._meta["atlascloud/upload"], upload_url: `${location.origin}/mock-upload/${m}` };
+    delete data.sample;
+    delete data.sample_files;
+    return { ...result, _meta: { "atlascloud/upload": data } };
+  };
+  // 第一次是宿主把卡片打开那次调用；之后的是卡片自己来换新地址。
+  let calls = 0;
+  return async () => withUrl(calls++ > 0 && mode === "expired" ? "ok" : mode);
+}
 
 // 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），
 // 卡片点 Generate 时按场景回「已提交」、「报价过期」或「余额不足」。
@@ -120,6 +148,8 @@ async function cardResource() {
 // 和真宿主一样只放行资源里声明的来源：没声明的图片、视频会加载失败。
 function cspFor(meta) {
   const domains = (meta?.ui?.csp?.resourceDomains ?? []).join(" ");
+  // 上传卡要连上传中转；测试宿主自己的模拟中转也放行。
+  const connect = [...(meta?.ui?.csp?.connectDomains ?? []), location.origin].join(" ");
   return [
     "default-src 'none'",
     "script-src 'unsafe-inline'",
@@ -127,7 +157,7 @@ function cspFor(meta) {
     `img-src data: blob: ${domains}`,
     `media-src blob: ${domains}`,
     `font-src data: ${domains}`,
-    "connect-src 'none'",
+    `connect-src ${connect}`,
   ].join("; ");
 }
 
@@ -163,7 +193,9 @@ async function mountCard(slot, tool, args, caller = callTool) {
   const res = await cardResource();
   const s = settings();
   const iframe = document.createElement("iframe");
-  iframe.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+  // ?sameorigin=1：让测试脚本能伸进卡片里放文件、读文字（只在本地测试宿主用，真宿主都是跨源沙箱）。
+  const sameOrigin = new URLSearchParams(location.search).get("sameorigin") === "1";
+  iframe.setAttribute("sandbox", `allow-scripts allow-popups allow-popups-to-escape-sandbox${sameOrigin ? " allow-same-origin" : ""}`);
   iframe.setAttribute("title", `${tool} card`);
   iframe.className = "card-frame";
   slot.replaceChildren(iframe);
@@ -188,7 +220,7 @@ async function mountCard(slot, tool, args, caller = callTool) {
   bridge.oncalltool = async (params) => {
     log("card → tools/call", params.name, params.arguments ?? {});
     const result = await caller(params.name, params.arguments ?? {});
-    log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result.isError ? "error" : "?"));
+    log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result?._meta?.["atlascloud/upload"] ? "upload link" : result.isError ? "error" : "?"));
     return result;
   };
   // 全屏：把这张卡的外框放大到 720 宽，再告诉卡片现在是全屏。
@@ -266,12 +298,18 @@ async function renderAll() {
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_generate_video", { model: "bytedance/seedance-2.5/text-to-video", idempotency_key: "mock-key" }, mockQuoteCaller(outcome)));
   }
+  for (const [label, mode] of Object.entries(UPLOAD_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_upload_url", {}, mockUploadCaller(mode)));
+  }
   if (!only || only === "poll") {
     const pane = hostFrame("mock · running → refresh → result");
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
   }
-  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS ? [] : [only]) : VARIANTS) {
+  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS ? [] : [only]) : VARIANTS) {
     const pane = hostFrame(`atlas_card_selftest · ${variant}`);
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
@@ -280,7 +318,7 @@ async function renderAll() {
 }
 
 const variantSelect = $("#variant");
-for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...VARIANTS]) {
+for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...VARIANTS]) {
   const option = document.createElement("option");
   option.value = variant;
   option.textContent = variant;

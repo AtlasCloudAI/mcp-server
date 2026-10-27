@@ -43,6 +43,7 @@ import {
   enforceExactHost,
   enforceToolScopes,
   restrictedCors,
+  uploadCors,
   securityHeaders,
   ensureChallengeScope,
 } from "./http/middleware.js";
@@ -284,13 +285,12 @@ export function createHttpApp(
   );
 
   // 上传中转：拿票据换一次上传，没有 bearer——凭据在票据里，见 services/upload-ticket.ts。
-  // 挂在 MCP 同一个 origin 下，Host 校验、安全头、CORS 全部复用。
+  // 挂在 MCP 同一个 origin 下，Host 校验、安全头复用；跨域单独放开，对话里的上传卡要直接传。
   const uploadPath = `${config.publicUploadBaseUrl.pathname}:ticket`;
-  app.options(uploadPath, (_req, res) => {
-    res.status(204).end();
-  });
+  app.options(uploadPath, uploadCors());
   app.post(
     uploadPath,
+    uploadCors(),
     createPreAuthRateLimiter(config),
     createUploadRateLimiter(config),
     ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore })

@@ -24,13 +24,15 @@ import {
   predictionResponseSchema,
   type PredictionResponse,
 } from "../response-schemas.js";
+import { currentClientProfile } from "../services/client-profile.js";
+import { getRequestContext } from "../services/request-context.js";
 import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { handleError } from "../utils/error-handler.js";
 
 // 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
 // ChatGPT 和 Claude 都按 _meta.ui.resourceUri 认它。设计稿见 Figma「MCP 对话内组件 · 跟随宿主」
-// 的「生成进度」「作品图库」「报价确认」，以及全屏视图里的历史列表。上传还没接。
+// 的「生成进度」「作品图库」「报价确认」「上传」，以及全屏视图里的历史列表。
 
 /**
  * 卡片页面的地址带上页面内容的哈希。ChatGPT 按地址缓存卡片页面：2026-10-27 在 test 上换了新镜像、
@@ -62,16 +64,21 @@ export function generationCardEnabled(): boolean {
 }
 
 /**
- * 客户端在 initialize 里声明了能渲染 MCP Apps 卡片。只有这时才改模型的轮询指引：
- * 卡片会自己刷新到出结果，模型再查一次就会在对话里多出一张卡。
- * 没声明的客户端（包括声明方式不同的宿主）照旧让模型自己轮询，最坏是多几张卡。
+ * 客户端会渲染 MCP Apps 卡片。只有这时才改给模型的指引：卡片会自己刷新到出结果、
+ * 报价在卡里确认、文件在卡里传，模型再查一次就会在对话里多出一张卡。
+ *
+ * 优先看 initialize 里的声明。远端服务是无状态的：每个请求新建一个服务实例，工具调用时
+ * 拿不到 initialize 的声明（2026-10-27 上传卡测试时发现，之前这里在线上一直是 false），
+ * 这时按 OAuth 客户端认——ChatGPT 和 Claude 网页都渲染卡片。其余客户端照旧让模型自己来，
+ * 最坏是多几张卡。
  */
 export function clientRendersCards(server: McpServer): boolean {
   if (!generationCardEnabled()) return false;
   const capabilities = server.server.getClientCapabilities() as Parameters<
     typeof getUiCapability
   >[0];
-  return getUiCapability(capabilities)?.mimeTypes?.includes(RESOURCE_MIME_TYPE) ?? false;
+  if (capabilities) return getUiCapability(capabilities)?.mimeTypes?.includes(RESOURCE_MIME_TYPE) ?? false;
+  return currentClientProfile() === "chat";
 }
 
 // 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
@@ -111,12 +118,28 @@ function loadCardHtml(): string {
   }
 }
 
+/**
+ * 卡片能直接发请求的来源：只有上传中转（上传卡在卡片里把文件 POST 过去）。
+ * 远端服务每个请求的上下文里都有上传地址；读不到时（启动时登记资源）用 MCP_PUBLIC_URL，
+ * 中转和 /mcp 同一个 origin。stdio 没有中转，什么都不放行。
+ */
+export function cardConnectDomains(env: NodeJS.ProcessEnv = process.env): string[] {
+  const base = getRequestContext()?.uploadBaseUrl ?? env.MCP_PUBLIC_URL;
+  if (!base) return [];
+  try {
+    return [new URL(base).origin];
+  } catch {
+    return [];
+  }
+}
+
 function resourceUiMeta(): Record<string, unknown> {
   const domains = cardMediaDomains();
+  const connect = cardConnectDomains();
   return {
-    ui: { csp: { resourceDomains: domains }, prefersBorder: false },
+    ui: { csp: { resourceDomains: domains, connectDomains: connect }, prefersBorder: false },
     // ChatGPT 旧版 Apps SDK 读这几个键；新版和 Claude 读上面的 ui。
-    "openai/widgetCSP": { connect_domains: [], resource_domains: domains },
+    "openai/widgetCSP": { connect_domains: connect, resource_domains: domains },
     "openai/widgetPrefersBorder": false,
   };
 }

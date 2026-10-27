@@ -102,9 +102,11 @@ export function securityHeaders(config: HttpServerConfig): RequestHandler {
 }
 
 export function restrictedCors(config: HttpServerConfig): RequestHandler {
+  const uploadPrefix = config.publicUploadBaseUrl.pathname;
   return (req, res, next) => {
     const origin = req.header("Origin");
-    if (!origin) {
+    // 上传中转有自己的跨域规则（uploadCors），这里不拦。
+    if (!origin || req.path.startsWith(uploadPrefix)) {
       next();
       return;
     }
@@ -123,6 +125,28 @@ export function restrictedCors(config: HttpServerConfig): RequestHandler {
       "Access-Control-Expose-Headers",
       "MCP-Session-Id, WWW-Authenticate, RateLimit, RateLimit-Policy"
     );
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * 上传中转的跨域：任何来源都放行，不带凭据。
+ *
+ * 对话里的上传卡在宿主的沙箱 iframe 里，直接把文件 POST 到上传地址。沙箱的来源每个宿主
+ * 都不一样（ChatGPT 是 web-sandbox.oaiusercontent.com 下的随机子域，Claude 也是随机子域），
+ * 列不完。放开不降低安全性：这条路不认 Cookie 和 Authorization，凭据就是地址里的票据，
+ * 拿到地址的人用 curl 一样能传；网页拿不到别人的地址。
+ */
+export function uploadCors(): RequestHandler {
+  return (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Atlas-Filename");
+    res.setHeader("Access-Control-Max-Age", "600");
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;

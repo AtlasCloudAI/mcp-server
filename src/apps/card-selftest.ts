@@ -10,6 +10,7 @@ import {
 } from "./generation-card.js";
 import { settingsChips } from "./generation-quote.js";
 import { HISTORY_META_KEY, type HistoryCardData, type HistoryCardItem } from "./history-card.js";
+import { UPLOAD_MAX_FILES, UPLOAD_META_KEY, type UploadCardData, type UploadSampleFile } from "./upload-card.js";
 
 // 测试卡片：不调接口、不花钱，用官网公开的示例素材把生成卡的各个状态渲染出来，
 // 用来在 ChatGPT、Claude 里核对卡片长得对不对。只在 MCP_UI_SELFTEST 打开的环境注册。
@@ -158,6 +159,43 @@ function historySample(): HistoryCardData {
   return { view: "history", page: 1, size: 10, total: items.length, has_more: false, items, sample: true };
 }
 
+// 上传卡的各个状态：文件预先摆好，卡片只显示、不真传（设计稿「上传 · Upload」）。
+const MB = 1_048_576;
+const FRONT = { name: "sneaker-front.jpg", size_bytes: Math.round(2.4 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-01.jpg` } as const;
+const SIDE = { name: "sneaker-side.jpg", size_bytes: Math.round(1.8 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-02.jpg` } as const;
+const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boolean }> = {
+  upload: { files: [] },
+  upload_uploading: {
+    files: [
+      { ...FRONT, status: "uploading", progress: 0.64 },
+      { ...SIDE, status: "done" },
+    ],
+  },
+  upload_done: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "done" }] },
+  upload_problem: {
+    files: [
+      { name: "launch-video.mov", size_bytes: Math.round(48 * MB), kind: "video", status: "invalid", error: "Over the 32 MB limit" },
+      { name: "brand-notes.pdf", size_bytes: Math.round(0.3 * MB), kind: "other", status: "invalid", error: "Use an image, video or audio file" },
+    ],
+  },
+  upload_failed: { files: [{ ...FRONT, status: "failed", error: "Upload failed" }] },
+  upload_expired: { files: [{ ...FRONT, status: "uploading", progress: 0 }], expired: true },
+};
+
+function uploadSample(variant: string): UploadCardData {
+  const sample = UPLOAD_VARIANTS[variant]!;
+  return {
+    view: "upload",
+    upload_url: "https://example.invalid/upload/selftest",
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    max_bytes: 32 * MB,
+    max_files: UPLOAD_MAX_FILES,
+    sample: true,
+    sample_files: sample.files,
+    ...(sample.expired ? { sample_expired: true } : {}),
+  };
+}
+
 function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
   const validMs = sample.expired ? -60_000 : 10 * 60_000;
@@ -196,7 +234,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         "It does not call Atlas Cloud and costs nothing.",
       inputSchema: {
         variant: z
-          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS), "history"] as string[] as [Variant, ...Variant[]])
+          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS), ...Object.keys(UPLOAD_VARIANTS), "history"] as string[] as [Variant, ...Variant[]])
           .default("image")
           .describe("Which card state to show"),
       },
@@ -210,6 +248,12 @@ export function registerCardSelftestTool(server: McpServer): void {
           _meta: { [HISTORY_META_KEY]: history },
           structuredContent: { total: history.total, page: 1, size: 10, has_more: false, predictions: [] },
           content: [{ type: "text", text: "Self-test history card rendered with sample tasks. Nothing was read or billed." }],
+        };
+      }
+      if (variant in UPLOAD_VARIANTS) {
+        return {
+          _meta: { [UPLOAD_META_KEY]: uploadSample(variant) },
+          content: [{ type: "text", text: `Self-test upload card "${variant}" rendered with sample files. Nothing was uploaded.` }],
         };
       }
       if (variant in QUOTE_VARIANTS) {

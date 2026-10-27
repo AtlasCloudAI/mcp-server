@@ -291,8 +291,10 @@ async function downloadChatFile(
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
       if (!isAllowedChatFileHost(url, options.allowedHosts)) {
+        // 只记域名：完整链接带临时签名。宿主换了附件存储时，靠这行就能知道该放行哪个域名。
+        console.warn(`[chat-file-import] rejected host ${url.host} at hop ${hop}`);
         throw new ChatFileError(
-          "This link is not a chat attachment. Only files the user attached in this chat can be imported here; pass other public URLs to the generation tool directly."
+          `This link (${url.host}) is not a chat attachment. Only files the user attached in this chat can be imported here; pass other public URLs to the generation tool directly.`
         );
       }
       const response = await options.fetcher(url, {

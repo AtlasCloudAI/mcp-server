@@ -218,7 +218,7 @@ export function renderQuoteCard(
       h(
         "p",
         { class: "desc" },
-        "The last attempt didn't finish cleanly, so this job may or may not be running. Check your generations before trying again — retrying here won't start a second one."
+        "The last attempt didn't finish cleanly, so this job may or may not be running. Check your generations in Atlas first: a new quote starts a separate job."
       ),
       h(
         "div",

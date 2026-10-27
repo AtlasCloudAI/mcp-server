@@ -6,10 +6,7 @@ import type {
   JSONRPCMessage,
   MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  isAtlasToolName,
-  TOOL_POLICIES,
-} from "../tool-policy.js";
+import { remoteToolPolicy } from "../tool-policy.js";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -18,8 +15,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function securitySchemes(name: string): Array<{ type: "oauth2"; scopes: string[] }> | undefined {
-  if (!isAtlasToolName(name) || !TOOL_POLICIES[name].remote) return undefined;
-  const scope = TOOL_POLICIES[name].scope;
+  const policy = remoteToolPolicy(name);
+  if (!policy?.remote) return undefined;
+  const scope = policy.scope;
   // 目录类工具不要求 scope（契约 v3 §4.2），公示成空集而不是编造一个 scope 名。
   return [{ type: "oauth2", scopes: scope === null ? [] : [scope] }];
 }

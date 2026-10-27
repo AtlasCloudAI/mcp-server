@@ -1,0 +1,517 @@
+/*
+ * 生成卡样式。数值取自 Figma「MCP 对话内组件 · 跟随宿主」的「生成进度」「作品图库」两节（宽 560）。
+ * 颜色、字体优先用宿主下发的标准变量（--color-*、--font-*），拿不到时退回设计稿的值；
+ * 所以同一张卡在 ChatGPT、Claude 的浅色、深色里各自跟着宿主走。
+ */
+
+:root {
+  --ac-text: var(--color-text-primary, #0d0d0d);
+  --ac-text-2: var(--color-text-secondary, #5d5d5d);
+  --ac-text-3: var(--color-text-tertiary, #8f8f8f);
+  --ac-border: var(--color-border-primary, #e3e3e3);
+  --ac-surface: var(--color-background-secondary, #f4f4f4);
+  --ac-badge-bg: var(--color-background-tertiary, #ececec);
+  --ac-primary-bg: var(--color-background-inverse, #161616);
+  --ac-primary-text: var(--color-text-inverse, #ffffff);
+  --ac-secondary-border: var(--color-border-secondary, #d9d9d9);
+  --ac-secondary-text: var(--color-text-secondary, #4a4a4a);
+  --ac-danger-bg: var(--color-background-danger, #fdecec);
+  --ac-danger-text: var(--color-text-danger, #d03434);
+  --ac-wave-rest: #c9c9c9;
+  --ac-font: var(
+    --font-sans,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  );
+  --ac-mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  /* ChatGPT 的按钮是胶囊，Claude 是 8px 圆角；宿主名在脚本里判断后写到 data-host。 */
+  --ac-button-radius: 999px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --ac-text: var(--color-text-primary, #ececec);
+  --ac-text-2: var(--color-text-secondary, #b4b4b4);
+  --ac-text-3: var(--color-text-tertiary, #8f8f8f);
+  --ac-border: var(--color-border-primary, #3a3a3a);
+  --ac-surface: var(--color-background-secondary, #2a2a2a);
+  --ac-badge-bg: var(--color-background-tertiary, #333333);
+  --ac-primary-bg: var(--color-background-inverse, #f3f3f3);
+  --ac-primary-text: var(--color-text-inverse, #161616);
+  --ac-secondary-border: var(--color-border-secondary, #4a4a4a);
+  --ac-secondary-text: var(--color-text-secondary, #d0d0d0);
+  --ac-danger-bg: var(--color-background-danger, #3b1f1f);
+  --ac-danger-text: var(--color-text-danger, #ff8a8a);
+  --ac-wave-rest: #5a5a5a;
+  color-scheme: dark;
+}
+
+:root[data-host="claude"] {
+  --ac-button-radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  font-family: var(--ac-font);
+  color: var(--ac-text);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  max-width: 560px;
+}
+
+button {
+  font: inherit;
+}
+
+/* 段落间距全部由各自的 margin-top 决定。 */
+p {
+  margin: 0;
+}
+
+/* ---- 卡片外框 ---- */
+
+.card {
+  border: 1px solid var(--ac-border);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+/* ---- 媒体 ---- */
+
+.media {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ac-surface);
+}
+
+.media img,
+.media video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.media video {
+  background: #000;
+}
+
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.play-overlay svg {
+  width: 22px;
+  height: 22px;
+  margin-left: 3px;
+}
+
+.placeholder {
+  height: 200px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 16px;
+  color: var(--ac-text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.placeholder.tall {
+  height: 284px;
+}
+
+.placeholder svg {
+  width: 40px;
+  height: 40px;
+  color: var(--ac-text-3);
+  display: block;
+  margin: 0 auto 8px;
+}
+
+.placeholder .placeholder-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.caption {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  overflow-wrap: anywhere;
+}
+
+/* ---- 按钮 ---- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: var(--ac-button-radius);
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn:focus-visible,
+.play-overlay:focus-visible,
+.audio-play:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--ac-primary-bg);
+  color: var(--ac-primary-text);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ac-secondary-text);
+  border-color: var(--ac-secondary-border);
+}
+
+.btn-small {
+  height: 30px;
+  padding: 0 14px;
+}
+
+/* ---- 多图轮播（宿主规范：3–8 个结果用轮播，外面不再套卡片框） ---- */
+
+.carousel {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.tile {
+  flex: 0 0 220px;
+  scroll-snap-align: start;
+  min-width: 0;
+}
+
+.tile-media {
+  width: 220px;
+  height: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.tile-media img,
+.tile-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tile-title {
+  margin-top: 12px;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.tile-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile .btn {
+  margin-top: 12px;
+}
+
+.carousel-footer {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+/* ---- 音频 ---- */
+
+.title-lg {
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.audio-player {
+  margin-top: 12px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.audio-play {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--ac-primary-bg);
+  color: var(--ac-primary-text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.audio-play svg {
+  width: 14px;
+  height: 14px;
+}
+
+.audio-play.paused svg {
+  margin-left: 2px;
+}
+
+.wave {
+  flex: 0 1 180px;
+  min-width: 60px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.wave span {
+  flex: none;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ac-wave-rest);
+}
+
+.wave span.played {
+  background: var(--ac-text);
+}
+
+.audio-time {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- 进度、失败、过期 ---- */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--ac-badge-bg);
+  color: var(--ac-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge.danger {
+  background: var(--ac-danger-bg);
+  color: var(--ac-danger-text);
+}
+
+.badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+.spin {
+  animation: ac-spin 0.9s linear infinite;
+}
+
+@keyframes ac-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+.desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ac-text-2);
+}
+
+.desc.lg {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.rows {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.row-label {
+  font-size: 12px;
+  color: var(--ac-text-3);
+  flex: none;
+}
+
+.row-value {
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--ac-mono);
+  font-size: 12px;
+}
+
+.note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* 测试卡片的诊断区（只在 atlas_card_selftest 的示例卡片上出现）。 */
+.diagnostics {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--ac-text-3);
+}
+
+.diagnostics pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--ac-mono);
+}

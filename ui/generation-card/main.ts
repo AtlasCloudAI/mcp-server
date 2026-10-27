@@ -49,6 +49,52 @@ function viewOptions(): ViewOptions {
   };
 }
 
+// 测试卡片的诊断信息：宿主实际给卡片套的 CSP、被拦下的请求。宿主的 iframe 跨域，
+// 外面看不到，只能让卡片自己报。只在示例卡片上显示，真实结果不显示。
+const violations: string[] = [];
+document.addEventListener("securitypolicyviolation", (event) => {
+  const line = `${event.effectiveDirective || event.violatedDirective} ← ${event.blockedURI || "(inline)"}`;
+  if (!violations.includes(line)) violations.push(line);
+  // 只改诊断区的字，不重画卡片：重画会再请求一次被拦的图，又触发拦截，死循环。
+  const box = root.querySelector(".diagnostics");
+  if (box) box.replaceWith(diagnostics());
+});
+
+function cspOf(doc: Document | undefined): string {
+  try {
+    const metas = doc ? [...doc.querySelectorAll('meta[http-equiv="Content-Security-Policy"]')] : [];
+    return metas.map((m) => m.getAttribute("content") ?? "").join(" | ") || "(none)";
+  } catch {
+    return "(not readable)";
+  }
+}
+
+function diagnostics(): HTMLElement {
+  let parentDoc: Document | undefined;
+  try {
+    parentDoc = window.parent !== window ? window.parent.document : undefined;
+  } catch {
+    parentDoc = undefined;
+  }
+  const lines = [
+    `host: ${app.getHostVersion()?.name ?? "?"} ${app.getHostVersion()?.version ?? ""}`,
+    `caps: ${Object.keys(hostCaps()).join(",") || "(none)"}`,
+    `origin: ${location.origin}`,
+    `csp (this frame): ${cspOf(document)}`,
+    `csp (parent frame): ${parentDoc ? cspOf(parentDoc) : "(cross-origin)"}`,
+    `blocked: ${violations.length ? violations.join("; ") : "(none)"}`,
+  ];
+  const box = document.createElement("details");
+  box.className = "diagnostics";
+  const summary = document.createElement("summary");
+  summary.textContent = `Sample card diagnostics${violations.length ? ` (${violations.length} blocked)` : ""}`;
+  const pre = document.createElement("pre");
+  pre.textContent = lines.join("\n");
+  box.append(summary, pre);
+  box.open = violations.length > 0;
+  return box;
+}
+
 function render(force = false): void {
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
@@ -60,6 +106,7 @@ function render(force = false): void {
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
   root.replaceChildren(view);
+  if (card?.sample) root.append(diagnostics());
 }
 
 function setNotice(text: string | undefined, ttlMs = 4000): void {

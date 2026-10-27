@@ -68,11 +68,25 @@ export function clientRendersCards(server: McpServer): boolean {
 
 // 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
 // 生成结果在 atlas-media 桶，用户上传和工作流素材在 atlas-img 桶，示例素材在 static。
-const MEDIA_DOMAINS = [
+const DEFAULT_MEDIA_DOMAINS = [
   "https://atlas-media.oss-us-west-1.aliyuncs.com",
   "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
   "https://static.atlascloud.ai",
 ];
+
+/**
+ * 卡片能加载的媒体来源。别的环境存储桶不一样（test 是 atlas-media-dev / atlas-img-dev），
+ * 用 MCP_UI_MEDIA_DOMAINS（逗号分隔，可不写 https://）追加；生产不用配。
+ */
+export function cardMediaDomains(env: NodeJS.ProcessEnv = process.env): string[] {
+  const extra = (env.MCP_UI_MEDIA_DOMAINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value !== "")
+    .map((value) => (/^https:\/\//i.test(value) ? value : `https://${value}`))
+    .map((value) => value.replace(/\/+$/, ""));
+  return [...new Set([...DEFAULT_MEDIA_DOMAINS, ...extra])];
+}
 
 const SITE_URL = "https://www.atlascloud.ai";
 
@@ -89,12 +103,15 @@ function loadCardHtml(): string {
   }
 }
 
-const RESOURCE_UI_META = {
-  ui: { csp: { resourceDomains: MEDIA_DOMAINS }, prefersBorder: false },
-  // ChatGPT 旧版 Apps SDK 读这几个键；新版和 Claude 读上面的 ui。
-  "openai/widgetCSP": { connect_domains: [], resource_domains: MEDIA_DOMAINS },
-  "openai/widgetPrefersBorder": false,
-};
+function resourceUiMeta(): Record<string, unknown> {
+  const domains = cardMediaDomains();
+  return {
+    ui: { csp: { resourceDomains: domains }, prefersBorder: false },
+    // ChatGPT 旧版 Apps SDK 读这几个键；新版和 Claude 读上面的 ui。
+    "openai/widgetCSP": { connect_domains: [], resource_domains: domains },
+    "openai/widgetPrefersBorder": false,
+  };
+}
 
 export function registerGenerationCardResource(server: McpServer): void {
   registerAppResource(
@@ -103,7 +120,7 @@ export function registerGenerationCardResource(server: McpServer): void {
     GENERATION_CARD_URI,
     {
       description: "Shows the progress and finished media of an Atlas Cloud generation.",
-      _meta: RESOURCE_UI_META,
+      _meta: resourceUiMeta(),
     },
     async () => ({
       contents: [
@@ -111,7 +128,7 @@ export function registerGenerationCardResource(server: McpServer): void {
           uri: GENERATION_CARD_URI,
           mimeType: RESOURCE_MIME_TYPE,
           text: loadCardHtml(),
-          _meta: RESOURCE_UI_META,
+          _meta: resourceUiMeta(),
         },
       ],
     })

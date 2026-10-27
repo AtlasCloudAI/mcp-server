@@ -280,6 +280,21 @@ test("测试卡片：两个开关都开才注册，不调接口，结果标成�
   }
 });
 
+test("卡片媒体来源：默认三个生产来源，可用 MCP_UI_MEDIA_DOMAINS 追加（test 的 dev 桶）", async () => {
+  const { cardMediaDomains } = await import("../src/apps/generation-card.js");
+  assert.deepEqual(cardMediaDomains({}), [
+    "https://atlas-media.oss-us-west-1.aliyuncs.com",
+    "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
+    "https://static.atlascloud.ai",
+  ]);
+  const extended = cardMediaDomains({
+    MCP_UI_MEDIA_DOMAINS: " atlas-media-dev.oss-us-west-1.aliyuncs.com, https://atlas-img-dev.oss-us-west-1.aliyuncs.com/ ,https://static.atlascloud.ai",
+  });
+  assert.equal(extended.length, 5);
+  assert.ok(extended.includes("https://atlas-media-dev.oss-us-west-1.aliyuncs.com"));
+  assert.ok(extended.includes("https://atlas-img-dev.oss-us-west-1.aliyuncs.com"));
+});
+
 test("远端放行：卡片工具按自己的策略查 scope，未知工具不放行", async () => {
   const { remoteToolPolicy } = await import("../src/tool-policy.js");
   assert.equal(remoteToolPolicy("atlas_card_status")?.scope, "tasks:read");

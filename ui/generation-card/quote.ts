@@ -9,7 +9,8 @@ import { type ViewOptions, badge, button, h, head, row } from "./view.js";
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 
-export type QuotePhase = "ready" | "submitting" | "expired" | "low_balance" | "uncertain" | "error";
+// quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
+export type QuotePhase = "ready" | "quoting" | "submitting" | "expired" | "low_balance" | "uncertain" | "error";
 
 export interface QuoteState {
   phase: QuotePhase;
@@ -97,7 +98,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       deps.notice("This is a sample card, so nothing was submitted.");
       return;
     }
-    deps.setState({ phase: "submitting" });
+    deps.setState({ phase: withConfirmation ? "submitting" : "quoting" });
     try {
       const result = await deps.app.callServerTool({
         name: quote.tool,
@@ -243,8 +244,9 @@ export function renderQuoteCard(
   }
 
   const submitting = state.phase === "submitting";
-  const status = submitting
-    ? badge("Submitting", { spinner: true })
+  const busy = submitting || state.phase === "quoting";
+  const status = busy
+    ? badge(submitting ? "Submitting" : "Getting quote", { spinner: true })
     : price === null
       ? badge("No estimate")
       : quote?.partial
@@ -264,7 +266,7 @@ export function renderQuoteCard(
 
   // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
   const canConfirm = quote !== undefined && quote.tool !== "";
-  const generateLabel = submitting ? "Submitting…" : price === null ? "Generate anyway" : `Generate · ${price}`;
+  const generateLabel = busy ? (submitting ? "Submitting…" : "Getting quote…") : price === null ? "Generate anyway" : `Generate · ${price}`;
   return h(
     "section",
     { class: "card" },
@@ -276,8 +278,8 @@ export function renderQuoteCard(
       ? h(
           "div",
           { class: "actions" },
-          button(generateLabel, "primary", actions.confirm, { disabled: submitting }),
-          !submitting && opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null
+          button(generateLabel, "primary", actions.confirm, { disabled: busy }),
+          !busy && opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null
         )
       : h("p", { class: "note" }, "Reply in the chat to approve or change this."),
     notice(opts)

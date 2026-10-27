@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   RESOURCE_MIME_TYPE,
   getUiCapability,
@@ -130,6 +130,9 @@ export function prefetchCardCatalog(): void {
 }
 
 export function registerGenerationCardResource(server: McpServer): void {
+  const read = (uri: string) => ({
+    contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: loadCardHtml(), _meta: resourceUiMeta() }],
+  });
   registerAppResource(
     server,
     "Atlas Cloud generation card",
@@ -138,16 +141,15 @@ export function registerGenerationCardResource(server: McpServer): void {
       description: "Shows the progress and finished media of an Atlas Cloud generation.",
       _meta: resourceUiMeta(),
     },
-    async () => ({
-      contents: [
-        {
-          uri: GENERATION_CARD_URI,
-          mimeType: RESOURCE_MIME_TYPE,
-          text: loadCardHtml(),
-          _meta: resourceUiMeta(),
-        },
-      ],
-    })
+    async () => read(GENERATION_CARD_URI)
+  );
+  // 换镜像后宿主手里还是旧地址（ChatGPT 不点「刷新工具」就一直用旧工具列表，2026-10-27 实测）。
+  // 它缓存过期再来读旧地址时也给当前页面，不能让卡片打不开。不带哈希的最早地址同样能匹配。
+  server.registerResource(
+    "Atlas Cloud generation card (earlier address)",
+    new ResourceTemplate("ui://atlascloud/generation-card{build}", { list: undefined }),
+    { mimeType: RESOURCE_MIME_TYPE, _meta: resourceUiMeta() },
+    async (uri) => read(uri.href)
   );
 }
 

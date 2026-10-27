@@ -3,6 +3,7 @@
 //
 // Atlas 接口地址在模块加载时就定下来了，所以先起假接口、设环境变量，再动态 import 服务端。
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
@@ -188,6 +189,8 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
     assert.equal(get?._meta?.["ui/resourceUri"], CARD_URI);
     const status = tools.find((tool) => tool.name === "atlas_card_status");
     assert.deepEqual((status?._meta?.ui as { visibility?: string[] })?.visibility, ["app"]);
+    // 只给卡片调的工具不挂卡片：ChatGPT 对挂了 resourceUri 的私有工具会报「无法渲染」。
+    assert.equal((status?._meta?.ui as { resourceUri?: string })?.resourceUri, undefined);
     // 测试卡片要单独再开一个开关。
     assert.equal(tools.some((tool) => tool.name === "atlas_card_selftest"), false);
   } finally {
@@ -307,6 +310,13 @@ test("卡片前端：优先读 _meta 里的卡片数据，没有就从 structure
     "transfer_pending"
   );
   assert.equal(cardFromToolResult({ content: [] }), undefined);
+});
+
+test("卡片页面不带 Referer 请求媒体：宿主沙箱域名会被存储防盗链 403", () => {
+  // 2026-10-27 实测：static.atlascloud.ai 的图片和 atlas-media 桶对 Referer
+  // *.web-sandbox.oaiusercontent.com 回 403，不带 Referer 回 200。
+  const html = readFileSync(new URL("../ui/generation-card/index.html", import.meta.url), "utf8");
+  assert.match(html, /<meta name="referrer" content="no-referrer"/);
 });
 
 test("卡片前端：金额、任务 ID、单张价的格式", () => {

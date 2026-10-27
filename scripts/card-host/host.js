@@ -14,7 +14,59 @@ const VARIANTS = [
   "canceled",
   "blocked",
   "expired",
+  "quote",
+  "quote_partial",
+  "quote_unpriced",
+  "quote_expired",
+  "quote_low_balance",
+  "history",
 ];
+
+// 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），
+// 卡片点 Generate 时按场景回「已提交」、「报价过期」或「余额不足」。
+const QUOTE_MOCKS = {
+  "quote-submit": "submit",
+  "quote-expires": "expired",
+  "quote-no-balance": "balance",
+  "quote-fail-retry": "fail",
+};
+
+function mockQuoteCaller(outcome) {
+  let polls = 0;
+  const unsample = (result, overrides = {}) => {
+    const card = { ...result._meta["atlascloud/card"], ...overrides };
+    delete card.sample;
+    return { ...result, _meta: { "atlascloud/card": card } };
+  };
+  return async (name, args) => {
+    if (name === "atlas_card_selftest" || (name === "atlas_generate_video" && !args.confirmed)) {
+      if (name === "atlas_generate_video") log("      mock re-quote", JSON.stringify({ idempotency_key: args.idempotency_key, params: args.params }));
+      return unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
+    }
+    if (name === "atlas_generate_video") {
+      log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
+      await new Promise((r) => setTimeout(r, 1200));
+      if (outcome === "expired") {
+        return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
+      }
+      if (outcome === "balance") {
+        return { isError: true, content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing" }] };
+      }
+      // 提交结果带上 retry（服务端包装层会这么给），失败后卡片用它重新报价。
+      return unsample(await callTool("atlas_card_selftest", { variant: "running" }), {
+        prediction_id: "mock_quote",
+        retry: { tool: "atlas_generate_video", arguments: { model: args.model, params: args.params } },
+      });
+    }
+    if (name === "atlas_card_status") {
+      polls += 1;
+      await new Promise((r) => setTimeout(r, 1500));
+      const done = outcome === "fail" ? "failed" : "video";
+      return unsample(await callTool("atlas_card_selftest", { variant: polls < 2 ? "running" : done }), { prediction_id: "mock_quote" });
+    }
+    return callTool(name, args);
+  };
+}
 
 const $ = (selector) => document.querySelector(selector);
 const logEl = $("#log");
@@ -97,20 +149,19 @@ async function mountCard(slot, tool, args, caller = callTool) {
   iframe.className = "card-frame";
   slot.replaceChildren(iframe);
 
+  const hostContext = {
+    theme: s.theme,
+    platform: "web",
+    displayMode: "inline",
+    availableDisplayModes: ["inline", "fullscreen"],
+    locale: "en-US",
+    containerDimensions: { maxWidth: s.width },
+  };
   const bridge = new AppBridge(
     null,
     { name: s.host === "claude" ? "Claude" : "ChatGPT", version: "1.0.0" },
-    { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} } },
-    {
-      hostContext: {
-        theme: s.theme,
-        platform: "web",
-        displayMode: "inline",
-        availableDisplayModes: ["inline"],
-        locale: "en-US",
-        containerDimensions: { maxWidth: s.width },
-      },
-    }
+    { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} }, updateModelContext: { text: {} } },
+    { hostContext }
   );
   bridge.onsizechange = ({ height }) => {
     if (height) iframe.style.height = `${Math.ceil(height)}px`;
@@ -121,6 +172,14 @@ async function mountCard(slot, tool, args, caller = callTool) {
     log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result.isError ? "error" : "?"));
     return result;
   };
+  // 全屏：把这张卡的外框放大到 720 宽，再告诉卡片现在是全屏。
+  bridge.onrequestdisplaymode = async ({ mode }) => {
+    log("card → display mode", mode);
+    const pane = slot.closest(".chat");
+    if (pane) pane.style.width = mode === "fullscreen" ? "748px" : "";
+    bridge.setHostContext({ ...hostContext, displayMode: mode });
+    return { mode };
+  };
   bridge.onopenlink = async ({ url }) => {
     log("card → open link", url);
     window.open(url, "_blank", "noopener");
@@ -128,6 +187,10 @@ async function mountCard(slot, tool, args, caller = callTool) {
   };
   bridge.ondownloadfile = async ({ contents }) => {
     log("card → download", contents.map((c) => c.uri ?? c.resource?.uri));
+    return {};
+  };
+  bridge.onupdatemodelcontext = async (params) => {
+    log("card → model context", (params.content ?? []).map((c) => c.text ?? c.type).join(" "));
     return {};
   };
   bridge.onmessage = async (params) => {
@@ -178,12 +241,18 @@ async function renderAll() {
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: id }));
   }
   const only = $("#variant").value;
+  for (const [label, outcome] of Object.entries(QUOTE_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_generate_video", { model: "bytedance/seedance-2.5/text-to-video", idempotency_key: "mock-key" }, mockQuoteCaller(outcome)));
+  }
   if (!only || only === "poll") {
     const pane = hostFrame("mock · running → refresh → result");
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
   }
-  for (const variant of only ? (only === "poll" ? [] : [only]) : VARIANTS) {
+  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS ? [] : [only]) : VARIANTS) {
     const pane = hostFrame(`atlas_card_selftest · ${variant}`);
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
@@ -192,7 +261,7 @@ async function renderAll() {
 }
 
 const variantSelect = $("#variant");
-for (const variant of ["poll", ...VARIANTS]) {
+for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...VARIANTS]) {
   const option = document.createElement("option");
   option.value = variant;
   option.textContent = variant;

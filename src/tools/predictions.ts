@@ -8,6 +8,9 @@ import {
   type HistoryItem,
   type HistoryResponse,
 } from "../response-schemas.js";
+import { generationCardEnabled } from "../apps/generation-card.js";
+import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
+import { generationToolCardMeta } from "../apps/generation-quote.js";
 
 // 和目录里的模型 ID 同形：厂商/名字/变体，只放这几类字符。
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
@@ -149,6 +152,7 @@ Notes:
         ),
       },
       annotations: toolAnnotations("atlas_list_predictions"),
+      ...generationToolCardMeta(),
     },
     async ({ page, size, state, model, model_prefix }) => {
       try {
@@ -188,7 +192,13 @@ Notes:
           "Use atlas_get_prediction with a prediction_id for the full record. Failed tasks were not billed."
         );
 
+        // 卡片打开时，结果显示成历史列表卡（能展开全屏、筛选、点开单条）。
+        const history = generationCardEnabled()
+          ? await historyCardData(result.data.items, predictions, { page, size, total, hasMore, state })
+          : undefined;
+
         return {
+          ...(history ? { _meta: { [HISTORY_META_KEY]: history } } : {}),
           structuredContent: { total, page, size, has_more: hasMore, predictions },
           content: [{ type: "text", text: lines.join("\n") }],
         };

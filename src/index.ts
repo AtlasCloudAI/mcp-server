@@ -13,12 +13,14 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createAtlasCloudServer } from "./server.js";
+import { prefetchCardCatalog } from "./apps/generation-card.js";
 
 // Start stdio transport
 async function main(): Promise<void> {
   const server = createAtlasCloudServer("stdio");
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  prefetchCardCatalog();
   console.error("Atlas Cloud MCP Server running via stdio");
 }
 

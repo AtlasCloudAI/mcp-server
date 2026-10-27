@@ -47,7 +47,7 @@ const ICON_FILE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8
 
 type Child = Node | string | null | undefined | false;
 
-function h<K extends keyof HTMLElementTagNameMap>(
+export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   props: Record<string, unknown> = {},
   ...children: Child[]
@@ -70,7 +70,7 @@ function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
-function button(
+export function button(
   label: string,
   variant: "primary" | "secondary",
   onClick: () => void,
@@ -88,7 +88,7 @@ function button(
   );
 }
 
-function badge(label: string, opts: { spinner?: boolean; danger?: boolean } = {}): HTMLElement {
+export function badge(label: string, opts: { spinner?: boolean; danger?: boolean } = {}): HTMLElement {
   return h(
     "span",
     { class: `badge${opts.danger ? " danger" : ""}` },
@@ -97,11 +97,11 @@ function badge(label: string, opts: { spinner?: boolean; danger?: boolean } = {}
   );
 }
 
-function head(title: string, badgeEl: HTMLElement | null, large = false): HTMLElement {
+export function head(title: string, badgeEl: HTMLElement | null, large = false): HTMLElement {
   return h("div", { class: "head" }, h("p", { class: large ? "title-lg" : "title" }, title), badgeEl);
 }
 
-function row(label: string, value: string, opts: { mono?: boolean; title?: string; elapsedFrom?: string } = {}): HTMLElement {
+export function row(label: string, value: string, opts: { mono?: boolean; title?: string; elapsedFrom?: string } = {}): HTMLElement {
   return h(
     "div",
     { class: "row" },
@@ -204,12 +204,13 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
     head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Failed", { danger: true })),
     h("p", { class: "desc" }, `The model couldn't finish ${what}. You weren't charged.`),
     h("div", { class: "rows" }, ...rows),
-    opts.canMessage
+    // 有原参数时 Try again 直接重新报价，只要宿主允许调工具；否则要能发消息。
+    opts.canMessage || (card.retry && opts.canRefresh)
       ? h(
           "div",
           { class: "actions" },
           button("Try again", "primary", actions.tryAgain),
-          button("Switch model", "secondary", actions.switchModel)
+          opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
         )
       : null,
     notice(opts)

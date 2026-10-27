@@ -34,6 +34,10 @@ import {
   idempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
 
 export function registerVideoTools(server: McpServer): void {
   server.registerTool(
@@ -77,8 +81,9 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_video"),
+      ...generationToolCardMeta(),
     },
-    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
+    withGenerationCard(server, "atlas_generate_video", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Video",
@@ -196,6 +201,6 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 }

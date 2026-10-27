@@ -34,6 +34,10 @@ import {
   idempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
 
 export function registerImageTools(server: McpServer): void {
   server.registerTool(
@@ -73,8 +77,9 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_image"),
+      ...generationToolCardMeta(),
     },
-    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
+    withGenerationCard(server, "atlas_generate_image", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
         const preparation = await prepareGeneration(model, params, {
           expectedType: "Image",
@@ -196,6 +201,6 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 }

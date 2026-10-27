@@ -39,6 +39,10 @@ import {
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { predictionResponseSchema } from "../response-schemas.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
 
 type GenType = "Image" | "Video" | "Audio";
 
@@ -259,8 +263,9 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_quick_generate"),
+      ...generationToolCardMeta(),
     },
-    async ({
+    withGenerationCard(server, "atlas_quick_generate", async ({
       idempotency_key,
       confirmation_token,
       confirmed,
@@ -471,6 +476,6 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 }

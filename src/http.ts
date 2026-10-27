@@ -28,6 +28,7 @@ import {
   type UploadTicketStore,
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
+import { prefetchCardCatalog } from "./apps/generation-card.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
   JwtAccessTokenVerifier,
@@ -383,6 +384,7 @@ export async function startHttpServer(
       const listening = app.listen(config.port, config.listenHost, () => resolve(listening));
       listening.once("error", reject);
     });
+    prefetchCardCatalog();
   } catch (error) {
     readiness.stop();
     await Promise.allSettled([

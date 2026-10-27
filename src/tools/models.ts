@@ -13,6 +13,7 @@ import {
   toModelSummary,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import { formatWorkflowList, getWorkflowTemplates } from "../services/workflow-catalog.js";
 
 export function registerModelTools(server: McpServer): void {
   // List all available models
@@ -23,12 +24,14 @@ export function registerModelTools(server: McpServer): void {
       description: `List available models on Atlas Cloud, optionally filtered by type, in bounded pages.
 
 Args:
-  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio"
+  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio", "Workflow"
   - limit (integer, optional): Models per page, 1-100 (default 50)
   - offset (integer, optional): Zero-based result offset (default 0)
 
 Returns:
   Markdown-formatted list of models grouped by type, including model ID, description, provider, and pricing.
+
+type="Workflow" lists Atlas Cloud's ready-made marketing workflows (product ad images, UGC ads, brand TVC, virtual try-on, listing image sets, A+ content, apparel photos, food motion, and cloning a reference image or video with your own product) with each one's model ID, category, required inputs and options. They run with atlas_generate_image or atlas_generate_video like any other model.
 
 Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Audio-type models (filter with type="Audio") include text-to-speech / TTS, music generation (e.g., Suno, MiniMax Music), and speech-to-text / ASR (e.g., Seed ASR). Lipsync / talking-avatar models are Video-type models.
 
@@ -37,12 +40,13 @@ Examples:
   - type="Image" -> list only image generation models (includes 3D)
   - type="Video" -> list only video generation models (includes lipsync / talking-avatar)
   - type="Text" -> list only LLM/text models
-  - type="Audio" -> list only audio models (TTS, music generation, speech-to-text/ASR)`,
+  - type="Audio" -> list only audio models (TTS, music generation, speech-to-text/ASR)
+  - type="Workflow" -> list ready-made marketing workflows (ads, UGC, try-on, e-commerce images)`,
       inputSchema: {
         type: z
-          .enum(["Text", "Image", "Video", "Audio"])
+          .enum(["Text", "Image", "Video", "Audio", "Workflow"])
           .optional()
-          .describe("Filter by model type: Text, Image, Video, or Audio"),
+          .describe("Filter by model type: Text, Image, Video, Audio, or Workflow (ready-made marketing workflows)"),
         limit: modelPageLimitSchema,
         offset: modelPageOffsetSchema,
       },
@@ -51,6 +55,35 @@ Examples:
     },
     async ({ type, limit, offset }) => {
       try {
+        if (type === "Workflow") {
+          const templates = await getWorkflowTemplates();
+          const page = templates.slice(offset, offset + limit);
+          return {
+            structuredContent: {
+              filter_type: type,
+              count: page.length,
+              total_count: templates.length,
+              offset,
+              has_more: offset + page.length < templates.length,
+              models: page.map((template) => ({
+                model_id: template.model,
+                display_name: template.nameZh ? `${template.name} (${template.nameZh})` : template.name,
+                type: "Workflow",
+                provider: "Atlas Cloud",
+                ...(template.category ? { profile: `${template.modality} · ${template.category}` } : {}),
+              })),
+            },
+            content: [
+              {
+                type: "text",
+                text:
+                  page.length > 0
+                    ? formatWorkflowList(page, templates.length, offset)
+                    : `No workflows at offset ${offset}. There are ${templates.length} workflows.`,
+              },
+            ],
+          };
+        }
         const models = await getModels();
         const filtered = type
           ? models.filter((model) => model.type === type)

@@ -19,6 +19,7 @@ const VARIANTS = [
   "quote_unpriced",
   "quote_expired",
   "quote_low_balance",
+  "history",
 ];
 
 // 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），
@@ -27,6 +28,7 @@ const QUOTE_MOCKS = {
   "quote-submit": "submit",
   "quote-expires": "expired",
   "quote-no-balance": "balance",
+  "quote-fail-retry": "fail",
 };
 
 function mockQuoteCaller(outcome) {
@@ -38,6 +40,7 @@ function mockQuoteCaller(outcome) {
   };
   return async (name, args) => {
     if (name === "atlas_card_selftest" || (name === "atlas_generate_video" && !args.confirmed)) {
+      if (name === "atlas_generate_video") log("      mock re-quote", JSON.stringify({ idempotency_key: args.idempotency_key, params: args.params }));
       return unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
     }
     if (name === "atlas_generate_video") {
@@ -49,12 +52,17 @@ function mockQuoteCaller(outcome) {
       if (outcome === "balance") {
         return { isError: true, content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing" }] };
       }
-      return unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+      // 提交结果带上 retry（服务端包装层会这么给），失败后卡片用它重新报价。
+      return unsample(await callTool("atlas_card_selftest", { variant: "running" }), {
+        prediction_id: "mock_quote",
+        retry: { tool: "atlas_generate_video", arguments: { model: args.model, params: args.params } },
+      });
     }
     if (name === "atlas_card_status") {
       polls += 1;
       await new Promise((r) => setTimeout(r, 1500));
-      return unsample(await callTool("atlas_card_selftest", { variant: polls < 2 ? "running" : "video" }), { prediction_id: "mock_quote" });
+      const done = outcome === "fail" ? "failed" : "video";
+      return unsample(await callTool("atlas_card_selftest", { variant: polls < 2 ? "running" : done }), { prediction_id: "mock_quote" });
     }
     return callTool(name, args);
   };
@@ -141,20 +149,19 @@ async function mountCard(slot, tool, args, caller = callTool) {
   iframe.className = "card-frame";
   slot.replaceChildren(iframe);
 
+  const hostContext = {
+    theme: s.theme,
+    platform: "web",
+    displayMode: "inline",
+    availableDisplayModes: ["inline", "fullscreen"],
+    locale: "en-US",
+    containerDimensions: { maxWidth: s.width },
+  };
   const bridge = new AppBridge(
     null,
     { name: s.host === "claude" ? "Claude" : "ChatGPT", version: "1.0.0" },
-    { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} } },
-    {
-      hostContext: {
-        theme: s.theme,
-        platform: "web",
-        displayMode: "inline",
-        availableDisplayModes: ["inline"],
-        locale: "en-US",
-        containerDimensions: { maxWidth: s.width },
-      },
-    }
+    { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} }, updateModelContext: { text: {} } },
+    { hostContext }
   );
   bridge.onsizechange = ({ height }) => {
     if (height) iframe.style.height = `${Math.ceil(height)}px`;
@@ -165,6 +172,14 @@ async function mountCard(slot, tool, args, caller = callTool) {
     log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result.isError ? "error" : "?"));
     return result;
   };
+  // 全屏：把这张卡的外框放大到 720 宽，再告诉卡片现在是全屏。
+  bridge.onrequestdisplaymode = async ({ mode }) => {
+    log("card → display mode", mode);
+    const pane = slot.closest(".chat");
+    if (pane) pane.style.width = mode === "fullscreen" ? "748px" : "";
+    bridge.setHostContext({ ...hostContext, displayMode: mode });
+    return { mode };
+  };
   bridge.onopenlink = async ({ url }) => {
     log("card → open link", url);
     window.open(url, "_blank", "noopener");
@@ -172,6 +187,10 @@ async function mountCard(slot, tool, args, caller = callTool) {
   };
   bridge.ondownloadfile = async ({ contents }) => {
     log("card → download", contents.map((c) => c.uri ?? c.resource?.uri));
+    return {};
+  };
+  bridge.onupdatemodelcontext = async (params) => {
+    log("card → model context", (params.content ?? []).map((c) => c.text ?? c.type).join(" "));
     return {};
   };
   bridge.onmessage = async (params) => {

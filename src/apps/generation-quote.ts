@@ -98,15 +98,16 @@ export function generationResultCard(
   const modelName = typeof content.model_name === "string" ? content.model_name : undefined;
   const modelType = typeof content.kind === "string" ? KIND_TYPE[content.kind] : undefined;
 
+  const callArgs = Object.fromEntries(
+    Object.entries(args).filter(([name]) => !CONFIRMATION_FIELDS.has(name))
+  );
+
   if (content.status === "confirmation_required") {
     const token = content.confirmation_token;
     const key = content.idempotency_key;
     if (typeof token !== "string" || typeof key !== "string") return undefined;
     const validSeconds = positiveNumber(content.confirmation_valid_seconds);
     const estimate = typeof content.estimated_cost_usd === "number" ? content.estimated_cost_usd : undefined;
-    const callArgs = Object.fromEntries(
-      Object.entries(args).filter(([name]) => !CONFIRMATION_FIELDS.has(name))
-    );
     // 图片、视频、音频工具的参数在 params 里；快速生成直接平铺在参数上。
     const params = record(args.params) ?? callArgs;
     return {
@@ -139,17 +140,20 @@ export function generationResultCard(
     const outputs = Array.isArray(content.outputs)
       ? content.outputs.filter((u): u is string => typeof u === "string")
       : [];
-    return buildGenerationCardData({
-      predictionId,
-      // 同步出结果的模型直接给作品卡；其余先显示生成中，卡片自己刷新。
-      status: outputs.length > 0 ? "completed" : "processing",
-      outputs,
-      transferPending: false,
-      modelId,
-      modelName,
-      modelType,
-      createdAt: new Date().toISOString(),
-    });
+    return {
+      ...buildGenerationCardData({
+        predictionId,
+        // 同步出结果的模型直接给作品卡；其余先显示生成中，卡片自己刷新。
+        status: outputs.length > 0 ? "completed" : "processing",
+        outputs,
+        transferPending: false,
+        modelId,
+        modelName,
+        modelType,
+        createdAt: new Date().toISOString(),
+      }),
+      retry: { tool, arguments: callArgs },
+    };
   }
   return undefined;
 }

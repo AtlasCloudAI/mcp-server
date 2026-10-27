@@ -45,6 +45,7 @@ export interface CardData {
   media_expired?: boolean;
   sample?: boolean;
   quote?: QuoteInfo;
+  retry?: { tool: string; arguments: Record<string, unknown> };
 }
 
 export const CARD_META_KEY = "atlascloud/card";
@@ -215,8 +216,20 @@ export function typeLabel(card: CardData): string {
   return first ? KIND_LABEL[first.kind] : "Generation";
 }
 
-export function modelLabel(card: CardData): string {
-  return card.model_name || card.model_id || "Atlas Cloud";
+/**
+ * 目录里查不到名字的模型（比如 atlascloud/workflow/kling-video-effects/korean_baseball）：
+ * 去掉厂商和 atlascloud/workflow 前缀，把 - _ / 换成空格、首字母大写。
+ */
+export function readableModelId(modelId: string): string {
+  const parts = modelId.split("/").filter(Boolean);
+  const rest = parts[0] === "atlascloud" ? parts.slice(parts[1] === "workflow" || parts[1] === "studio" ? 2 : 1) : parts.slice(1);
+  const words = (rest.length > 0 ? rest : parts).join(" ").split(/[\s_-]+/).filter(Boolean);
+  return words.map((word) => (/^v?\d/.test(word) ? word : word[0]!.toUpperCase() + word.slice(1))).join(" ") || modelId;
+}
+
+export function modelLabel(card: Pick<CardData, "model_name" | "model_id">): string {
+  if (card.model_name) return card.model_name;
+  return card.model_id ? readableModelId(card.model_id) : "Atlas Cloud";
 }
 
 /** 美元金额：1 美元以上两位小数（$1.51），以下最多四位、去掉多余的 0（$0.003、$0.2593）。 */

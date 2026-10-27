@@ -8,7 +8,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import { generationApi, headStillServes } from "../services/api-client.js";
-import { findModelByExactId } from "../services/doc-fetcher.js";
+import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
 import {
   completedAtOf,
@@ -95,6 +95,14 @@ const RESOURCE_UI_META = {
   "openai/widgetCSP": { connect_domains: [], resource_domains: MEDIA_DOMAINS },
   "openai/widgetPrefersBorder": false,
 };
+
+/**
+ * 卡片上的模型名来自模型目录，冷启动拉一次要好几秒、超过卡片肯等的 3 秒（第一次查历史就没有名字）。
+ * 远端服务启动时在后台预取一次（目录有 5 分钟缓存），失败也无所谓。
+ */
+export function prefetchCardCatalog(): void {
+  if (generationCardEnabled()) void getModels().catch(() => undefined);
+}
 
 export function registerGenerationCardResource(server: McpServer): void {
   registerAppResource(
@@ -189,6 +197,8 @@ export interface GenerationCardData {
   sample?: boolean;
   /** 只在 state = "quote" 时有。 */
   quote?: QuoteInfo;
+  /** 由生成工具提交的任务：失败后卡片用它重新报价（Try again），不必替用户发消息。 */
+  retry?: { tool: string; arguments: Record<string, unknown> };
 }
 
 const THREE_D_EXTENSIONS = new Set(["glb", "gltf", "obj", "usdz", "fbx", "stl", "ply"]);
@@ -226,7 +236,7 @@ export function openInAtlasUrl(modelId: string | undefined): string {
   return `${SITE_URL}/models/${modelId}`;
 }
 
-function priceOf(raw: unknown): number | undefined {
+export function priceOf(raw: unknown): number | undefined {
   const value = typeof raw === "string" ? Number.parseFloat(raw) : typeof raw === "number" ? raw : NaN;
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -273,9 +283,9 @@ const EXPIRY_CHECK_AFTER_SECONDS = 20 * 60 * 60;
 
 // 模型目录冷启动要拉整份列表（实测十几秒）。卡片上的模型名只是锦上添花，
 // 最多等这么久，拿不到就显示模型 ID，不拖慢查结果本身。
-const MODEL_LOOKUP_TIMEOUT_MS = 3_000;
+export const MODEL_LOOKUP_TIMEOUT_MS = 3_000;
 
-async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+export async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<undefined>((resolve) => {
     timer = setTimeout(() => resolve(undefined), ms);

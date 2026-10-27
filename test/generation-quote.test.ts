@@ -101,7 +101,7 @@ test("快速生成的参数平铺在顶层，也能做出小标签", () => {
 });
 
 test("已提交的结果拼成进度卡；同步出结果的直接是作品卡；认不出的不挂卡", () => {
-  const submitted = generationResultCard("atlas_generate_image", {}, {
+  const submitted = generationResultCard("atlas_generate_image", { idempotency_key: "k", confirmed: true, confirmation_token: "c", model: "black-forest-labs/flux-schnell", params: { prompt: "x" } }, {
     prediction_id: "p1",
     model_id: "black-forest-labs/flux-schnell",
     model_name: "Flux Schnell",
@@ -111,6 +111,11 @@ test("已提交的结果拼成进度卡；同步出结果的直接是作品卡�
   assert.equal(submitted?.state, "running");
   assert.equal(submitted?.prediction_id, "p1");
   assert.equal(submitted?.model_type, "Image");
+  // 失败后卡片用它重新报价：原工具和参数，去掉确认字段。
+  assert.deepEqual(submitted?.retry, {
+    tool: "atlas_generate_image",
+    arguments: { model: "black-forest-labs/flux-schnell", params: { prompt: "x" } },
+  });
 
   const finished = generationResultCard("atlas_generate_image", {}, {
     prediction_id: "p2",

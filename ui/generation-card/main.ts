@@ -11,6 +11,7 @@ import {
 import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
+import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -35,8 +36,20 @@ let renderedKey = "";
 let quoteState: QuoteState = { phase: "ready" };
 let toolArgs: Record<string, unknown> | undefined;
 let quoteTimer: ReturnType<typeof setTimeout> | undefined;
+// 历史列表卡：有它时 card 是「点开的那一条」，没点开时 card 为空、显示列表。
+let history: HistoryView | undefined;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 新的 UUID v4 幂等键。randomUUID 只在安全上下文里有，退回用 getRandomValues 拼。 */
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 function hostCaps() {
   return app.getHostCapabilities() ?? {};
@@ -103,14 +116,19 @@ function diagnostics(): HTMLElement {
 function render(force = false): void {
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
-  const key = JSON.stringify({ card, pendingId, loadError, opts, quoteState });
+  const historyOpts = history ? historyOptions() : undefined;
+  const key = JSON.stringify({ card, pendingId, loadError, opts, quoteState, history, historyOpts });
   if (!force && key === renderedKey) return;
   renderedKey = key;
   let view: HTMLElement;
-  if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
+  if (history && historyOpts && !card && !pendingId) view = renderHistory(history, historyOpts, historyActions);
+  else if (history) view = h2(backLink(closeDetail), card ? renderCard(card, opts, actions) : loadingCard(pendingId));
+  else if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
   else if (card) view = renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
+  // 历史列表全屏时放宽到 720（设计稿全屏视图宽 720），其余照旧 560。
+  root.classList.toggle("wide", historyOpts?.fullscreen === true);
   root.replaceChildren(view);
   if (card?.sample) root.append(diagnostics());
 }
@@ -133,10 +151,12 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   if (!parsed) return false;
   // carry：报价卡确认后把预估价带到进度卡上（服务端提交结果里没有价格）。
   // 之后每次刷新，同一个任务没给价格就沿用手上的，出结果时换成实际扣费。
-  const kept =
-    card && card.prediction_id === parsed.prediction_id && card.price_usd !== undefined
-      ? { price_usd: card.price_usd }
-      : {};
+  // retry（重新报价用的工具和参数）只在提交那次给，刷新结果里没有，同理沿用。
+  const previous = card?.prediction_id === parsed.prediction_id ? card : undefined;
+  const kept = {
+    ...(previous?.price_usd !== undefined ? { price_usd: previous.price_usd } : {}),
+    ...(previous?.retry ? { retry: previous.retry } : {}),
+  };
   const next = { ...kept, ...carry, ...parsed };
   if (parsed.price_usd !== undefined) next.price_usd = parsed.price_usd;
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
@@ -308,7 +328,20 @@ const actions: CardActions = {
     void pollLoop();
   },
   tryAgain() {
-    sendUserMessage("That generation failed. Please try it again with the same model and settings.");
+    // 知道原来的工具和参数：用新的幂等键再报一次价（不扣费），卡片变回报价卡等用户确认。
+    // 不知道（比如从查结果进来的卡片）就请模型重试。
+    const retry = card?.retry;
+    if (!retry || card?.sample || hostCaps().serverTools === undefined) {
+      sendUserMessage("That generation failed. Please try it again with the same model and settings.");
+      return;
+    }
+    void app
+      .callServerTool({ name: retry.tool, arguments: { ...retry.arguments, idempotency_key: newIdempotencyKey() } })
+      .then((result) => {
+        if (result.isError || !accept(result)) setNotice("Couldn't get a new quote. Try again in a moment.");
+        else void pollLoop();
+      })
+      .catch(() => setNotice("Couldn't get a new quote. Try again in a moment."));
   },
   switchModel() {
     sendUserMessage("That generation failed. Please suggest a different model for the same request.");
@@ -327,6 +360,98 @@ const quoteActions = createQuoteActions({
   notice: (text) => setNotice(text),
   openUrl: (url) => void openUrl(url),
 });
+
+// ---- 历史列表卡 ----
+
+function h2(...children: HTMLElement[]): HTMLElement {
+  const box = document.createElement("div");
+  box.append(...children);
+  return box;
+}
+
+function historyOptions() {
+  const context = app.getHostContext();
+  return {
+    fullscreen: context?.displayMode === "fullscreen",
+    canExpand: (context?.availableDisplayModes ?? []).includes("fullscreen") && context?.displayMode !== "fullscreen",
+    canQuery: hostCaps().serverTools !== undefined,
+  };
+}
+
+const LIST_TOOL = "atlas_list_predictions";
+
+async function queryHistory(args: { page: number; state?: HistoryFilter }, append: boolean): Promise<void> {
+  if (!history) return;
+  if (history.data.sample) {
+    history = { ...history, error: "This is a sample list, so there is nothing more to load." };
+    render();
+    return;
+  }
+  history = { ...history, loading: true, error: undefined };
+  render();
+  try {
+    const result = await app.callServerTool({
+      name: LIST_TOOL,
+      arguments: { page: args.page, size: history.data.size, ...(args.state ? { state: args.state } : {}) },
+    });
+    const next = result.isError ? undefined : historyFromToolResult(result);
+    if (!next || !history) throw new Error("bad result");
+    history = {
+      loading: false,
+      data: append ? { ...next, items: [...history.data.items, ...next.items] } : next,
+    };
+  } catch {
+    if (history) history = { ...history, loading: false, error: "Couldn't load your generations. Try again in a moment." };
+  }
+  render();
+}
+
+const historyActions = {
+  expand() {
+    void app.requestDisplayMode({ mode: "fullscreen" }).catch(() => undefined);
+  },
+  setFilter(filter: HistoryFilter | undefined) {
+    void queryHistory({ page: 1, state: filter }, false);
+  },
+  loadMore() {
+    if (history) void queryHistory({ page: history.data.page + 1, state: history.data.state }, true);
+  },
+  open(predictionId: string) {
+    void openDetail(predictionId);
+  },
+};
+
+/** 点开一条：先显示「Checking」，再拿到那条的生成卡；还在跑就接着自己刷新。 */
+async function openDetail(predictionId: string): Promise<void> {
+  pendingId = predictionId;
+  card = undefined;
+  if (history) history = { ...history, loading: true };
+  render();
+  try {
+    // 测试卡片里的历史样例：条目号是 selftest_<样例名>，打开对应的测试卡片，不调真实接口。
+    const sample = history?.data.sample === true && predictionId.startsWith("selftest_");
+    const result = sample
+      ? await app.callServerTool({ name: "atlas_card_selftest", arguments: { variant: predictionId.slice("selftest_".length) } })
+      : await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: predictionId } });
+    if (!result.isError && accept(result)) {
+      if (history) history = { ...history, loading: false };
+      render();
+      void pollLoop();
+      return;
+    }
+    throw new Error("bad result");
+  } catch {
+    if (history) history = { ...history, loading: false, error: "Couldn't open that generation. Try again in a moment." };
+    pendingId = undefined;
+    render();
+  }
+}
+
+function closeDetail(): void {
+  card = undefined; // 停掉这一条的轮询
+  pendingId = undefined;
+  render();
+}
 
 function applyContext(context: McpUiHostContext | undefined): void {
   if (!context) return;
@@ -359,6 +484,13 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (params) => {
+  const list = params.isError ? undefined : historyFromToolResult(params);
+  if (list) {
+    history = { data: list, loading: false };
+    card = undefined;
+    render();
+    return;
+  }
   if (params.isError) {
     const text = params.content?.find((c) => c.type === "text");
     loadError = text && "text" in text ? String(text.text).slice(0, 240) : "Atlas Cloud returned an error.";

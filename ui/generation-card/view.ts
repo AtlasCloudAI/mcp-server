@@ -204,12 +204,13 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
     head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Failed", { danger: true })),
     h("p", { class: "desc" }, `The model couldn't finish ${what}. You weren't charged.`),
     h("div", { class: "rows" }, ...rows),
-    opts.canMessage
+    // 有原参数时 Try again 直接重新报价，只要宿主允许调工具；否则要能发消息。
+    opts.canMessage || (card.retry && opts.canRefresh)
       ? h(
           "div",
           { class: "actions" },
           button("Try again", "primary", actions.tryAgain),
-          button("Switch model", "secondary", actions.switchModel)
+          opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
         )
       : null,
     notice(opts)

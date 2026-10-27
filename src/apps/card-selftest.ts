@@ -4,9 +4,12 @@ import {
   CARD_META_KEY,
   type GenerationCardData,
   buildGenerationCardData,
+  cardMediaKind,
+  cardStateOf,
   generationCardToolMeta,
 } from "./generation-card.js";
 import { settingsChips } from "./generation-quote.js";
+import { HISTORY_META_KEY, type HistoryCardData, type HistoryCardItem } from "./history-card.js";
 
 // 测试卡片：不调接口、不花钱，用官网公开的示例素材把生成卡的各个状态渲染出来，
 // 用来在 ChatGPT、Claude 里核对卡片长得对不对。只在 MCP_UI_SELFTEST 打开的环境注册。
@@ -121,7 +124,39 @@ const QUOTE_VARIANTS = {
   quote_low_balance: { estimated: 1.34, partial: false, expired: false, problem: "insufficient_balance" as const },
 } as const;
 
-type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS;
+type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS | "history";
+
+// 历史列表卡样例：条目号 selftest_<样例名>，卡片点开时打开对应的测试卡片。
+function historySample(): HistoryCardData {
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  const entry = (variant: keyof typeof VARIANTS, minutes: number): HistoryCardItem => {
+    const sample = VARIANTS[variant];
+    const first = sample.outputs[0];
+    const state = cardStateOf(sample.status, false);
+    return {
+      prediction_id: `selftest_${variant}`,
+      model_id: sample.model,
+      model_name: sample.name,
+      model_type: sample.type,
+      state,
+      created_at: minutesAgo(minutes),
+      ...(first ? { thumb: { url: first, kind: cardMediaKind(first) } } : {}),
+      outputs: sample.outputs.length,
+      ...(sample.price && state === "succeeded" ? { price_usd: Number.parseFloat(sample.price) } : {}),
+      ...(variant === "failed" ? { error: "Upstream timeout" } : {}),
+    };
+  };
+  const items = [
+    entry("running", 2),
+    entry("video", 25),
+    entry("images", 90),
+    entry("audio", 60 * 20),
+    entry("failed", 60 * 26),
+    entry("workflow", 60 * 50),
+    entry("image", 60 * 75),
+  ];
+  return { view: "history", page: 1, size: 10, total: items.length, has_more: false, items, sample: true };
+}
 
 function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
@@ -161,7 +196,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         "It does not call Atlas Cloud and costs nothing.",
       inputSchema: {
         variant: z
-          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS)] as [Variant, ...Variant[]])
+          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS), "history"] as string[] as [Variant, ...Variant[]])
           .default("image")
           .describe("Which card state to show"),
       },
@@ -169,6 +204,14 @@ export function registerCardSelftestTool(server: McpServer): void {
       _meta: generationCardToolMeta(),
     },
     async ({ variant }) => {
+      if (variant === "history") {
+        const history = historySample();
+        return {
+          _meta: { [HISTORY_META_KEY]: history },
+          structuredContent: { total: history.total, page: 1, size: 10, has_more: false, predictions: [] },
+          content: [{ type: "text", text: "Self-test history card rendered with sample tasks. Nothing was read or billed." }],
+        };
+      }
       if (variant in QUOTE_VARIANTS) {
         const card = quoteSample(variant as keyof typeof QUOTE_VARIANTS);
         return {

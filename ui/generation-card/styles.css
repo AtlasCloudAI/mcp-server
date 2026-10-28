@@ -22,6 +22,8 @@
   --ac-danger-text: var(--color-text-danger, #d03434);
   --ac-success-text: var(--color-text-success, #1a7f37);
   --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 12%, transparent);
+  --ac-warn-text: var(--color-text-warning, #b45309);
+  --ac-warn-bg: color-mix(in srgb, var(--ac-warn-text) 12%, transparent);
   --ac-card-bg: var(--color-background-primary, #ffffff);
   --ac-wave-rest: #c9c9c9;
   --ac-font: var(
@@ -57,6 +59,8 @@
   --ac-danger-text: var(--color-text-danger, #ff8a8a);
   --ac-success-text: var(--color-text-success, #5cc87a);
   --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 18%, transparent);
+  --ac-warn-text: var(--color-text-warning, #f0a35c);
+  --ac-warn-bg: color-mix(in srgb, var(--ac-warn-text) 18%, transparent);
   --ac-card-bg: var(--color-background-primary, #212121);
   --ac-wave-rest: #5a5a5a;
   color-scheme: dark;
@@ -431,6 +435,12 @@ p {
   color: var(--ac-success-text);
 }
 
+/* 设计稿里的浅橙标签：Estimate only、No estimate、Price changed、Re-quote needed、Rate limited。 */
+.badge.warn {
+  background: var(--ac-warn-bg);
+  color: var(--ac-warn-text);
+}
+
 .badge svg {
   width: 12px;
   height: 12px;
@@ -561,6 +571,24 @@ p {
 .quote-price.unavailable {
   font-size: 17px;
   line-height: 22px;
+}
+
+/* 价格变了：旧价划掉、箭头、新价（设计稿 ~~$24.12~~ → $26.40）。 */
+.quote-price .was {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ac-text-3);
+}
+
+.quote-price .arrow {
+  margin: 0 8px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ac-text-3);
+}
+
+.quote-note {
+  margin-top: 2px;
 }
 
 /* ---- 历史列表 ---- */

@@ -4,8 +4,19 @@
 // 不替用户往对话里发「确认」——那句话在 ChatGPT 里会被它自带的生图接走。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type CardData, type QuoteInfo, formatUsd, modelLabel, newIdempotencyKey, typeLabel } from "./card.js";
-import { type ViewOptions, badge, button, h, head, row } from "./view.js";
+import {
+  type CardData,
+  type QuoteInfo,
+  RATE_LIMIT_WAIT_MS,
+  formatClock,
+  formatUsd,
+  isModelUnavailable,
+  isRateLimited,
+  modelLabel,
+  newIdempotencyKey,
+  typeLabel,
+} from "./card.js";
+import { type ViewOptions, badge, button, h, head, retryButton, row } from "./view.js";
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 const CHECK_TOOL = "atlas_card_check_submission";
@@ -16,6 +27,9 @@ const CHECK_BUDGET_MS = 120_000;
 // quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
 // verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
 // canceled：用户在卡里取消了，什么都没提交。
+// price_changed：确认时价格已经变了，卡片重新报了价，等用户按新价再确认。
+// settings_changed：确认令牌和这次请求对不上、重新报价也没成，只能再要一份报价。
+// rate_limited / model_unavailable：提交被拒，原因是限流 / 模型暂时用不了。
 export type QuotePhase =
   | "ready"
   | "quoting"
@@ -23,14 +37,24 @@ export type QuotePhase =
   | "verifying"
   | "expired"
   | "low_balance"
+  | "price_changed"
+  | "settings_changed"
+  | "rate_limited"
+  | "model_unavailable"
   | "uncertain"
   | "canceled"
   | "error";
 
 export interface QuoteState {
   phase: QuotePhase;
-  /** phase = "error" 时显示的原因。 */
+  /** phase = "error" / "model_unavailable" 时的原话。 */
   message?: string;
+  /** low_balance：服务端随报错带回的可用余额（美元）。 */
+  balanceUsd?: number;
+  /** price_changed：用户先前同意的价格。 */
+  previousUsd?: number;
+  /** rate_limited：到这个时刻（毫秒）才放开 Retry。 */
+  retryAt?: number;
 }
 
 export interface QuoteDeps {
@@ -56,6 +80,8 @@ export interface QuoteActions {
    */
   requoteFresh(): void;
   editSettings(): void;
+  /** 模型用不了：请模型换一个。 */
+  switchModel(): void;
   /** 不生成了：卡片收起，告诉模型这一单作废。 */
   cancel(): void;
   /** 再核实一次刚才那一单开没开始。 */
@@ -86,14 +112,32 @@ export function thrownErrorText(error: unknown): string {
   return text.replace(/^Error:\s*/, "").trim().slice(0, 240);
 }
 
+/** 服务端在余额不足的报错后面附的那句 "Available balance: $8.50."（src/apps/generation-quote.ts）。 */
+function balanceIn(text: string): number | undefined {
+  const match = text.match(/available balance:?\s*(-?)\$(\d[\d,]*(?:\.\d+)?)/i);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[2]!.replace(/,/g, ""));
+  return Number.isFinite(value) ? (match[1] ? -value : value) : undefined;
+}
+
 /** 按报错原文决定卡片显示哪种状态。 */
-export function failureState(text: string): QuoteState {
+export function failureState(text: string, now = Date.now()): QuoteState {
   if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
-  if (/insufficient balance|top up/i.test(text)) return { phase: "low_balance" };
+  if (/insufficient balance|top up/i.test(text)) {
+    const balance = balanceIn(text);
+    return balance === undefined ? { phase: "low_balance" } : { phase: "low_balance", balanceUsd: balance };
+  }
   // 提交没拿到确定的回答（服务端那句 "without a confirmed response"），或者防重复扣费的锁说上一次
   // 还没完：可能已经开跑，也可能没有。卡片先自己核实。
   // 上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
   if (/without a confirmed response|still in progress|did not return a prediction id/i.test(text)) return { phase: "verifying" };
+  // 确认令牌和这次请求对不上（src/services/generation-confirmation.ts）。卡片带的参数不会变，
+  // 多半是价格变了：卡片会先按同一个幂等键重新报价，比一比价格（见 createQuoteActions）。
+  if (/does not match this request|confirmation is invalid|no quote was found for these exact arguments/i.test(text)) {
+    return { phase: "settings_changed" };
+  }
+  if (isRateLimited(text)) return { phase: "rate_limited", retryAt: now + RATE_LIMIT_WAIT_MS };
+  if (isModelUnavailable(text)) return { phase: "model_unavailable", message: text };
   return { phase: "error", message: text || undefined };
 }
 
@@ -114,9 +158,35 @@ export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): bo
   return Number.isFinite(at) && at <= now;
 }
 
-export function initialQuoteState(card: CardData): QuoteState {
-  if (card.quote?.problem === "insufficient_balance") return { phase: "low_balance" };
-  return { phase: quoteExpired(card.quote) ? "expired" : "ready" };
+export function initialQuoteState(card: CardData, now = Date.now()): QuoteState {
+  const quote = card.quote;
+  // 测试卡片直接显示某个问题状态。
+  switch (quote?.problem) {
+    case "insufficient_balance":
+      return quote.sample_balance_usd !== undefined
+        ? { phase: "low_balance", balanceUsd: quote.sample_balance_usd }
+        : { phase: "low_balance" };
+    case "price_changed":
+      return quote.sample_previous_usd !== undefined
+        ? { phase: "price_changed", previousUsd: quote.sample_previous_usd }
+        : { phase: "price_changed" };
+    case "settings_changed":
+      return { phase: "settings_changed" };
+    case "rate_limited":
+      return { phase: "rate_limited", retryAt: now + RATE_LIMIT_WAIT_MS };
+    case "model_unavailable":
+      return { phase: "model_unavailable" };
+  }
+  return { phase: quoteExpired(quote) ? "expired" : "ready" };
+}
+
+/** 重新报价拿到的新价格和用户先前同意的不一样（按显示出来的金额比，不比浮点尾数）。 */
+export function priceChanged(approvedUsd: number | undefined, fresh: QuoteInfo | undefined): boolean {
+  return (
+    approvedUsd !== undefined &&
+    fresh?.estimated_usd !== undefined &&
+    formatUsd(approvedUsd) !== formatUsd(fresh.estimated_usd)
+  );
 }
 
 export function createQuoteActions(deps: QuoteDeps): QuoteActions {
@@ -124,6 +194,8 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   /** 最近一次带确认令牌提交的时间，核实时告诉服务端从哪儿往后找。 */
   let submittedAt: string | undefined;
   let checking = false;
+  /** 令牌对不上后重新报来的那份报价：再对不上就不再自动重报，交给用户。 */
+  let repricedQuote: QuoteInfo | undefined;
 
   /** 服务端核实接口说开始了：接着显示进度。 */
   function startedFrom(result: unknown, quote: QuoteInfo): boolean {
@@ -177,18 +249,30 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
     }
   }
 
-  function fail(state: QuoteState): void {
+  function fail(quote: QuoteInfo, confirmed: boolean, state: QuoteState): void {
+    // 确认令牌对不上：这一单没提交。按同一个幂等键重新报价（不扣费），价格变了就请用户按新价再确认。
+    if (confirmed && state.phase === "settings_changed" && quote !== repricedQuote) {
+      void call({ approvedUsd: quote.estimated_usd, repricing: true });
+      return;
+    }
     if (state.phase === "verifying") void verify();
     else deps.setState(state);
   }
 
-  async function call(withConfirmation: boolean, freshKey = false): Promise<void> {
+  /**
+   * 调一次生成工具。confirm：带确认令牌提交；freshKey：换新的幂等键再报价；
+   * repricing：令牌对不上之后的重新报价，approvedUsd 是用户先前同意的价格。
+   */
+  async function call(
+    opts: { confirm?: boolean; freshKey?: boolean; repricing?: boolean; approvedUsd?: number } = {}
+  ): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote) return;
     if (sample()) {
       deps.notice("This is a sample card, so nothing was submitted.");
       return;
     }
+    const withConfirmation = opts.confirm === true;
     deps.setState({ phase: withConfirmation ? "submitting" : "quoting" });
     if (withConfirmation) submittedAt = new Date().toISOString();
     try {
@@ -196,12 +280,12 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         name: quote.tool,
         arguments: {
           ...quote.arguments,
-          idempotency_key: freshKey ? newIdempotencyKey() : quote.idempotency_key,
+          idempotency_key: opts.freshKey ? newIdempotencyKey() : quote.idempotency_key,
           ...(withConfirmation ? { confirmation_token: quote.confirmation_token, confirmed: true } : {}),
         },
       });
       if (result.isError) {
-        fail(failureState(errorText(result)));
+        fail(quote, withConfirmation, failureState(errorText(result)));
         return;
       }
       const before = deps.card();
@@ -212,7 +296,18 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       }
       const after = deps.card();
       if (after?.state === "quote") {
-        // 又拿到一份报价（重新报价，或服务端要求重新确认）：回到待确认。
+        // 又拿到一份报价（重新报价，或服务端要求重新确认）：回到待确认；令牌对不上之后重报的，
+        // 价格变了就显示新旧价格。
+        if (opts.repricing) {
+          repricedQuote = after.quote;
+          if (priceChanged(opts.approvedUsd, after.quote)) {
+            deps.setState({ phase: "price_changed", previousUsd: opts.approvedUsd });
+            return;
+          }
+          deps.setState({ phase: "ready" });
+          deps.notice("The quote was refreshed. Nothing was charged. Approve it again to generate.");
+          return;
+        }
         deps.setState({ phase: "ready" });
         return;
       }
@@ -221,14 +316,14 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       deps.startPolling();
     } catch (error) {
       // 不能说「什么都没提交」：请求可能已经到了服务端（ChatGPT 把工具报错也当成调用失败）。
-      fail(thrownFailureState(error));
+      fail(quote, withConfirmation, thrownFailureState(error));
     }
   }
 
   return {
-    confirm: () => void call(true),
-    requote: () => void call(false),
-    requoteFresh: () => void call(false, true),
+    confirm: () => void call({ confirm: true }),
+    requote: () => void call(),
+    requoteFresh: () => void call({ freshKey: true }),
     editSettings() {
       if (sample()) {
         deps.notice("This is a sample card, so nothing was sent.");
@@ -236,6 +331,18 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       }
       deps.app
         .sendMessage({ role: "user", content: [{ type: "text", text: "Before generating, I'd like to change the settings." }] })
+        .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
+    },
+    switchModel() {
+      if (sample()) {
+        deps.notice("This is a sample card, so nothing was sent.");
+        return;
+      }
+      deps.app
+        .sendMessage({
+          role: "user",
+          content: [{ type: "text", text: `${modelLabel(deps.card() ?? {})} is unavailable right now. Please suggest a different model for the same request.` }],
+        })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
     cancel() {
@@ -290,6 +397,25 @@ function chips(settings: string[]): HTMLElement | null {
   return h("div", { class: "chips" }, ...settings.map((label) => h("span", { class: "chip" }, label)));
 }
 
+/** 「报价 10 分钟内有效」里的时长。 */
+function validFor(seconds: number | undefined): string | null {
+  if (!seconds || seconds < 60) return null;
+  if (seconds % 3600 === 0) return seconds === 3600 ? "1 hour" : `${seconds / 3600} hours`;
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+/** 有效期倒计时（每秒由 tickTimers 走字）；拿不到失效时间就不显示。 */
+function countdown(quote: QuoteInfo | undefined, now = Date.now()): HTMLElement | null {
+  const at = quote?.expires_at ? Date.parse(quote.expires_at) : NaN;
+  if (!Number.isFinite(at) || at <= now) return null;
+  return h("span", { "data-countdown-to": quote!.expires_at }, formatClock((at - now) / 1000));
+}
+
+function signedUsd(value: number): string {
+  return value < 0 ? `-${formatUsd(-value)}` : formatUsd(value);
+}
+
 export function renderQuoteCard(
   card: CardData,
   state: QuoteState,
@@ -301,29 +427,111 @@ export function renderQuoteCard(
   const subtitle = h("p", { class: "desc", style: "margin-top:2px" }, `${modelLabel(card)} · ${typeLabel(card)}`);
 
   if (state.phase === "expired") {
+    const duration = validFor(quote?.valid_seconds);
     return h(
       "section",
       { class: "card" },
       head("Quote expired", badge("Expired")),
-      h("p", { class: "desc" }, "Quotes are valid for a few minutes. Nothing was charged."),
-      quote ? h("div", { class: "actions" }, button("Get new quote", "primary", actions.requote)) : null,
+      h(
+        "p",
+        { class: "desc" },
+        duration ? `This quote expired after ${duration}. Nothing was charged.` : "This quote expired. Nothing was charged."
+      ),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requote)) : null,
       notice(opts)
     );
   }
 
   if (state.phase === "low_balance") {
+    const rows = [
+      price ? row("Estimated cost", price) : null,
+      state.balanceUsd !== undefined ? row("Balance", signedUsd(state.balanceUsd)) : null,
+    ].filter((el): el is HTMLElement => el !== null);
     return h(
       "section",
       { class: "card" },
       head("Not enough balance", badge("Low balance", { danger: true })),
       subtitle,
-      price ? h("div", { class: "rows" }, row("Cost", price)) : null,
+      rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
       h("p", { class: "desc" }, "Top up your Atlas Cloud balance or choose cheaper settings. Nothing was charged."),
       h(
         "div",
         { class: "actions" },
         button("Top up", "primary", actions.topUp),
+        opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null,
+        // 充值回来接着生成：只报价、不扣费，用户还要再确认一次。
         quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "price_changed") {
+    const was = state.previousUsd !== undefined ? formatUsd(state.previousUsd) : null;
+    return h(
+      "section",
+      { class: "card" },
+      head("Price changed", badge("Price changed", { warn: true })),
+      subtitle,
+      chips(quote?.settings ?? []),
+      h(
+        "p",
+        { class: "quote-price" },
+        was ? h("s", { class: "was" }, was) : null,
+        was ? h("span", { class: "arrow", "aria-hidden": "true" }, "→") : null,
+        price ?? "Cost unavailable"
+      ),
+      h("p", { class: "desc" }, "The price changed after you approved. Nothing was charged yet."),
+      h(
+        "div",
+        { class: "actions" },
+        button(price ? `Generate · ${price}` : "Generate anyway", "primary", actions.confirm),
+        button("Cancel", "secondary", actions.cancel)
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "settings_changed") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Settings changed", badge("Re-quote needed", { warn: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Settings changed after this quote. Get a new quote to continue. Nothing was charged."),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "rate_limited") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Too many requests", badge("Rate limited", { warn: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Atlas Cloud is limiting requests right now. Nothing was charged. Try again in a moment."),
+      // 被拒的那一单用过的幂等键不能再用：Retry 换新键重新报价，用户再确认一次。
+      quote ? h("div", { class: "actions" }, retryButton(state.retryAt ?? Date.now(), actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "model_unavailable") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Model unavailable", badge("Unavailable", { danger: true })),
+      h(
+        "p",
+        { class: "desc", title: state.message },
+        `${modelLabel(card)} is temporarily unavailable. Nothing was charged.`
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        quote ? button("Retry", "primary", actions.requoteFresh) : null,
+        opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
       ),
       notice(opts)
     );
@@ -392,25 +600,39 @@ export function renderQuoteCard(
   const status = busy
     ? badge(submitting ? "Submitting" : "Getting quote", { spinner: true })
     : price === null
-      ? badge("No estimate")
+      ? badge("No estimate", { warn: true })
       : quote?.partial
-        ? badge("Partial estimate")
+        ? badge("Estimate only", { warn: true })
         : badge("Needs approval");
 
+  // 设计稿：价格下面一行「Estimated · valid for 9:42」；提交中只写 Estimated。
+  const timer = busy ? null : countdown(quote);
+  const validity = timer ? [" · valid for ", timer] : [];
   const amount =
     price === null
       ? [
           h("p", { class: "quote-price unavailable" }, "Cost unavailable"),
-          h("p", { class: "desc" }, "You'll be charged at the model's standard rate."),
+          h("p", { class: "desc" }, "You'll be charged the model's standard rate.", ...validity),
         ]
       : [
           h("p", { class: "quote-price" }, quote?.partial ? `≈ ${price}` : price),
-          quote?.partial ? h("p", { class: "note" }, "Part of the price couldn't be worked out, so the charge may be higher.") : null,
+          h(
+            "p",
+            { class: "note quote-note" },
+            quote?.partial ? "Some settings can't be priced exactly. The final cost may differ" : "Estimated",
+            ...validity
+          ),
         ];
 
   // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
   const canConfirm = quote !== undefined && quote.tool !== "";
-  const generateLabel = busy ? (submitting ? "Submitting…" : "Getting quote…") : price === null ? "Generate anyway" : `Generate · ${price}`;
+  const generateLabel = busy
+    ? submitting
+      ? "Submitting…"
+      : "Getting quote…"
+    : price === null
+      ? "Generate anyway"
+      : `Generate · ${quote?.partial ? "≈ " : ""}${price}`;
   return h(
     "section",
     { class: "card" },

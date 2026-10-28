@@ -9,12 +9,20 @@ import {
   CARD_GENERATION_TOOLS,
   generationResultCard,
   settingsChips,
+  withAvailableBalance,
   withGenerationCard,
 } from "../src/apps/generation-quote.js";
-import { cardFromToolResult, formatUsd } from "../ui/generation-card/card.js";
+import {
+  RATE_LIMIT_WAIT_MS,
+  cardFromToolResult,
+  formatUsd,
+  isModelUnavailable,
+  isRateLimited,
+} from "../ui/generation-card/card.js";
 import {
   failureState,
   initialQuoteState,
+  priceChanged,
   quoteExpired,
   thrownErrorText,
   thrownFailureState,
@@ -245,7 +253,8 @@ test("卡片前端：ChatGPT 把工具报错变成调用失败时，取出原文
     );
   const notRouted = thrownErrorText(wrap("Error: model[black-forest-labs/flux-schnell] router not found"));
   assert.equal(notRouted, "model[black-forest-labs/flux-schnell] router not found");
-  assert.deepEqual(failureState(notRouted), { phase: "error", message: notRouted });
+  // 网关没有这个模型的路由：设计稿「模型暂时不可用」（Retry / Switch model）。
+  assert.deepEqual(failureState(notRouted), { phase: "model_unavailable", message: notRouted });
 
   const uncertain = thrownErrorText(
     wrap(
@@ -283,9 +292,107 @@ test("卡片前端：提交没拿到确定的回答时先核实，服务端明�
     failureState("The Atlas Cloud API accepted the video request but did not return a prediction ID. No automatic retry was attempted."),
     { phase: "verifying" }
   );
-  // 取得到原话且是明确的拒绝：照旧显示失败。
+  // 取得到原话且是明确的拒绝：按原因显示，不去核实。
   assert.deepEqual(thrownFailureState(wrap("Error: model[x/y] router not found")), {
-    phase: "error",
+    phase: "model_unavailable",
     message: "model[x/y] router not found",
   });
+  const rejected =
+    "A previous request with this idempotency key was rejected by Atlas Cloud before it started, so nothing was charged; use a new idempotency key to try again";
+  assert.deepEqual(failureState(rejected), { phase: "error", message: rejected });
+});
+
+test("卡片前端：余额不足带回余额、令牌对不上、限流、模型不可用各有自己的状态", () => {
+  // 服务端在余额不足的报错后面附上可用余额（src/apps/generation-quote.ts 的 withAvailableBalance）。
+  assert.deepEqual(
+    failureState("Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing Available balance: $8.50."),
+    { phase: "low_balance", balanceUsd: 8.5 }
+  );
+  assert.deepEqual(failureState("Insufficient balance. Available balance: -$1,203.40."), {
+    phase: "low_balance",
+    balanceUsd: -1203.4,
+  });
+
+  // 确认令牌对不上（src/services/generation-confirmation.ts 的原话）：卡片先重新报价比价格。
+  const mismatch =
+    "Generation confirmation does not match this request: the arguments, price or user changed, or the token was not copied exactly. Request a new quote. No billable request was submitted.";
+  assert.deepEqual(failureState(mismatch), { phase: "settings_changed" });
+  assert.deepEqual(failureState("Generation confirmation is invalid. Request a new quote. No billable request was submitted."), {
+    phase: "settings_changed",
+  });
+
+  // 服务端 429 的那句（src/utils/error-handler.ts）：30 秒后才放开 Retry。
+  assert.deepEqual(failureState("Rate limit exceeded. Please wait and try again later.", 1_000), {
+    phase: "rate_limited",
+    retryAt: 1_000 + RATE_LIMIT_WAIT_MS,
+  });
+
+  assert.equal(isRateLimited("Too Many Requests (429): the provider rate limit was exceeded"), true);
+  assert.equal(isRateLimited("prediction a429b failed"), false);
+  assert.equal(isModelUnavailable("The model is temporarily unavailable: ServerOverloaded"), true);
+  assert.equal(isModelUnavailable("Upstream returned 503 Service Unavailable"), true);
+  assert.equal(isModelUnavailable("No available channel for model x/y"), true);
+  // 读不到输入说明、拿不到价格不算模型不可用。
+  assert.equal(isModelUnavailable('The live input schema for model "x/y" is unavailable.'), false);
+  assert.equal(isModelUnavailable("Current pricing metadata is unavailable for this model."), false);
+  assert.equal(isModelUnavailable(undefined), false);
+});
+
+test("卡片前端：重新报价后按显示金额判断价格变没变；测试卡片直接给问题状态", () => {
+  const base = { tool: "t", arguments: {}, idempotency_key: "k", confirmation_token: "c", settings: [] };
+  assert.equal(priceChanged(24.12, { ...base, estimated_usd: 26.4 }), true);
+  assert.equal(priceChanged(1.514799, { ...base, estimated_usd: 1.5148 }), false);
+  assert.equal(priceChanged(undefined, { ...base, estimated_usd: 26.4 }), false);
+  assert.equal(priceChanged(24.12, { ...base }), false);
+
+  const card = { state: "quote" as const, prediction_id: "", media: [] };
+  assert.deepEqual(initialQuoteState({ ...card, quote: { ...base, problem: "insufficient_balance", sample_balance_usd: 0.42 } }), {
+    phase: "low_balance",
+    balanceUsd: 0.42,
+  });
+  assert.deepEqual(initialQuoteState({ ...card, quote: { ...base, problem: "price_changed", sample_previous_usd: 1.34 } }), {
+    phase: "price_changed",
+    previousUsd: 1.34,
+  });
+  assert.deepEqual(initialQuoteState({ ...card, quote: { ...base, problem: "rate_limited" } }, 5), {
+    phase: "rate_limited",
+    retryAt: 5 + RATE_LIMIT_WAIT_MS,
+  });
+  assert.deepEqual(initialQuoteState({ ...card, quote: { ...base, problem: "model_unavailable" } }), {
+    phase: "model_unavailable",
+  });
+});
+
+test("余额不足的报错后面附上可用余额；查不到就原样返回，其他报错不查", async () => {
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key" });
+  const calls: string[] = [];
+  let reply: () => Response = () =>
+    new Response(JSON.stringify({ object: "balance", scope: "user", available: { value: "8.5", currency: "USD" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const fetcher = (async (url: string | URL) => {
+    calls.push(String(url));
+    return reply();
+  }) as unknown as typeof fetch;
+  const lowBalance = () => ({
+    isError: true,
+    content: [{ type: "text" as const, text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing" }],
+  });
+  try {
+    const withBalance = await withAvailableBalance(lowBalance(), { fetcher });
+    assert.match((withBalance.content[0] as { text: string }).text, /billing Available balance: \$8\.50\.$/);
+    assert.match(calls[0] ?? "", /\/balance$/);
+
+    reply = () => new Response(JSON.stringify({ error: "insufficient_scope" }), { status: 403 });
+    const unchanged = await withAvailableBalance(lowBalance(), { fetcher });
+    assert.deepEqual(unchanged, lowBalance());
+
+    calls.length = 0;
+    const other = { isError: true, content: [{ type: "text" as const, text: "Error: Rate limit exceeded." }] };
+    assert.equal(await withAvailableBalance(other, { fetcher }), other);
+    assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
 });

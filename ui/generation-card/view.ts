@@ -5,10 +5,13 @@ import {
   type CardData,
   type CardMedia,
   KIND_LABEL,
+  RATE_LIMIT_WAIT_MS,
   fileNameOf,
   formatClock,
   formatElapsed,
   formatUsd,
+  isModelUnavailable,
+  isRateLimited,
   modelLabel,
   perItemPrice,
   shortId,
@@ -88,13 +91,36 @@ export function button(
   );
 }
 
-export function badge(label: string, opts: { spinner?: boolean; danger?: boolean; success?: boolean } = {}): HTMLElement {
+export function badge(
+  label: string,
+  opts: { spinner?: boolean; danger?: boolean; success?: boolean; warn?: boolean } = {}
+): HTMLElement {
   return h(
     "span",
-    { class: `badge${opts.danger ? " danger" : ""}${opts.success ? " success" : ""}` },
+    { class: `badge${opts.danger ? " danger" : ""}${opts.success ? " success" : ""}${opts.warn ? " warn" : ""}` },
     opts.spinner ? h("span", { html: ICON_SPINNER, style: "display:inline-flex" }) : null,
     label
   );
+}
+
+/** 「Retry in 30 s」：到点前置灰、每秒走字（tickTimers），到点变成 Retry。 */
+export function retryButton(at: number, onClick: () => void, now = Date.now()): HTMLButtonElement {
+  const el = button("Retry", "secondary", onClick);
+  el.dataset.retryAt = String(at);
+  paintRetry(el, now);
+  return el;
+}
+
+function paintRetry(el: HTMLButtonElement, now: number): void {
+  const left = Math.ceil((Number(el.dataset.retryAt) - now) / 1000);
+  if (Number.isFinite(left) && left > 0) {
+    el.textContent = `Retry in ${left} s`;
+    el.disabled = true;
+    return;
+  }
+  el.textContent = "Retry";
+  el.disabled = false;
+  delete el.dataset.retryAt;
 }
 
 export function head(title: string, badgeEl: HTMLElement | null, large = false): HTMLElement {
@@ -193,7 +219,56 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
   );
 }
 
+/** 失败卡第一次画出来的时间：限流的 Retry 从这里起等 30 秒（没有完成时间时用）。 */
+const firstSeen = new Map<string, number>();
+
+function retryAtFor(card: CardData, now: number): number {
+  const done = card.completed_at ? Date.parse(card.completed_at) : NaN;
+  if (Number.isFinite(done)) return done + RATE_LIMIT_WAIT_MS;
+  if (!firstSeen.has(card.prediction_id)) firstSeen.set(card.prediction_id, now);
+  return firstSeen.get(card.prediction_id)! + RATE_LIMIT_WAIT_MS;
+}
+
+/** 设计稿「请求太频繁」：上游限流，等一会儿再试。 */
+function rateLimitedCard(card: CardData, opts: ViewOptions, actions: CardActions, canRetry: boolean): HTMLElement {
+  return h(
+    "section",
+    { class: "card" },
+    head("Too many requests", badge("Rate limited", { warn: true })),
+    h("p", { class: "desc" }, `${modelLabel(card)} is getting too many requests. You weren't charged. Try again in a moment.`),
+    h("div", { class: "rows" }, row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })),
+    canRetry ? h("div", { class: "actions" }, retryButton(retryAtFor(card, Date.now()), actions.tryAgain)) : null,
+    notice(opts)
+  );
+}
+
+/** 设计稿「模型暂时不可用」：重试或换模型。 */
+function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions, canRetry: boolean): HTMLElement {
+  const rows = [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })];
+  if (card.error) rows.push(row("Reason", card.error, { title: card.error }));
+  return h(
+    "section",
+    { class: "card" },
+    head("Model unavailable", badge("Unavailable", { danger: true })),
+    h("p", { class: "desc" }, `${modelLabel(card)} is temporarily unavailable. You weren't charged.`),
+    h("div", { class: "rows" }, ...rows),
+    canRetry
+      ? h(
+          "div",
+          { class: "actions" },
+          button("Retry", "primary", actions.tryAgain),
+          opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
+        )
+      : null,
+    notice(opts)
+  );
+}
+
 function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
+  // 有原参数时 Try again 直接重新报价，只要宿主允许调工具；否则要能发消息。
+  const canRetry = opts.canMessage || (card.retry !== undefined && opts.canRefresh);
+  if (isRateLimited(card.error)) return rateLimitedCard(card, opts, actions, canRetry);
+  if (isModelUnavailable(card.error)) return unavailableCard(card, opts, actions, canRetry);
   const kind = typeLabel(card).toLowerCase();
   const what = kind === "generation" ? "this generation" : `this ${kind}`;
   const rows = [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })];
@@ -204,8 +279,7 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
     head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Failed", { danger: true })),
     h("p", { class: "desc" }, `The model couldn't finish ${what}. You weren't charged.`),
     h("div", { class: "rows" }, ...rows),
-    // 有原参数时 Try again 直接重新报价，只要宿主允许调工具；否则要能发消息。
-    opts.canMessage || (card.retry && opts.canRefresh)
+    canRetry
       ? h(
           "div",
           { class: "actions" },
@@ -540,11 +614,19 @@ export function renderCard(card: CardData, opts: ViewOptions, actions: CardActio
   return holder;
 }
 
-/** 「Running for」每秒走字，不重画整张卡（不然视频、音频会被打断）。 */
-export function tickElapsed(root: HTMLElement): void {
+/**
+ * 每秒走字，不重画整张卡（不然视频、音频会被打断）：「Running for」、报价有效期倒计时、
+ * 「Retry in 30 s」。
+ */
+export function tickTimers(root: HTMLElement): void {
   const now = Date.now();
   root.querySelectorAll<HTMLElement>("[data-elapsed-from]").forEach((el) => {
     const since = secondsSince(el.dataset.elapsedFrom, now);
     if (since !== null) el.textContent = formatElapsed(since);
   });
+  root.querySelectorAll<HTMLElement>("[data-countdown-to]").forEach((el) => {
+    const at = Date.parse(el.dataset.countdownTo ?? "");
+    if (Number.isFinite(at)) el.textContent = formatClock(Math.max(0, at - now) / 1000);
+  });
+  root.querySelectorAll<HTMLButtonElement>("button[data-retry-at]").forEach((el) => paintRetry(el, now));
 }

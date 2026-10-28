@@ -83,10 +83,15 @@ export function clientRendersCards(server: McpServer): boolean {
 
 // 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
 // 生成结果在 atlas-media 桶，用户上传和工作流素材在 atlas-img 桶，示例素材在 static。
+// 资产库的签名缩略图：用户传进资产库的在 atlas-asset 桶，归档的生成历史在 atlas-media 和
+// res-atlascloud（dev 的 AssetD 配置是 atlas-asset-dev / atlas-media-dev / res-atlascloud，
+// 生产桶名按同一规律，2026-10-28 确认 atlas-asset 桶存在）。
 const DEFAULT_MEDIA_DOMAINS = [
   "https://atlas-media.oss-us-west-1.aliyuncs.com",
   "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
   "https://static.atlascloud.ai",
+  "https://atlas-asset.oss-us-west-1.aliyuncs.com",
+  "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
 ];
 
 /**

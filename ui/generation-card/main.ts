@@ -12,7 +12,8 @@ import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
-import { type Uploader, createUploader, uploadFromToolResult } from "./upload.js";
+import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
+import { type AssetCardData, type Library, type LibraryDeps, assetsFromToolResult, createLibrary } from "./assets.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -41,6 +42,8 @@ let quoteTimer: ReturnType<typeof setTimeout> | undefined;
 let history: HistoryView | undefined;
 // 上传卡：文件和上传进度都在它自己手里（File 对象不能拿来比较），按它的版本号判断要不要重画。
 let uploader: Uploader | undefined;
+// 资产库卡：有它时盖在上传卡上面（从上传卡打开的），或者它本身就是这张卡（atlas_search_assets 的结果）。
+let library: Library | undefined;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -107,7 +110,37 @@ function diagnostics(): HTMLElement {
   return box;
 }
 
+function displayInfo(): { fullscreen: boolean; canExpand: boolean } {
+  const context = app.getHostContext();
+  return {
+    fullscreen: context?.displayMode === "fullscreen",
+    canExpand: (context?.availableDisplayModes ?? []).includes("fullscreen") && context?.displayMode !== "fullscreen",
+  };
+}
+
+/** 切显示模式；宿主不支持全屏或已经是这个模式就不动。 */
+function requestMode(mode: "inline" | "fullscreen"): void {
+  const context = app.getHostContext();
+  if (context?.displayMode === mode) return;
+  if (mode === "fullscreen" && !(context?.availableDisplayModes ?? []).includes("fullscreen")) return;
+  void app.requestDisplayMode({ mode }).catch(() => undefined);
+}
+
 function render(force = false): void {
+  // 资产库卡在对话里不让页面自己滚，见 styles.css「资产库卡」。
+  document.documentElement.dataset.view = library ? "assets" : "";
+  document.documentElement.dataset.display = app.getHostContext()?.displayMode ?? "inline";
+  if (library) {
+    const display = displayInfo();
+    const key = `assets:${library.version}:${notice ?? ""}:${display.fullscreen}:${display.canExpand}`;
+    if (!force && key === renderedKey) return;
+    renderedKey = key;
+    // 资产库全屏时放宽到 720（设计稿全屏视图宽 720）。
+    root.classList.toggle("wide", display.fullscreen);
+    root.replaceChildren(library.view(display));
+    if (library.sample) root.append(diagnostics());
+    return;
+  }
   if (uploader) {
     const key = `upload:${uploader.version}:${notice ?? ""}`;
     if (!force && key === renderedKey) return;
@@ -456,6 +489,93 @@ function closeDetail(): void {
   render();
 }
 
+// ---- 上传卡和资产库卡 ----
+
+function startUploader(data: UploadCardData): void {
+  uploader = createUploader(data, {
+    app,
+    render: () => render(),
+    notice: (text) => setNotice(text),
+    noticeText: () => notice,
+    // 宿主不让卡片调工具时打不开资产库（测试卡片用样例，不调真实接口）。
+    ...(data.sample || hostCaps().serverTools !== undefined ? { openLibrary: () => void openLibraryFromUpload() } : {}),
+  });
+}
+
+function libraryDeps(extra: Pick<LibraryDeps, "uploadInstead"> & Partial<LibraryDeps>): LibraryDeps {
+  return {
+    app,
+    render: () => render(),
+    notice: (text) => setNotice(text),
+    noticeText: () => notice,
+    expand: () => requestMode("fullscreen"),
+    ...extra,
+  };
+}
+
+function closeLibrary(): void {
+  library = undefined;
+  requestMode("inline");
+  render(true);
+}
+
+/** 上传卡里点「Choose from Asset Library」：全屏打开资产库，选好或取消都回到上传卡。 */
+async function openLibraryFromUpload(): Promise<void> {
+  const from = uploader;
+  if (!from) return;
+  let initial: AssetCardData | undefined;
+  if (from.data.sample) {
+    // 测试卡片：拿测试工具的样例资产库，不调真实接口。
+    try {
+      initial = assetsFromToolResult(await app.callServerTool({ name: "atlas_card_selftest", arguments: { variant: "assets" } }));
+    } catch {
+      initial = undefined;
+    }
+    if (!initial) {
+      setNotice("This is a sample card, so there is no Asset Library to open.");
+      return;
+    }
+  }
+  library = createLibrary(
+    initial,
+    libraryDeps({
+      onCancel: closeLibrary,
+      onPicked(picked) {
+        closeLibrary();
+        from.addPicked(picked);
+        void from.useFiles();
+      },
+      uploadInstead() {
+        closeLibrary();
+        from.pick();
+      },
+    })
+  );
+  requestMode("fullscreen");
+  render(true);
+}
+
+/** 资产库卡（atlas_search_assets 的结果）里资产库为空时的「Upload from device」：换成上传卡。 */
+async function switchToUpload(): Promise<void> {
+  if (library?.sample) {
+    setNotice("This is a sample card, so nothing is uploaded.");
+    return;
+  }
+  if (hostCaps().serverTools === undefined) {
+    setNotice("Ask in the chat to upload a file.");
+    return;
+  }
+  try {
+    const result = await app.callServerTool({ name: "atlas_get_upload_url", arguments: {} });
+    const data = result.isError ? undefined : uploadFromToolResult(result);
+    if (!data) throw new Error("bad result");
+    startUploader(data);
+    closeLibrary();
+  } catch {
+    setNotice("Couldn't open the upload card. Ask in the chat to upload a file.");
+  }
+}
+
 function applyContext(context: McpUiHostContext | undefined): void {
   if (!context) return;
   if (context.theme) applyDocumentTheme(context.theme);
@@ -489,12 +609,16 @@ app.ontoolinput = (params) => {
 app.ontoolresult = (params) => {
   const upload = params.isError ? undefined : uploadFromToolResult(params);
   if (upload) {
-    uploader = createUploader(upload, {
-      app,
-      render: () => render(),
-      notice: (text) => setNotice(text),
-      noticeText: () => notice,
-    });
+    startUploader(upload);
+    render();
+    return;
+  }
+  const assets = params.isError ? undefined : assetsFromToolResult(params);
+  if (assets) {
+    library = createLibrary(
+      assets,
+      libraryDeps({ uploadInstead: () => void switchToUpload(), onHandedOff: () => requestMode("inline") })
+    );
     render();
     return;
   }

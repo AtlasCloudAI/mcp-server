@@ -16,7 +16,9 @@ export type AtlasToolName =
   | "atlas_get_balance"
   | "atlas_get_model_usage"
   | "atlas_get_model_costs"
-  | "atlas_quick_generate";
+  | "atlas_quick_generate"
+  | "atlas_search_assets"
+  | "atlas_use_assets";
 
 export interface ToolPolicy {
   /**
@@ -180,6 +182,23 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotations: billableExternalWrite,
     annotationJustification:
       "Resolves exactly one model before creating a billable external task; a stable idempotency key prevents duplicates.",
+  },
+  atlas_search_assets: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads a bounded page of the authenticated account's Asset Library without mutation.",
+  },
+  atlas_use_assets: {
+    // 和 uploadMedia 一样是生成链路的一步：换出来的地址只用来喂生成。kubedl 的白名单也按 tasks:write 放行。
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Issues short-lived signed links to the user's own library assets so a generation can read them; it changes and bills nothing (Atlas only logs the use).",
   },
 };
 

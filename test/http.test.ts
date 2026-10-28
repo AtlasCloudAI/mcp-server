@@ -235,7 +235,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("official MCP client initializes and lists exactly 15 remote tools", async () => {
+  await t.test("official MCP client initializes and lists exactly 17 remote tools", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: {
         headers: {
@@ -248,7 +248,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
+      assert.equal(listed.tools.length, 17);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
         [...REMOTE_TOOL_NAMES].sort()
@@ -515,7 +515,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
+      assert.equal(listed.tools.length, 17);
       assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...REMOTE_TOOL_NAMES].sort());
       const chat = listed.tools.find((tool) => tool.name === "atlas_chat");
       assert.ok(chat, "atlas_chat must be listed for Claude");

@@ -30,7 +30,7 @@ function textModel(price: Model["price"], extra: Partial<Model> = {}): Model {
 
 test("atlas_chat is a remote tool for every client; only the upload tool stays local", () => {
   assert.ok(REMOTE_TOOL_NAMES.includes("atlas_chat"));
-  assert.equal(REMOTE_TOOL_NAMES.length, 15);
+  assert.equal(REMOTE_TOOL_NAMES.length, 17);
   assert.ok(!REMOTE_TOOL_NAMES.includes("atlas_upload_media"));
   assert.equal(TOOL_POLICIES.atlas_chat.scope, "tasks:write");
 });

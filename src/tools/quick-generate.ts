@@ -3,6 +3,7 @@ import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { api } from "../services/api-client.js";
 import { executeIdempotently } from "../services/idempotency.js";
+import { resolveDefaultModel } from "../services/default-models.js";
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
@@ -213,7 +214,7 @@ The tool searches for models by keyword matching against model ID, display name,
 Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
 
 Args:
-  - model_keyword (string, required): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword.
+  - model_keyword (string, optional): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword. When it is omitted for an image or video, the server applies the default route (described in atlas_generate_video / atlas_generate_image), with the image-to-video or edit variant when image_url is given.
   - type (string, required): Generation type: "Image", "Video", or "Audio"
   - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description)
   - image_url (string, optional): Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models
@@ -229,7 +230,10 @@ Returns:
         model_keyword: z
           .string()
           .min(1)
-          .describe("Exact current model ID or a distinctive display-name keyword"),
+          .optional()
+          .describe(
+            "Exact current model ID or a distinctive display-name keyword. When omitted for an image or video, the default route applies."
+          ),
         type: z
           .enum(["Image", "Video", "Audio"])
           .describe("Generation type: Image, Video, or Audio"),
@@ -272,7 +276,9 @@ Returns:
     }) => {
       try {
         // Step 1: Resolve model
-        const resolved = await resolveModel(model_keyword, type);
+        const resolved = model_keyword
+          ? await resolveModel(model_keyword, type)
+          : await resolveDefaultModel(type, { hasImage: Boolean(image_url) });
 
         if ("error" in resolved) {
           return {

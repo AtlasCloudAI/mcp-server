@@ -10,6 +10,7 @@ import {
   resolveConfirmedIdempotencyKey,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
+import { defaultRouteGuidance } from "../services/default-models.js";
 import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
@@ -48,6 +49,8 @@ Billing: every request is quoted before anything runs. Choose the model and para
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
 IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Video". Do NOT guess model IDs.
+
+${defaultRouteGuidance("Video")}
 
 You should also use atlas_get_model_info to see the full parameter list and schema for your chosen video model before calling this tool.
 

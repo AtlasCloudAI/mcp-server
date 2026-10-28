@@ -2,6 +2,7 @@ import { quoteAtDefaults } from "../services/spend-policy.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getModels, findModel, getModelSchema } from "../services/doc-fetcher.js";
+import { formatDefaultRoute } from "../services/default-models.js";
 import { formatModelList, formatModelInfo, truncate } from "../utils/formatter.js";
 import { generateLLMPrompt } from "../utils/prompt-gen.js";
 import { handleError } from "../utils/error-handler.js";
@@ -57,9 +58,13 @@ Examples:
           : models;
         const page = filtered.slice(offset, offset + limit);
         const hasMore = offset + page.length < filtered.length;
-        const text = page.length > 0
+        // 第一页顶上先列默认路由：智能体没点名模型时照它选，而不是挑最便宜的。
+        const route = offset === 0 && (type === "Video" || type === "Image")
+          ? formatDefaultRoute(models, type)
+          : null;
+        const text = (route ? `${route}\n\n` : "") + (page.length > 0
           ? formatModelList(page, type)
-          : `No models found at offset ${offset}. The filtered catalog contains ${filtered.length} models.`;
+          : `No models found at offset ${offset}. The filtered catalog contains ${filtered.length} models.`);
         return {
           structuredContent: {
             ...(type ? { filter_type: type } : {}),

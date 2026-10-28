@@ -10,6 +10,11 @@ import {
   predictionResponseSchema,
   type PredictionResponse,
 } from "../response-schemas.js";
+import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+} from "./tool-call-telemetry.js";
 
 export type SubmitResult =
   | { ok: true; predictionId: string; model: Model; outputs: string[] }
@@ -51,12 +56,16 @@ export async function prepareGeneration(
 ): Promise<PrepareResult> {
   const found = await findModelByExactId(modelId);
   if (!found) {
+    recordToolCallError({ code: "model_not_found" });
     return {
       ok: false,
       message: `Model "${modelId}" not found. Use atlas_list_models with type="${opts.expectedType}" to see available ${opts.typeLabel} models.`,
     };
   }
+  // 只报目录里查到的 ID：查不到的那个是调用方随手填的，可能是任意文本。
+  annotateToolCall({ model: found.model });
   if (found.type !== opts.expectedType) {
+    recordToolCallError({ code: "invalid_param" });
     return {
       ok: false,
       message: `Model "${modelId}" is a ${found.type} model, not an ${opts.expectedType} model. Use atlas_list_models with type="${opts.expectedType}" to find ${opts.typeLabel} models.`,
@@ -66,6 +75,7 @@ export async function prepareGeneration(
   // Fetch schema and validate params before hitting the billable endpoint.
   const schema = await getModelSchema(found);
   if (!schema) {
+    recordToolCallError({ code: "model_schema_unavailable" });
     return {
       ok: false,
       message:
@@ -76,6 +86,7 @@ export async function prepareGeneration(
   const finalParams = fillRequiredDefaults(schema, params);
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
+    recordToolCallError({ code: "invalid_param" });
     return { ok: false, message: formatValidationError(found.model, validation) };
   }
 
@@ -102,6 +113,8 @@ export async function submitPreparedGeneration(
 
   const predictionId = response.data?.id;
   if (!predictionId) {
+    // 平台收下了请求却没给任务号：可能已经在跑、在计费，和 CLI 的 submission_unknown 同义。
+    recordToolCallError({ code: "submission_unknown" });
     return {
       ok: false,
       message: `The Atlas Cloud API accepted the ${prepared.typeLabel} request but did not return a prediction ID. No automatic retry was attempted.`,
@@ -115,6 +128,11 @@ export async function submitPreparedGeneration(
   // the conversation.
   const finished = response.data?.outputs ?? response.data?.output;
   const outputs = Array.isArray(finished) ? finished : finished ? [finished] : [];
+  // 提交成功不等于任务成功：只记平台这次真实给出的状态，同步出结果才算 completed。
+  annotateToolCall({
+    generation_status:
+      outputs.length > 0 ? "completed" : normalizeGenerationStatus(response.data?.status),
+  });
 
   // Which branch a model takes is not documented anywhere and differs per model,
   // so record it: "submitted but nothing shown" and "finished but nothing shown"

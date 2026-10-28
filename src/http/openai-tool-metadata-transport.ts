@@ -58,7 +58,14 @@ export class OpenAIToolMetadataTransport implements Transport {
     extra?: MessageExtraInfo
   ) => void;
 
-  constructor(private readonly inner: Transport) {}
+  /**
+   * onSend 能看到每条发出的消息（改写前的原样），工具调用埋点靠它拿到真实的返回结果。
+   * 放在这里是因为这是每个请求唯一的出口，不必为它再套一层传输。
+   */
+  constructor(
+    private readonly inner: Transport,
+    private readonly onSend?: (message: JSONRPCMessage) => void
+  ) {}
 
   get sessionId(): string | undefined {
     return this.inner.sessionId;
@@ -75,6 +82,7 @@ export class OpenAIToolMetadataTransport implements Transport {
     message: JSONRPCMessage,
     options?: TransportSendOptions
   ): Promise<void> {
+    this.onSend?.(message);
     await this.inner.send(withOpenAIToolSecuritySchemes(message), options);
   }
 

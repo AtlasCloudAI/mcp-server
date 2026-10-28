@@ -35,6 +35,12 @@ import {
 import { toolAnnotations } from "../tool-policy.js";
 import { currentClientProfile } from "../services/client-profile.js";
 import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  sanitizeModel,
+} from "../services/tool-call-telemetry.js";
+import {
   completedAtOf,
   createdAtOf,
   hasUntransferredMedia,
@@ -42,6 +48,7 @@ import {
   isFinished,
   secondsSince,
   predictionOutputUrls,
+  predictionWaitSeconds,
   probeSizes,
   waitForPrediction,
 } from "../services/prediction-wait.js";
@@ -146,6 +153,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         try {
           const found = await findModelByExactId(model);
           if (!found || found.type !== "Text") {
+            recordToolCallError({ code: found ? "invalid_param" : "model_not_found" });
             return {
               isError: true,
               content: [{
@@ -157,6 +165,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
 
+          annotateToolCall({ model: found.model });
           const body: Record<string, unknown> = {
             model: found.model,
             messages,
@@ -331,6 +340,8 @@ Examples:
       annotations: toolAnnotations("atlas_get_prediction"),
     },
     async ({ prediction_id }) => {
+      // 与 CLI 的 get / wait 对应：服务端会不会替调用方等一会儿，看部署配置。
+      annotateToolCall({ execution_mode: predictionWaitSeconds() > 0 ? "wait" : "get" });
       try {
         const fetchOnce = (budget: { timeoutMs: number; maxRetries: number }) =>
           generationApi<PredictionResponse>(
@@ -343,6 +354,10 @@ Examples:
           );
         const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
         const status = result.data?.status || "unknown";
+        annotateToolCall({
+          model: sanitizeModel((result.data as Record<string, unknown> | undefined)?.model),
+          generation_status: normalizeGenerationStatus(result.data?.status),
+        });
 
         const lines = [`# Prediction Result\n`];
         lines.push(`- **ID**: \`${prediction_id}\``);

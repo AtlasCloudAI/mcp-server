@@ -9,7 +9,7 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, newIdempotencyKey } from "./card.js";
-import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickElapsed } from "./view.js";
+import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
@@ -210,7 +210,9 @@ function watchQuote(quoteCard: CardData): void {
   const at = quoteCard.quote?.expires_at ? Date.parse(quoteCard.quote.expires_at) : NaN;
   if (!Number.isFinite(at) || quoteState.phase !== "ready") return;
   quoteTimer = setTimeout(() => {
-    if (card === quoteCard && quoteState.phase === "ready" && quoteExpired(quoteCard.quote)) {
+    // 价格变了那一步拿的也是新报价，同样会过期。
+    const waiting = quoteState.phase === "ready" || quoteState.phase === "price_changed";
+    if (card === quoteCard && waiting && quoteExpired(quoteCard.quote)) {
       quoteState = { phase: "expired" };
       render();
     }
@@ -651,7 +653,7 @@ app.onteardown = async () => {
 render(true);
 systemTheme();
 darkQuery?.addEventListener?.("change", systemTheme);
-setInterval(() => tickElapsed(root), 1000);
+setInterval(() => tickTimers(root), 1000);
 
 app
   .connect()

@@ -12,6 +12,8 @@ const VARIANTS = [
   "queued",
   "running",
   "failed",
+  "failed_rate_limited",
+  "failed_unavailable",
   "canceled",
   "blocked",
   "expired",
@@ -20,6 +22,10 @@ const VARIANTS = [
   "quote_unpriced",
   "quote_expired",
   "quote_low_balance",
+  "quote_price_changed",
+  "quote_settings_changed",
+  "quote_rate_limited",
+  "quote_model_unavailable",
   "history",
   "upload",
   "upload_uploading",
@@ -101,6 +107,9 @@ const QUOTE_MOCKS = {
   "quote-submit": "submit",
   "quote-expires": "expired",
   "quote-no-balance": "balance",
+  // 确认时令牌对不上（价格变了）：卡片自己重新报价，显示新旧价格。
+  "quote-price-changed": "price",
+  "quote-rate-limited": "rate",
   "quote-fail-retry": "fail",
   // ChatGPT 的做法：工具报错时不回错误结果，而是让卡片这次调用直接失败（报错原文夹在信息里）。
   "quote-chatgpt-error": "throw-route",
@@ -117,9 +126,13 @@ const chatgptStyleError = (text) =>
     `Error code: INVALID_ARGUMENT; Error: RuntimeException: Error calling MCP tool: [TextContent(type='text', text='${text}', annotations=None, meta=None)]`
   );
 
+const MISMATCH =
+  "Error: Generation confirmation does not match this request: the arguments, price or user changed, or the token was not copied exactly. Request a new quote. No billable request was submitted.";
+
 function mockQuoteCaller(outcome) {
   let polls = 0;
   let checks = 0;
+  let mismatched = false;
   const unsample = (result, overrides = {}) => {
     const card = { ...result._meta["atlascloud/card"], ...overrides };
     delete card.sample;
@@ -128,7 +141,12 @@ function mockQuoteCaller(outcome) {
   return async (name, args) => {
     if (name === "atlas_card_selftest" || (name === "atlas_generate_video" && !args.confirmed)) {
       if (name === "atlas_generate_video") log("      mock re-quote", JSON.stringify({ idempotency_key: args.idempotency_key, params: args.params }));
-      return unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
+      const quote = unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
+      if (outcome === "price" && mismatched) {
+        const card = quote._meta["atlascloud/card"];
+        card.quote = { ...card.quote, estimated_usd: 1.52, confirmation_token: "selftest-repriced" };
+      }
+      return quote;
     }
     if (name === "atlas_generate_video") {
       log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
@@ -140,8 +158,16 @@ function mockQuoteCaller(outcome) {
         return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
       }
       if (outcome === "balance") {
-        return { isError: true, content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing" }] };
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing Available balance: $0.42." }],
+        };
       }
+      if (outcome === "price" && !mismatched) {
+        mismatched = true;
+        return { isError: true, content: [{ type: "text", text: MISMATCH }] };
+      }
+      if (outcome === "rate") return { isError: true, content: [{ type: "text", text: "Error: Rate limit exceeded. Please wait and try again later." }] };
       // 提交结果带上 retry（服务端包装层会这么给），失败后卡片用它重新报价。
       return unsample(await callTool("atlas_card_selftest", { variant: "running" }), {
         prediction_id: "mock_quote",

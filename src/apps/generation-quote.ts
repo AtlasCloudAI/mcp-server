@@ -1,5 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { balanceResponseSchema } from "../response-schemas.js";
+import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
+import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
   type GenerationCardData,
@@ -126,7 +129,9 @@ export function generationResultCard(
         arguments: callArgs,
         idempotency_key: key,
         confirmation_token: token,
-        ...(validSeconds ? { expires_at: new Date(Date.now() + validSeconds * 1000).toISOString() } : {}),
+        ...(validSeconds
+          ? { expires_at: new Date(Date.now() + validSeconds * 1000).toISOString(), valid_seconds: validSeconds }
+          : {}),
         ...(estimate !== undefined ? { estimated_usd: estimate } : {}),
         ...(content.estimate_partial === true ? { partial: true } : {}),
         settings: settingsChips(params),
@@ -158,6 +163,45 @@ export function generationResultCard(
   return undefined;
 }
 
+/** 查余额最多等这么久：报错本身不能被它拖住。 */
+const BALANCE_TIMEOUT_MS = 3_000;
+
+/** 可用余额（美元，两位小数）；查不到（没有 billing:read、超时、不是美元）就返回 undefined。 */
+async function availableBalance(fetcher?: ApiRequestOptions["fetcher"]): Promise<string | undefined> {
+  try {
+    const res = await publicApi<BalanceResponse>("/balance", {
+      responseSchema: balanceResponseSchema,
+      maxRetries: 0,
+      timeout: BALANCE_TIMEOUT_MS,
+      ...(fetcher ? { fetcher } : {}),
+    });
+    const value = Number(res.available?.value);
+    if (!Number.isFinite(value) || res.available?.currency.toLowerCase() !== "usd") return undefined;
+    return value < 0 ? `-$${(-value).toFixed(2)}` : `$${value.toFixed(2)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 余额不足时顺带查一次可用余额，接在报错后面（"Available balance: $8.50."）：卡片的余额不足状态
+ * 照设计稿显示预估费用和余额，模型也能告诉用户差多少。卡片认这几个词，改措辞要同步
+ * ui/generation-card/quote.ts。
+ */
+export async function withAvailableBalance(
+  result: CallToolResult,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<CallToolResult> {
+  const index = result.content.findIndex((block) => block.type === "text");
+  const first = result.content[index];
+  if (!first || first.type !== "text" || !/insufficient balance/i.test(first.text)) return result;
+  const balance = await availableBalance(options.fetcher);
+  if (!balance) return result;
+  const content = [...result.content];
+  content[index] = { ...first, text: `${first.text.trimEnd()} Available balance: ${balance}.` };
+  return { ...result, content };
+}
+
 const QUOTE_CARD_NOTE =
   "The Atlas card shows this quote with a Generate button. If the user approves it there, the " +
   "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
@@ -175,7 +219,8 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
 ): (args: Args, extra: Extra) => Promise<CallToolResult> {
   return async (args, extra) => {
     const result = await handler(args, extra);
-    if (!generationCardEnabled() || result.isError) return result;
+    if (!generationCardEnabled()) return result;
+    if (result.isError) return withAvailableBalance(result);
     const card = generationResultCard(tool, args, result.structuredContent);
     if (!card) return result;
     const note =

@@ -83,6 +83,22 @@ const VARIANTS = {
     price: undefined,
     outputs: [],
   },
+  failed_rate_limited: {
+    status: "failed",
+    model: "bytedance/seedance-2.5/text-to-video",
+    name: "Dreamina Seedance 2.5",
+    type: "Video",
+    price: undefined,
+    outputs: [],
+  },
+  failed_unavailable: {
+    status: "failed",
+    model: "bytedance/seedance-2.5/text-to-video",
+    name: "Dreamina Seedance 2.5",
+    type: "Video",
+    price: undefined,
+    outputs: [],
+  },
   canceled: {
     status: "canceled",
     model: "bytedance/seedance-2.5/text-to-video",
@@ -110,6 +126,13 @@ const VARIANTS = {
   },
 } as const;
 
+// 失败样例的原因：普通失败、上游限流、模型暂时不可用（卡片按原因换样子）。
+const FAILED_REASONS: Partial<Record<string, string>> = {
+  failed: "Upstream timeout",
+  failed_rate_limited: "Too Many Requests (429): the provider rate limit was exceeded",
+  failed_unavailable: "The model is temporarily unavailable: ServerOverloaded",
+};
+
 // 报价卡样例：参数照一单 Seedance 2.5 文生视频填，价格是示例数字。
 const QUOTE_SAMPLE = {
   tool: "atlas_generate_video",
@@ -118,12 +141,17 @@ const QUOTE_SAMPLE = {
   params: { prompt: "A beer bottle splashing into icy water", resolution: "1080p", duration: 10, aspect_ratio: "16:9", generate_audio: true },
 };
 
+// balance、previous：余额不足、价格变了两个状态里显示的示例数字。
 const QUOTE_VARIANTS = {
-  quote: { estimated: 1.34, partial: false, expired: false, problem: undefined },
-  quote_partial: { estimated: 1.34, partial: true, expired: false, problem: undefined },
-  quote_unpriced: { estimated: undefined, partial: false, expired: false, problem: undefined },
-  quote_expired: { estimated: 1.34, partial: false, expired: true, problem: undefined },
-  quote_low_balance: { estimated: 1.34, partial: false, expired: false, problem: "insufficient_balance" as const },
+  quote: { estimated: 1.34, partial: false, expired: false, problem: undefined, balance: undefined, previous: undefined },
+  quote_partial: { estimated: 1.34, partial: true, expired: false, problem: undefined, balance: undefined, previous: undefined },
+  quote_unpriced: { estimated: undefined, partial: false, expired: false, problem: undefined, balance: undefined, previous: undefined },
+  quote_expired: { estimated: 1.34, partial: false, expired: true, problem: undefined, balance: undefined, previous: undefined },
+  quote_low_balance: { estimated: 1.34, partial: false, expired: false, problem: "insufficient_balance", balance: 0.42, previous: undefined },
+  quote_price_changed: { estimated: 1.52, partial: false, expired: false, problem: "price_changed", balance: undefined, previous: 1.34 },
+  quote_settings_changed: { estimated: 1.34, partial: false, expired: false, problem: "settings_changed", balance: undefined, previous: undefined },
+  quote_rate_limited: { estimated: 1.34, partial: false, expired: false, problem: "rate_limited", balance: undefined, previous: undefined },
+  quote_model_unavailable: { estimated: 1.34, partial: false, expired: false, problem: "model_unavailable", balance: undefined, previous: undefined },
 } as const;
 
 type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS | "history" | (typeof ASSET_VARIANTS)[number];
@@ -250,7 +278,10 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       ...(sample.estimated !== undefined ? { estimated_usd: sample.estimated } : {}),
       ...(sample.partial ? { partial: true } : {}),
       settings: settingsChips(QUOTE_SAMPLE.params),
+      valid_seconds: 600,
       ...(sample.problem ? { problem: sample.problem } : {}),
+      ...(sample.balance !== undefined ? { sample_balance_usd: sample.balance } : {}),
+      ...(sample.previous !== undefined ? { sample_previous_usd: sample.previous } : {}),
     },
   };
 }
@@ -316,7 +347,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         modelName: sample.name,
         modelType: sample.type,
         price: sample.price,
-        error: variant === "failed" ? "Upstream timeout" : undefined,
+        error: FAILED_REASONS[variant],
         createdAt: new Date(Date.now() - 102_000).toISOString(),
         mediaExpired: variant === "expired",
       });

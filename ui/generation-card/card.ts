@@ -27,8 +27,16 @@ export interface QuoteInfo {
   estimated_usd?: number;
   partial?: boolean;
   settings: string[];
-  problem?: "insufficient_balance";
+  /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
+  valid_seconds?: number;
+  /** 只在测试卡片上用：直接显示某个问题状态。 */
+  problem?: QuoteProblem;
+  /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
+  sample_balance_usd?: number;
+  sample_previous_usd?: number;
 }
+
+export type QuoteProblem = "insufficient_balance" | "price_changed" | "settings_changed" | "rate_limited" | "model_unavailable";
 
 export interface CardData {
   state: CardState;
@@ -158,7 +166,7 @@ function quoteFromStructured(
             arguments: args,
             idempotency_key: key,
             confirmation_token: token,
-            ...(seconds > 0 ? { expires_at: new Date(Date.now() + seconds * 1000).toISOString() } : {}),
+            ...(seconds > 0 ? { expires_at: new Date(Date.now() + seconds * 1000).toISOString(), valid_seconds: seconds } : {}),
             ...(typeof structured.estimated_cost_usd === "number" ? { estimated_usd: structured.estimated_cost_usd } : {}),
             ...(structured.estimate_partial === true ? { partial: true } : {}),
             settings: [],
@@ -195,6 +203,29 @@ export function cardFromToolResult(
     ...(typeof structured.error === "string" && structured.error ? { error: structured.error } : {}),
     open_url: SITE_URL,
   };
+}
+
+/** 被限流后至少等这么久再让用户重试（设计稿「Retry in 30 s」）。 */
+export const RATE_LIMIT_WAIT_MS = 30_000;
+
+// 失败原因分类：报价卡提交被拒、生成任务失败都按原话认这两种，各有自己的样子（设计稿「请求太频繁」「模型暂时不可用」）。
+
+/** 被限流：服务端那句 "Rate limit exceeded"、上游的 429 / Too Many Requests。 */
+export function isRateLimited(text: string | undefined): boolean {
+  return !!text && /rate[\s_-]?limit|too many requests|\b429\b/i.test(text);
+}
+
+/**
+ * 模型暂时用不了：网关没有这个模型的路由（"model[x/y] router not found"，test 上实测）、
+ * 上游说模型下线、过载、没有可用通道。
+ */
+export function isModelUnavailable(text: string | undefined): boolean {
+  return (
+    !!text &&
+    /router not found|no available (?:channel|provider|route)|\bmodel(?: is)? (?:temporarily |currently )?(?:unavailable|not available|disabled|offline|under maintenance)|server ?overloaded|\boverloaded\b|at capacity|service (?:is )?(?:temporarily )?unavailable/i.test(
+      text
+    )
+  );
 }
 
 export function isActive(state: CardState): boolean {

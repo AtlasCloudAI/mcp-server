@@ -227,8 +227,13 @@ export interface QuoteInfo {
   partial?: boolean;
   /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
   settings: string[];
+  /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
+  valid_seconds?: number;
   /** 只在测试卡片上用：直接显示某个问题状态。 */
-  problem?: "insufficient_balance";
+  problem?: "insufficient_balance" | "price_changed" | "settings_changed" | "rate_limited" | "model_unavailable";
+  /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
+  sample_balance_usd?: number;
+  sample_previous_usd?: number;
 }
 
 export interface GenerationCardData {

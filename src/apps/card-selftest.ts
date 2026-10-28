@@ -11,6 +11,7 @@ import {
 import { settingsChips } from "./generation-quote.js";
 import { HISTORY_META_KEY, type HistoryCardData, type HistoryCardItem } from "./history-card.js";
 import { UPLOAD_MAX_FILES, UPLOAD_META_KEY, type UploadCardData, type UploadSampleFile } from "./upload-card.js";
+import { ASSETS_MAX_PICK, ASSETS_META_KEY, type AssetCardData, type AssetCardItem } from "./asset-library.js";
 
 // 测试卡片：不调接口、不花钱，用官网公开的示例素材把生成卡的各个状态渲染出来，
 // 用来在 ChatGPT、Claude 里核对卡片长得对不对。只在 MCP_UI_SELFTEST 打开的环境注册。
@@ -125,7 +126,7 @@ const QUOTE_VARIANTS = {
   quote_low_balance: { estimated: 1.34, partial: false, expired: false, problem: "insufficient_balance" as const },
 } as const;
 
-type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS | "history";
+type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS | "history" | (typeof ASSET_VARIANTS)[number];
 
 // 历史列表卡样例：条目号 selftest_<样例名>，卡片点开时打开对应的测试卡片。
 function historySample(): HistoryCardData {
@@ -196,6 +197,36 @@ function uploadSample(variant: string): UploadCardData {
   };
 }
 
+// 资产库卡：设计稿「全屏视图」里的「从资产库选取」和「资产库为空」。示例素材是公开的产品图。
+const ASSET_VARIANTS = ["assets", "assets_empty"] as const;
+
+function assetsSample(variant: string): AssetCardData {
+  const day = 86_400_000;
+  const items: AssetCardItem[] =
+    variant === "assets_empty"
+      ? []
+      : [
+          ...Array.from({ length: 11 }, (_, i): AssetCardItem => ({
+            asset_id: `asset_selftest${String(i + 1).padStart(2, "0")}`,
+            label: i === 0 ? "sneaker-front.jpg" : `Image · product-shot-${String(i + 1).padStart(2, "0")}`,
+            kind: "image",
+            origin: i < 4 ? "upload" : "generated",
+            thumb_url: `${STATIC}/model/example/material/product-shot-${String(i + 1).padStart(2, "0")}.jpg`,
+            created_at: new Date(Date.now() - i * day).toISOString(),
+          })),
+          {
+            asset_id: "asset_selftest_video",
+            label: "Video · ugc-ad result",
+            kind: "video",
+            origin: "generated",
+            preview_url: `${STATIC}/model/example/atlascloud-studio-ugc-ad-showcase-v2.mp4`,
+            created_at: new Date(Date.now() - 12 * day).toISOString(),
+            model: "atlascloud/studio/ugc-ad",
+          },
+        ];
+  return { view: "assets", items, max_pick: ASSETS_MAX_PICK, sample: true };
+}
+
 function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
   const validMs = sample.expired ? -60_000 : 10 * 60_000;
@@ -234,7 +265,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         "It does not call Atlas Cloud and costs nothing.",
       inputSchema: {
         variant: z
-          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS), ...Object.keys(UPLOAD_VARIANTS), "history"] as string[] as [Variant, ...Variant[]])
+          .enum([...Object.keys(VARIANTS), ...Object.keys(QUOTE_VARIANTS), ...Object.keys(UPLOAD_VARIANTS), ...ASSET_VARIANTS, "history"] as string[] as [Variant, ...Variant[]])
           .default("image")
           .describe("Which card state to show"),
       },
@@ -248,6 +279,14 @@ export function registerCardSelftestTool(server: McpServer): void {
           _meta: { [HISTORY_META_KEY]: history },
           structuredContent: { total: history.total, page: 1, size: 10, has_more: false, predictions: [] },
           content: [{ type: "text", text: "Self-test history card rendered with sample tasks. Nothing was read or billed." }],
+        };
+      }
+      if ((ASSET_VARIANTS as readonly string[]).includes(variant)) {
+        const assets = assetsSample(variant);
+        return {
+          _meta: { [ASSETS_META_KEY]: assets },
+          structuredContent: { count: assets.items.length, assets: [] },
+          content: [{ type: "text", text: `Self-test Asset Library card "${variant}" rendered with sample files. Nothing was read.` }],
         };
       }
       if (variant in UPLOAD_VARIANTS) {

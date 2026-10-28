@@ -288,17 +288,19 @@ test("测试卡片：两个开关都开才注册，不调接口，结果标成�
   }
 });
 
-test("卡片媒体来源：默认三个生产来源，可用 MCP_UI_MEDIA_DOMAINS 追加（test 的 dev 桶）", async () => {
+test("卡片媒体来源：默认生产来源（含资产库的桶），可用 MCP_UI_MEDIA_DOMAINS 追加（test 的 dev 桶）", async () => {
   const { cardMediaDomains } = await import("../src/apps/generation-card.js");
   assert.deepEqual(cardMediaDomains({}), [
     "https://atlas-media.oss-us-west-1.aliyuncs.com",
     "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
     "https://static.atlascloud.ai",
+    "https://atlas-asset.oss-us-west-1.aliyuncs.com",
+    "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
   ]);
   const extended = cardMediaDomains({
     MCP_UI_MEDIA_DOMAINS: " atlas-media-dev.oss-us-west-1.aliyuncs.com, https://atlas-img-dev.oss-us-west-1.aliyuncs.com/ ,https://static.atlascloud.ai",
   });
-  assert.equal(extended.length, 5);
+  assert.equal(extended.length, 7);
   assert.ok(extended.includes("https://atlas-media-dev.oss-us-west-1.aliyuncs.com"));
   assert.ok(extended.includes("https://atlas-img-dev.oss-us-west-1.aliyuncs.com"));
 });

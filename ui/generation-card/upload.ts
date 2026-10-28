@@ -5,6 +5,8 @@
 // 服务端数据见 src/apps/upload-card.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
+import type { PickedAsset } from "./assets.js";
+import { handOff } from "./handoff.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
 
@@ -47,6 +49,8 @@ export interface UploadItem {
   /** 缩略图：本地图片缩成的 data URL（卡片 CSP 不一定放行 blob:），或示例图地址。 */
   thumb?: string;
   file?: File;
+  /** 从资产库选来的：地址是临时的，过期了模型用这个编号再换。 */
+  asset_id?: string;
 }
 
 export type UploadPhase = "empty" | "uploading" | "done" | "problem" | "failed" | "expired";
@@ -139,12 +143,17 @@ export function outcomeOf(status: number, body: string, maxBytes: number): Uploa
   return { kind: "failed", message: "Upload failed" };
 }
 
-/** 交给模型的文字：文件名、类型、地址。 */
-export function filesForModel(items: Pick<UploadItem, "name" | "kind" | "url">[]): string {
-  const lines = items.map((item) => `- ${item.name} (${item.kind}): ${item.url}`);
+/** 交给模型的文字：文件名、类型、地址。资产库选来的带上编号（临时地址过期了模型用它再换）。 */
+export function filesForModel(items: Pick<UploadItem, "name" | "kind" | "url" | "asset_id">[]): string {
+  const lines = items.map((item) =>
+    item.asset_id ? `- ${item.name} (${item.kind}, from the Asset Library, ${item.asset_id}): ${item.url}` : `- ${item.name} (${item.kind}): ${item.url}`
+  );
+  const fromLibrary = items.some((item) => item.asset_id)
+    ? " Links for Asset Library files are temporary (about 15 minutes); if one has expired, call atlas_use_assets with its asset ID."
+    : "";
   return (
-    `The user uploaded ${items.length === 1 ? "1 file" : `${items.length} files`} in the Atlas upload card. ` +
-    `Use these URLs as the media inputs for their request (they are already uploaded; do not upload them again):\n${lines.join("\n")}`
+    `The user added ${items.length === 1 ? "1 file" : `${items.length} files`} in the Atlas upload card. ` +
+    `Use these URLs as the media inputs for their request (they are already uploaded; do not upload them again).${fromLibrary}\n${lines.join("\n")}`
   );
 }
 
@@ -156,6 +165,8 @@ export interface UploaderDeps {
   notice(text: string): void;
   /** 当前要显示的一行说明（main.ts 的 notice）。 */
   noticeText(): string | undefined;
+  /** 打开资产库选择（设计稿：上传卡里「Choose from Asset Library」，全屏选）。宿主不让卡片调工具时没有它。 */
+  openLibrary?(): void;
 }
 
 export interface Uploader {
@@ -163,6 +174,12 @@ export interface Uploader {
   /** 每次状态变化加一，main.ts 据此判断要不要重画。 */
   readonly version: number;
   view(): HTMLElement;
+  /** 打开文件选择框。 */
+  pick(): void;
+  /** 资产库里选好的素材：作为已经传好的文件放进列表。 */
+  addPicked(picked: PickedAsset[]): void;
+  /** 把传好的文件交给模型（「Use files」）。 */
+  useFiles(): Promise<void>;
 }
 
 const CONCURRENCY = 2;
@@ -467,6 +484,24 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     });
   }
 
+  function addPicked(picked: PickedAsset[]): void {
+    for (const asset of picked) {
+      if (items.some((i) => i.asset_id === asset.asset_id)) continue;
+      items.push({
+        id: `a${nextId++}`,
+        name: asset.label,
+        size: 0,
+        kind: asset.kind,
+        status: "done",
+        progress: 1,
+        url: asset.url,
+        asset_id: asset.asset_id,
+        ...(asset.thumb ? { thumb: asset.thumb } : {}),
+      });
+    }
+    changed();
+  }
+
   function chooseAgain(): void {
     items = items.filter((i) => i.status !== "invalid");
     changed();
@@ -488,47 +523,25 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const done = items.filter((i) => i.status === "done" && i.url);
     if (done.length === 0) return;
     const names = done.map((i) => i.name).join(", ");
-    const forModel = filesForModel(done);
-    let inContext = false;
-    if (caps().updateModelContext !== undefined) {
-      try {
-        const res = await deps.app.updateModelContext({ content: [{ type: "text", text: forModel }] });
-        inContext = !(res as { isError?: boolean } | undefined)?.isError;
-      } catch {
-        inContext = false;
-      }
-    }
-    if (caps().message !== undefined) {
-      // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
-      const them = done.length === 1 ? "it" : "them";
-      const text = inContext
-        ? `I've added ${done.length === 1 ? "1 file" : `${done.length} files`} in the Atlas card (${names}). Please use ${them}.`
-        : `${forModel}\n\nPlease use ${them}.`;
-      try {
-        const res = await deps.app.sendMessage({ role: "user", content: [{ type: "text", text }] });
-        if (res.isError) throw new Error("rejected");
-        handedOff = doneKey();
-        changed();
-        return;
-      } catch {
-        if (!inContext) {
-          deps.notice("Couldn't send the files to the chat. Try again.");
-          return;
-        }
-      }
-    }
-    if (inContext) {
+    const them = done.length === 1 ? "it" : "them";
+    // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
+    const outcome = await handOff(deps.app, filesForModel(done), {
+      short: `I've added ${done.length === 1 ? "1 file" : `${done.length} files`} in the Atlas card (${names}). Please use ${them}.`,
+      ask: `Please use ${them}.`,
+    });
+    if (outcome === "sent" || outcome === "context") {
       handedOff = doneKey();
       changed();
-      deps.notice("Files are ready. Tell the chat what to make with them.");
-      return;
     }
-    deps.notice("This app can't take files from the card. Ask in the chat for another way to share them.");
+    if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
+    if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
+    if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat for another way to share them.");
   }
 
   // ---- 视图 ----
 
   function subText(item: UploadItem): string {
+    if (item.asset_id) return "From Asset Library";
     const size = formatBytes(item.size);
     if (linkExpired && (item.status === "queued" || item.status === "uploading")) return `${size} · Waiting for a new link`;
     switch (item.status) {
@@ -639,7 +652,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         h("div", { class: "actions" }, button("Upload again", "primary", uploadAgain)),
       ];
     } else if (phase === "empty") {
-      body = [head("Add reference media", null), dropZone()];
+      body = [
+        head("Add reference media", null),
+        dropZone(),
+        deps.openLibrary
+          ? h("div", { class: "actions" }, button("Choose from Asset Library", "secondary", deps.openLibrary))
+          : null,
+      ];
     } else {
       const status =
         phase === "uploading"
@@ -685,6 +704,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       return version;
     },
     view,
+    pick,
+    addPicked,
+    useFiles,
   };
 }
 

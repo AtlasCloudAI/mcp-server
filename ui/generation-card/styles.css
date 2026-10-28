@@ -873,3 +873,188 @@ button.history-row:focus-visible {
 .upload-remove:hover {
   color: var(--ac-danger-text);
 }
+
+/* ---- 资产库卡（设计稿「全屏视图」：从资产库选取 / 资产库为空）---- */
+
+/* 对话里（非全屏）宿主按内容高度撑开卡片，页面自己不滚。方格是正方形，高度跟着宽度走：
+   一出滚动条宽度变窄、高度变矮，滚动条消失又变高，最后卡在「多一条滚动条」（10-28 本地测试宿主实测）。
+   全屏时宿主给的是固定高度，照常滚动。 */
+:root[data-view="assets"]:not([data-display="fullscreen"]) {
+  overflow: hidden;
+}
+
+.asset-query {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.asset-clear {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ac-text-2);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  display: inline;
+}
+
+.asset-grid {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#root.wide .asset-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+@media (max-width: 420px) {
+  .asset-grid,
+  #root.wide .asset-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.asset-tile {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  cursor: pointer;
+}
+
+.asset-tile:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.asset-tile.selected {
+  box-shadow: 0 0 0 2px var(--ac-card-bg), 0 0 0 4px var(--ac-text);
+}
+
+.asset-media,
+.asset-media img,
+.asset-media video {
+  width: 100%;
+  height: 100%;
+}
+
+.asset-media img,
+.asset-media video {
+  object-fit: cover;
+}
+
+.asset-icon {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-3);
+}
+
+.asset-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.asset-play {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.asset-play svg {
+  width: 12px;
+  height: 12px;
+  color: #fff;
+}
+
+.asset-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  color: var(--ac-primary-bg);
+}
+
+.asset-check svg {
+  width: 20px;
+  height: 20px;
+  color: var(--ac-primary-bg);
+}
+
+.asset-foot {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ac-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.asset-count {
+  font-size: 13px;
+  color: var(--ac-text-2);
+}
+
+.asset-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.asset-empty {
+  padding: 40px 0 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.asset-empty-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--ac-surface);
+  color: var(--ac-text-2);
+  display: grid;
+  place-items: center;
+}
+
+.asset-empty-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ac-text-2);
+}
+
+.asset-empty-title {
+  margin: 12px 0 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ac-text);
+}
+
+.asset-empty .actions {
+  justify-content: center;
+}

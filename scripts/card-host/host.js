@@ -27,6 +27,8 @@ const VARIANTS = [
   "upload_problem",
   "upload_failed",
   "upload_expired",
+  "assets",
+  "assets_empty",
 ];
 
 // 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，
@@ -59,6 +61,37 @@ function mockUploadCaller(mode) {
       return withUrl("ok");
     }
     return withUrl(n > 0 && mode === "expired" ? "ok" : mode);
+  };
+}
+
+// 资产库的模拟场景（不调真实接口）：样例素材当成真的用，卡片调 atlas_use_assets 时回样例图地址。
+//   assets-pick          模型搜出来的资产库卡：选了点 Use，交给模型
+//   upload-from-library  上传卡里点「Choose from Asset Library」：全屏选，回到上传卡
+//   assets-empty-upload  资产库为空：「Upload from device」换成上传卡
+const ASSET_MOCKS = {
+  "assets-pick": { tool: "atlas_search_assets", empty: false },
+  "upload-from-library": { tool: "atlas_get_upload_url", empty: false },
+  "assets-empty-upload": { tool: "atlas_search_assets", empty: true },
+};
+
+function mockAssetsCaller(empty) {
+  const upload = mockUploadCaller("ok");
+  return async (name, args) => {
+    if (name === "atlas_get_upload_url") return upload();
+    if (name === "atlas_search_assets") {
+      const result = await callTool("atlas_card_selftest", { variant: empty ? "assets_empty" : "assets" });
+      const data = { ...result._meta["atlascloud/assets"] };
+      delete data.sample;
+      if (args.media_type) data.items = data.items.filter((item) => item.kind === args.media_type);
+      return { ...result, _meta: { "atlascloud/assets": data } };
+    }
+    if (name === "atlas_use_assets") {
+      const sample = (await callTool("atlas_card_selftest", { variant: "assets" }))._meta["atlascloud/assets"].items;
+      const byId = new Map(sample.map((item) => [item.asset_id, item]));
+      const assets = args.asset_ids.map((id) => ({ asset_id: id, url: byId.get(id)?.thumb_url ?? byId.get(id)?.preview_url ?? "https://example.invalid/x", expires_at: new Date(Date.now() + 900_000).toISOString() }));
+      return { structuredContent: { assets, missing: [] }, content: [{ type: "text", text: "mock asset urls" }] };
+    }
+    return callTool(name, args);
   };
 }
 
@@ -248,7 +281,7 @@ async function mountCard(slot, tool, args, caller = callTool) {
   bridge.oncalltool = async (params) => {
     log("card → tools/call", params.name, params.arguments ?? {});
     const result = await caller(params.name, params.arguments ?? {});
-    log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result?._meta?.["atlascloud/upload"] ? "upload link" : result.isError ? "error" : "?"));
+    log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result?._meta?.["atlascloud/upload"] ? "upload link" : result?._meta?.["atlascloud/assets"] ? "assets" : result?.structuredContent?.assets ? "asset urls" : result.isError ? "error" : "?"));
     return result;
   };
   // 全屏：把这张卡的外框放大到 720 宽，再告诉卡片现在是全屏。
@@ -326,6 +359,12 @@ async function renderAll() {
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_generate_video", { model: "bytedance/seedance-2.5/text-to-video", idempotency_key: "mock-key" }, mockQuoteCaller(outcome)));
   }
+  for (const [label, mock] of Object.entries(ASSET_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), mock.tool, {}, mockAssetsCaller(mock.empty)));
+  }
   for (const [label, mode] of Object.entries(UPLOAD_MOCKS)) {
     if (only && only !== label) continue;
     const pane = hostFrame(`mock · ${label}`);
@@ -337,7 +376,7 @@ async function renderAll() {
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
   }
-  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS ? [] : [only]) : VARIANTS) {
+  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS || only in ASSET_MOCKS ? [] : [only]) : VARIANTS) {
     const pane = hostFrame(`atlas_card_selftest · ${variant}`);
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
@@ -346,7 +385,7 @@ async function renderAll() {
 }
 
 const variantSelect = $("#variant");
-for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...VARIANTS]) {
+for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...Object.keys(ASSET_MOCKS), ...VARIANTS]) {
   const option = document.createElement("option");
   option.value = variant;
   option.textContent = variant;

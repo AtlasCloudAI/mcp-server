@@ -8,9 +8,24 @@ import { type CardData, type QuoteInfo, formatUsd, modelLabel, newIdempotencyKey
 import { type ViewOptions, badge, button, h, head, row } from "./view.js";
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
+const CHECK_TOOL = "atlas_card_check_submission";
+/** 核实「到底提交没有」：每 5 秒问一次，两分钟还说不准就交给用户。服务端 90 秒查不到就会说没开始。 */
+const CHECK_GAP_MS = 5_000;
+const CHECK_BUDGET_MS = 120_000;
 
 // quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
-export type QuotePhase = "ready" | "quoting" | "submitting" | "expired" | "low_balance" | "uncertain" | "error";
+// verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
+// canceled：用户在卡里取消了，什么都没提交。
+export type QuotePhase =
+  | "ready"
+  | "quoting"
+  | "submitting"
+  | "verifying"
+  | "expired"
+  | "low_balance"
+  | "uncertain"
+  | "canceled"
+  | "error";
 
 export interface QuoteState {
   phase: QuotePhase;
@@ -41,6 +56,10 @@ export interface QuoteActions {
    */
   requoteFresh(): void;
   editSettings(): void;
+  /** 不生成了：卡片收起，告诉模型这一单作废。 */
+  cancel(): void;
+  /** 再核实一次刚才那一单开没开始。 */
+  checkAgain(): void;
   topUp(): void;
   openInAtlas(): void;
 }
@@ -71,9 +90,21 @@ export function thrownErrorText(error: unknown): string {
 export function failureState(text: string): QuoteState {
   if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
   if (/insufficient balance|top up/i.test(text)) return { phase: "low_balance" };
-  // 防重复扣费的锁：上一次提交没拿到确认的结果，可能已经开跑，也可能没有。
-  if (/ended without a confirmed response|still in progress/i.test(text)) return { phase: "uncertain" };
+  // 提交没拿到确定的回答（服务端那句 "without a confirmed response"），或者防重复扣费的锁说上一次
+  // 还没完：可能已经开跑，也可能没有。卡片先自己核实。
+  // 上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
+  if (/without a confirmed response|still in progress|did not return a prediction id/i.test(text)) return { phase: "verifying" };
   return { phase: "error", message: text || undefined };
+}
+
+/**
+ * 调用本身失败（不是工具回了错误结果）。能从报错里取出服务端的原话，就按原话判断；
+ * 取不出来（宿主超时把调用掐了、连接断了），请求可能已经到了服务端，先核实。
+ */
+export function thrownFailureState(error: unknown): QuoteState {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (!/text=(['"])/.test(message)) return { phase: "verifying" };
+  return failureState(thrownErrorText(error));
 }
 
 /** 报价已过期：先看卡片自己的计时，没有计时就等服务端说。 */
@@ -90,6 +121,66 @@ export function initialQuoteState(card: CardData): QuoteState {
 
 export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   const sample = () => deps.card()?.sample === true;
+  /** 最近一次带确认令牌提交的时间，核实时告诉服务端从哪儿往后找。 */
+  let submittedAt: string | undefined;
+  let checking = false;
+
+  /** 服务端核实接口说开始了：接着显示进度。 */
+  function startedFrom(result: unknown, quote: QuoteInfo): boolean {
+    const before = deps.card();
+    const carry = quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {};
+    if (!deps.accept(result, carry)) return false;
+    const after = deps.card();
+    if (!after || after.state === "quote") return false;
+    deps.setState({ phase: "ready" });
+    tellModel(deps.app, before, after);
+    deps.startPolling();
+    return true;
+  }
+
+  async function verify(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || checking) return;
+    checking = true;
+    deps.setState({ phase: "verifying" });
+    const started = Date.now();
+    try {
+      while (Date.now() - started < CHECK_BUDGET_MS && deps.card()?.quote === quote) {
+        try {
+          const result = await deps.app.callServerTool({
+            name: CHECK_TOOL,
+            arguments: {
+              tool: quote.tool,
+              idempotency_key: quote.idempotency_key,
+              arguments: quote.arguments,
+              ...(modelOf(deps.card(), quote) ? { model: modelOf(deps.card(), quote) } : {}),
+              ...(submittedAt ? { submitted_at: submittedAt } : {}),
+            },
+          });
+          const outcome = (result.structuredContent as { outcome?: string; message?: string } | undefined) ?? {};
+          if (!result.isError && outcome.outcome === "started" && startedFrom(result, quote)) return;
+          if (!result.isError && outcome.outcome === "not_started") {
+            deps.setState({
+              phase: "error",
+              message: `${outcome.message ?? "This generation didn't start."} Nothing was charged.`,
+            });
+            return;
+          }
+        } catch {
+          // 核实本身失败（网络抖动）：下一轮再问。
+        }
+        await sleep(CHECK_GAP_MS);
+      }
+      if (deps.card()?.quote === quote) deps.setState({ phase: "uncertain" });
+    } finally {
+      checking = false;
+    }
+  }
+
+  function fail(state: QuoteState): void {
+    if (state.phase === "verifying") void verify();
+    else deps.setState(state);
+  }
 
   async function call(withConfirmation: boolean, freshKey = false): Promise<void> {
     const quote = deps.card()?.quote;
@@ -99,6 +190,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       return;
     }
     deps.setState({ phase: withConfirmation ? "submitting" : "quoting" });
+    if (withConfirmation) submittedAt = new Date().toISOString();
     try {
       const result = await deps.app.callServerTool({
         name: quote.tool,
@@ -109,7 +201,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         },
       });
       if (result.isError) {
-        deps.setState(failureState(errorText(result)));
+        fail(failureState(errorText(result)));
         return;
       }
       const before = deps.card();
@@ -129,7 +221,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       deps.startPolling();
     } catch (error) {
       // 不能说「什么都没提交」：请求可能已经到了服务端（ChatGPT 把工具报错也当成调用失败）。
-      deps.setState(failureState(thrownErrorText(error)));
+      fail(thrownFailureState(error));
     }
   }
 
@@ -146,6 +238,12 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         .sendMessage({ role: "user", content: [{ type: "text", text: "Before generating, I'd like to change the settings." }] })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
+    cancel() {
+      const before = deps.card();
+      deps.setState({ phase: "canceled" });
+      if (!sample()) tellModelCanceled(deps.app, before);
+    },
+    checkAgain: () => void verify(),
     topUp: () => deps.openUrl(BILLING_URL),
     openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
   };
@@ -164,6 +262,27 @@ function tellModel(app: App, quoteCard: CardData | undefined, submitted: CardDat
     `. The card submitted it as prediction ${submitted.prediction_id} and is tracking it, so do not ` +
     `submit it again. Call atlas_get_prediction with this ID if the user asks about the result.`;
   void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
+}
+
+/** 用户在卡里取消了：模型不知道，告诉它别再替用户提交这一单。 */
+function tellModelCanceled(app: App, quoteCard: CardData | undefined): void {
+  if (!quoteCard || app.getHostCapabilities()?.updateModelContext === undefined) return;
+  const price = priceLabel(quoteCard.quote);
+  const text =
+    `The user canceled the Atlas Cloud quote in the card` +
+    (price ? ` (${modelLabel(quoteCard)}, about ${price})` : ` (${modelLabel(quoteCard)})`) +
+    `. Nothing was submitted or charged. Do not submit this generation unless the user asks for it again.`;
+  void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
+}
+
+/** 核实时按哪个模型找：卡片上的模型 ID，没有就用报价参数里的。 */
+function modelOf(card: CardData | undefined, quote: QuoteInfo): string | undefined {
+  if (card?.model_id) return card.model_id;
+  return typeof quote.arguments.model === "string" ? quote.arguments.model : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function chips(settings: string[]): HTMLElement | null {
@@ -210,6 +329,21 @@ export function renderQuoteCard(
     );
   }
 
+  if (state.phase === "verifying") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Checking whether it started", badge("Checking", { spinner: true })),
+      subtitle,
+      h(
+        "p",
+        { class: "desc" },
+        "Atlas Cloud didn't confirm this submission, so we're checking whether it went through. Don't submit it again, or you may be charged twice."
+      ),
+      notice(opts)
+    );
+  }
+
   if (state.phase === "uncertain") {
     return h(
       "section",
@@ -219,15 +353,25 @@ export function renderQuoteCard(
       h(
         "p",
         { class: "desc" },
-        "The last attempt didn't finish cleanly, so this job may or may not be running. Check your generations in Atlas first: a new quote starts a separate job."
+        "We couldn't confirm whether this job is running. Check again, or look at your generations in Atlas: a new quote starts a separate job."
       ),
       h(
         "div",
         { class: "actions" },
-        button("Open in Atlas", "primary", actions.openInAtlas),
+        quote ? button("Check again", "primary", actions.checkAgain) : null,
+        button("Open in Atlas", quote ? "secondary" : "primary", actions.openInAtlas),
         quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
       ),
       notice(opts)
+    );
+  }
+
+  if (state.phase === "canceled") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Generation canceled", badge("Canceled")),
+      h("p", { class: "desc" }, `${modelLabel(card)} · Nothing was submitted or charged.`)
     );
   }
 
@@ -279,7 +423,8 @@ export function renderQuoteCard(
           "div",
           { class: "actions" },
           button(generateLabel, "primary", actions.confirm, { disabled: busy }),
-          !busy && opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null
+          !busy && opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null,
+          !busy ? button("Cancel", "secondary", actions.cancel) : null
         )
       : h("p", { class: "note" }, "Reply in the chat to approve or change this."),
     notice(opts)

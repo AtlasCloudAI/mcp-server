@@ -12,7 +12,13 @@ import {
   withGenerationCard,
 } from "../src/apps/generation-quote.js";
 import { cardFromToolResult, formatUsd } from "../ui/generation-card/card.js";
-import { failureState, initialQuoteState, quoteExpired, thrownErrorText } from "../ui/generation-card/quote.js";
+import {
+  failureState,
+  initialQuoteState,
+  quoteExpired,
+  thrownErrorText,
+  thrownFailureState,
+} from "../ui/generation-card/quote.js";
 
 const UI_MIME = "text/html;profile=mcp-app";
 // 地址里带页面内容哈希，跟着构建变，测试里读服务端导出的那个。
@@ -246,7 +252,8 @@ test("卡片前端：ChatGPT 把工具报错变成调用失败时，取出原文
       "Error: A previous request with this idempotency key ended without a confirmed response; check predictions or billing before starting a new request"
     )
   );
-  assert.deepEqual(failureState(uncertain), { phase: "uncertain" });
+  // 上一次没拿到确定回答：卡片先自己核实，不直接把「不确定」丢给用户。
+  assert.deepEqual(failureState(uncertain), { phase: "verifying" });
 
   assert.deepEqual(
     failureState(thrownErrorText(wrap("Generation confirmation expired. Request a new quote. No billable request was submitted."))),
@@ -259,4 +266,26 @@ test("卡片前端：ChatGPT 把工具报错变成调用失败时，取出原文
   // 取不到里层文字时用整条信息；什么都没有时不编造原因。
   assert.equal(thrownErrorText(new Error("Request timed out")), "Request timed out");
   assert.deepEqual(failureState(thrownErrorText(undefined)), { phase: "error", message: undefined });
+});
+
+test("卡片前端：提交没拿到确定的回答时先核实，服务端明确拒收时直接报错", () => {
+  const wrap = (text: string) =>
+    new Error(`Error calling MCP tool: [TextContent(type='text', text="${text}", annotations=None, meta=None)]`);
+  // 服务端给结果不明的提交加的那句话（src/utils/error-handler.ts）。
+  const unconfirmed =
+    "Error: Atlas Cloud didn't answer in time. The request ended without a confirmed response, so it may already have gone through. Check recent predictions or billing before sending it again.";
+  assert.deepEqual(failureState(unconfirmed.replace(/^Error:\s*/, "")), { phase: "verifying" });
+  assert.deepEqual(thrownFailureState(wrap(unconfirmed)), { phase: "verifying" });
+  // 宿主把调用掐了、连接断了：取不到服务端原话，请求可能已经到了，也先核实。
+  assert.deepEqual(thrownFailureState(new Error("MCP error -32001: Request timed out")), { phase: "verifying" });
+  assert.deepEqual(thrownFailureState(undefined), { phase: "verifying" });
+  assert.deepEqual(
+    failureState("The Atlas Cloud API accepted the video request but did not return a prediction ID. No automatic retry was attempted."),
+    { phase: "verifying" }
+  );
+  // 取得到原话且是明确的拒绝：照旧显示失败。
+  assert.deepEqual(thrownFailureState(wrap("Error: model[x/y] router not found")), {
+    phase: "error",
+    message: "model[x/y] router not found",
+  });
 });

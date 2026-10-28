@@ -18,6 +18,7 @@ import {
   registerGenerationCardResource,
 } from "./apps/generation-card.js";
 import { registerCardSelftestTool } from "./apps/card-selftest.js";
+import { registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
 
 export type ServerProfile = "stdio" | "remote";
@@ -65,6 +66,7 @@ export function createAtlasCloudServer(
   if (generationCardEnabled()) {
     registerGenerationCardResource(server);
     registerCardStatusTool(server);
+    registerCardCheckTool(server);
     // 测试卡片只在开发环境用，生产永远不注册。
     const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
     if (selftest === "1" || selftest === "true" || selftest === "on") {

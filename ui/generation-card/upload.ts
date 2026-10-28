@@ -5,6 +5,7 @@
 // 服务端数据见 src/apps/upload-card.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
 
 export const UPLOAD_META_KEY = "atlascloud/upload";
@@ -172,6 +173,9 @@ const XHR_TIMEOUT_MS = 5 * 60_000;
 const MAX_AUTO_RENEWALS = 2;
 // 按时钟主动换地址，一分钟内最多一次：本机时钟比服务器快时，新地址看起来也「快过期」。
 const PROACTIVE_RENEW_GAP_MS = 60_000;
+// 换地址失败后隔这么久自动再试一次。2026-10-28 ChatGPT 实测：选完文件时自动换地址失败，
+// 紧接着手动点「Upload again」就成功了，原因没抓到，先按偶发处理。
+const RENEW_RETRY_DELAY_MS = 1_500;
 const THUMB_PX = 96;
 
 let nextId = 0;
@@ -204,10 +208,15 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     ...(f.url ? { url: f.url, thumb: f.url } : {}),
     ...(f.error ? { error: f.error } : {}),
   }));
+  // linkExpired：手上的地址不能用了，要换；gaveUp：自动换了几次都没换到，显示「过期」等用户点。
+  // 分开是为了自动重试那一两秒里卡片照常显示上传中，不闪一下「过期」。
   let linkExpired = initial.sample_expired === true;
+  let gaveUp = initial.sample_expired === true;
   let renewing: Promise<boolean> | undefined;
   let renewals = 0;
   let lastRenewAt = 0;
+  /** 最近一次换地址失败的原因，显示在「过期」卡上。 */
+  let renewError: string | undefined;
   /** 交给模型之后的那组文件；列表一变就清掉，按钮恢复。 */
   let handedOff = "";
   const inflight = new Map<string, XMLHttpRequest>();
@@ -280,43 +289,77 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     return Number.isFinite(at) && at - RENEW_MARGIN_MS <= Date.now();
   }
 
-  /** 换一张新的上传地址（卡片自己调 atlas_get_upload_url，不经过模型）。 */
-  function renew(): Promise<boolean> {
+  /** 换一次上传地址（卡片自己调 atlas_get_upload_url，不经过模型）。失败时记下原因。 */
+  function renewOnce(): Promise<boolean> {
     if (renewing) return renewing;
-    if (caps().serverTools === undefined) return Promise.resolve(false);
+    if (caps().serverTools === undefined) {
+      renewError = "This app doesn't let the card ask for a new link";
+      return Promise.resolve(false);
+    }
     renewing = deps.app
       .callServerTool({ name: UPLOAD_TOOL, arguments: {} })
       .then((result) => {
-        const next = result.isError ? undefined : uploadFromToolResult(result);
-        if (!next) return false;
+        if (result.isError) {
+          const text = (result.content ?? []).find((block) => block.type === "text");
+          renewError = (text && "text" in text ? String(text.text) : "").replace(/^Error:\s*/, "").slice(0, 200) || "Atlas Cloud returned an error";
+          return false;
+        }
+        const next = uploadFromToolResult(result);
+        if (!next) {
+          renewError = "Atlas Cloud sent back something this card can't read";
+          return false;
+        }
         data = { ...next, max_files: data.max_files };
         linkExpired = false;
+        gaveUp = false;
+        renewError = undefined;
         lastRenewAt = Date.now();
         return true;
       })
-      .catch(() => false)
+      .catch((error: unknown) => {
+        renewError = thrownErrorText(error) || "Couldn't reach Atlas Cloud";
+        return false;
+      })
       .finally(() => {
         renewing = undefined;
       });
     return renewing;
   }
 
+  /** 换地址，失败了隔一会儿再试一次。 */
+  async function renew(): Promise<boolean> {
+    if (await renewOnce()) return true;
+    console.warn(`[atlas upload card] couldn't get a new upload link: ${renewError ?? "unknown"}; retrying`);
+    await new Promise((resolve) => setTimeout(resolve, RENEW_RETRY_DELAY_MS));
+    return renewOnce();
+  }
+
   async function pump(): Promise<void> {
     while (inflight.size < CONCURRENCY) {
       const next = items.find((i) => i.status === "queued");
       if (!next) return;
-      const stale = expiresSoon() && Date.now() - lastRenewAt > PROACTIVE_RENEW_GAP_MS;
-      if (linkExpired || stale) {
-        if (linkExpired && renewals >= MAX_AUTO_RENEWALS) {
+      if (linkExpired) {
+        // 中转说地址过期了（或卡片按时钟判断）：换新地址；连着换了几次都不成就停下，等用户点「Upload again」。
+        if (renewals >= MAX_AUTO_RENEWALS) {
+          gaveUp = true;
           changed();
           return;
         }
-        if (linkExpired) renewals += 1;
+        renewals += 1;
+        changed(); // 显示「Waiting for a new link」
         if (!(await renew())) {
-          linkExpired = true;
+          gaveUp = true;
           changed();
           return;
         }
+        changed();
+        continue;
+      }
+      if (expiresSoon() && Date.now() - lastRenewAt > PROACTIVE_RENEW_GAP_MS) {
+        // 按时钟看快过期了：先换新地址，免得传完才被拒。换不到也不拦着，用手上的地址照传，
+        // 真过期了中转会回 410，再走上面那条路。
+        lastRenewAt = Date.now();
+        await renew();
         changed();
         continue;
       }
@@ -415,11 +458,11 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     }
     renewals = 0;
     void renew().then((ok) => {
+      changed();
       if (!ok) {
-        deps.notice("Couldn't get a new upload link. Ask in the chat to upload again.");
+        deps.notice("Couldn't get a new upload link. Try again, or ask in the chat to upload again.");
         return;
       }
-      changed();
       void pump();
     });
   }
@@ -487,6 +530,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
   function subText(item: UploadItem): string {
     const size = formatBytes(item.size);
+    if (linkExpired && (item.status === "queued" || item.status === "uploading")) return `${size} · Waiting for a new link`;
     switch (item.status) {
       case "queued":
         return `${size} · Waiting`;
@@ -577,7 +621,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   function view(): HTMLElement {
-    const phase = uploadPhase(items, linkExpired);
+    const phase = uploadPhase(items, gaveUp);
     const done = items.filter((i) => i.status === "done");
     const useLabel = done.length === 1 ? "Use 1 file" : `Use ${done.length} files`;
     const handed = handedOff !== "" && handedOff === doneKey();
@@ -586,9 +630,12 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
     let body: (HTMLElement | null)[];
     if (phase === "expired") {
+      // 选过的文件留在卡上：用户要看得出是哪几个文件在等，点「Upload again」会接着传它们。
       body = [
         head("Upload link expired", badge("Expired")),
         h("p", { class: "desc" }, "Upload links last a few minutes. Get a new one and your files will upload again."),
+        items.length > 0 ? list() : null,
+        renewError ? h("p", { class: "note" }, `Couldn't get a new link: ${renewError}`) : null,
         h("div", { class: "actions" }, button("Upload again", "primary", uploadAgain)),
       ];
     } else if (phase === "empty") {

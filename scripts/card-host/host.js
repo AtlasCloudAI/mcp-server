@@ -71,8 +71,13 @@ const QUOTE_MOCKS = {
   "quote-fail-retry": "fail",
   // ChatGPT 的做法：工具报错时不回错误结果，而是让卡片这次调用直接失败（报错原文夹在信息里）。
   "quote-chatgpt-error": "throw-route",
-  "quote-chatgpt-uncertain": "throw-uncertain",
+  // 提交没拿到确定的回答：卡片自己调 atlas_card_check_submission 核实。
+  "quote-unconfirmed-started": "unconfirmed-started",
+  "quote-unconfirmed-not-started": "unconfirmed-none",
 };
+
+const UNCONFIRMED =
+  "Error: Atlas Cloud didn't answer in time. The request ended without a confirmed response, so it may already have gone through. Check recent predictions or billing before sending it again.";
 
 const chatgptStyleError = (text) =>
   new Error(
@@ -81,6 +86,7 @@ const chatgptStyleError = (text) =>
 
 function mockQuoteCaller(outcome) {
   let polls = 0;
+  let checks = 0;
   const unsample = (result, overrides = {}) => {
     const card = { ...result._meta["atlascloud/card"], ...overrides };
     delete card.sample;
@@ -95,11 +101,8 @@ function mockQuoteCaller(outcome) {
       log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
       await new Promise((r) => setTimeout(r, 1200));
       if (outcome === "throw-route") throw chatgptStyleError("Error: model[black-forest-labs/flux-schnell] router not found");
-      if (outcome === "throw-uncertain") {
-        throw chatgptStyleError(
-          "Error: A previous request with this idempotency key ended without a confirmed response; check predictions or billing before starting a new request"
-        );
-      }
+      if (outcome === "unconfirmed-started") throw chatgptStyleError(UNCONFIRMED);
+      if (outcome === "unconfirmed-none") return { isError: true, content: [{ type: "text", text: UNCONFIRMED }] };
       if (outcome === "expired") {
         return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
       }
@@ -111,6 +114,20 @@ function mockQuoteCaller(outcome) {
         prediction_id: "mock_quote",
         retry: { tool: "atlas_generate_video", arguments: { model: args.model, params: args.params } },
       });
+    }
+    if (name === "atlas_card_check_submission") {
+      checks += 1;
+      log("      mock check", JSON.stringify({ tool: args.tool, idempotency_key: args.idempotency_key, model: args.model, submitted_at: Boolean(args.submitted_at) }));
+      await new Promise((r) => setTimeout(r, 800));
+      if (checks < 2) return { structuredContent: { outcome: "checking" }, content: [{ type: "text", text: "Still checking." }] };
+      if (outcome === "unconfirmed-none") {
+        return {
+          structuredContent: { outcome: "not_started", message: "Atlas Cloud has no record of this job, so it didn't start." },
+          content: [{ type: "text", text: "Not started." }],
+        };
+      }
+      const started = unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+      return { ...started, structuredContent: { outcome: "started", prediction_id: "mock_quote" } };
     }
     if (name === "atlas_card_status") {
       polls += 1;

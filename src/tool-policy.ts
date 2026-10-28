@@ -199,7 +199,7 @@ export function isAtlasToolName(value: string): value is AtlasToolName {
 // 对话内卡片自己调用的工具（MCP Apps 的 visibility: ["app"]，模型看不到）。
 // 只在 MCP_UI_CARDS 打开时注册，所以不进 TOOL_POLICIES：那张表是对外公示、
 // 契约测试逐个核对的 16 个工具。远端放行和 scope 检查仍然按这里的策略走。
-export type CardToolName = "atlas_card_status" | "atlas_card_selftest";
+export type CardToolName = "atlas_card_status" | "atlas_card_check_submission" | "atlas_card_selftest";
 
 export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
   atlas_card_status: {
@@ -209,6 +209,14 @@ export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
     annotations: firstPartyRead,
     annotationJustification:
       "Reads one Atlas prediction so the generation card can refresh itself; changes nothing.",
+  },
+  atlas_card_check_submission: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads the card's own submission record and recent Atlas predictions to tell whether an unconfirmed submission started; submits nothing.",
   },
   atlas_card_selftest: {
     scope: null,

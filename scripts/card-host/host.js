@@ -36,6 +36,9 @@ const UPLOAD_MOCKS = {
   "upload-fail-once": "fail-once",
   "upload-link-expired": "expired",
   "upload-too-large": "toolarge",
+  // 卡片换地址时 ChatGPT 那样直接抛错：第一次抛、自动重试成功；或者一直抛。
+  "upload-renew-retry": "renew-retry",
+  "upload-renew-fails": "renew-fails",
 };
 
 function mockUploadCaller(mode) {
@@ -48,7 +51,15 @@ function mockUploadCaller(mode) {
   };
   // 第一次是宿主把卡片打开那次调用；之后的是卡片自己来换新地址。
   let calls = 0;
-  return async () => withUrl(calls++ > 0 && mode === "expired" ? "ok" : mode);
+  return async () => {
+    const n = calls++;
+    if (mode === "renew-retry" || mode === "renew-fails") {
+      if (n === 0) return withUrl("expired");
+      if (mode === "renew-fails" || n === 1) throw chatgptStyleError("Error: simulated failure while issuing an upload URL");
+      return withUrl("ok");
+    }
+    return withUrl(n > 0 && mode === "expired" ? "ok" : mode);
+  };
 }
 
 // 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），

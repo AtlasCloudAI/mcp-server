@@ -225,6 +225,12 @@ export interface QuoteInfo {
   estimated_usd?: number;
   /** 预估不完整（只算了一部分）。 */
   partial?: boolean;
+  /** 按实际用量结算，最终扣费可能和预估略有出入。 */
+  settles_on_usage?: boolean;
+  /** 不完整的预估漏掉了什么（给人看的说法，如 the reference videos' length）。 */
+  estimate_missing?: string[];
+  /** 扣费账户和可用余额（需求文档 6.1）；查不到就没有。 */
+  account?: { name: string; email?: string; balance_usd?: number };
   /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
@@ -245,6 +251,11 @@ export interface GenerationCardData {
   model_type?: string;
   /** 实际扣费（美元），来自查结果接口的 price；拿不到就不显示。 */
   price_usd?: number;
+  /**
+   * 查结果接口的 charge_status（aiproxy#1074）：没结算完时 price 是空的，卡片据此写
+   * 「待结算」而不是什么都不写或写 $0；失败卡据此说清退没退、扣没扣。老网关没有这个字段。
+   */
+  charge_status?: ChargeStatus;
   media: CardMedia[];
   error?: string;
   /** 「在 Atlas 打开」：工作流去 /workflow/history，其他模型去模型页。 */
@@ -296,6 +307,14 @@ export function openInAtlasUrl(modelId: string | undefined): string {
   return `${SITE_URL}/models/${modelId}`;
 }
 
+export type ChargeStatus = "charged" | "partially_charged" | "pending" | "not_charged" | "refunded";
+
+const CHARGE_STATUSES = new Set<string>(["charged", "partially_charged", "pending", "not_charged", "refunded"]);
+
+export function chargeStatusOf(raw: unknown): ChargeStatus | undefined {
+  return typeof raw === "string" && CHARGE_STATUSES.has(raw) ? (raw as ChargeStatus) : undefined;
+}
+
 export function priceOf(raw: unknown): number | undefined {
   const value = typeof raw === "string" ? Number.parseFloat(raw) : typeof raw === "number" ? raw : NaN;
   return Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -314,6 +333,7 @@ export function buildGenerationCardData(input: {
   modelName?: string;
   modelType?: string;
   price?: unknown;
+  chargeStatus?: unknown;
   error?: string;
   createdAt?: string;
   completedAt?: string;
@@ -321,6 +341,7 @@ export function buildGenerationCardData(input: {
 }): GenerationCardData {
   const state = cardStateOf(input.status, input.transferPending);
   const price = priceOf(input.price);
+  const chargeStatus = chargeStatusOf(input.chargeStatus);
   return {
     state,
     prediction_id: input.predictionId,
@@ -328,6 +349,7 @@ export function buildGenerationCardData(input: {
     ...(input.modelName ? { model_name: input.modelName } : {}),
     ...(input.modelType ? { model_type: input.modelType } : {}),
     ...(price !== undefined ? { price_usd: price } : {}),
+    ...(chargeStatus ? { charge_status: chargeStatus } : {}),
     media: input.outputs.map((url) => ({ url, kind: cardMediaKind(url) })),
     ...(input.error ? { error: input.error } : {}),
     open_url: openInAtlasUrl(input.modelId),
@@ -388,6 +410,7 @@ export async function predictionCardData(
     modelName: model?.displayName,
     modelType: model?.type,
     price: data.price,
+    chargeStatus: data.charge_status,
     error: result.data?.error || undefined,
     createdAt: isoOf(createdAtOf(result)),
     completedAt,

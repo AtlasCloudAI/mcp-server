@@ -145,7 +145,29 @@ export function row(label: string, value: string, opts: { mono?: boolean; title?
 }
 
 function priceText(card: CardData): string | null {
+  // 出了结果但还没结算：写「待结算」，不写价格也不写 $0（需求文档 6.3）。
+  if (card.charge_status === "pending" && card.state === "succeeded") return "Charge pending";
   return card.price_usd !== undefined ? formatUsd(card.price_usd) : null;
+}
+
+/**
+ * 失败类卡片上那句扣费说明（需求文档 6.3：失败要写清费用状态）。老网关没有
+ * charge_status 时沿用「没扣费」：平台规则是失败不收费。
+ */
+function chargeSentence(card: CardData): string {
+  const price = card.price_usd !== undefined ? formatUsd(card.price_usd) : null;
+  switch (card.charge_status) {
+    case "partially_charged":
+      return price ? `You were charged ${price} for the part that ran.` : "You were charged for the part that ran.";
+    case "charged":
+      return price ? `You were charged ${price}.` : "You were charged.";
+    case "refunded":
+      return "Your charge was refunded.";
+    case "pending":
+      return "The charge is still being settled.";
+    default:
+      return "You weren't charged.";
+  }
 }
 
 function captionText(card: CardData, media: CardMedia, extra: string[] = []): string {
@@ -235,7 +257,7 @@ function rateLimitedCard(card: CardData, opts: ViewOptions, actions: CardActions
     "section",
     { class: "card" },
     head("Too many requests", badge("Rate limited", { warn: true })),
-    h("p", { class: "desc" }, `${modelLabel(card)} is getting too many requests. You weren't charged. Try again in a moment.`),
+    h("p", { class: "desc" }, `${modelLabel(card)} is getting too many requests. ${chargeSentence(card)} Try again in a moment.`),
     h("div", { class: "rows" }, row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })),
     canRetry ? h("div", { class: "actions" }, retryButton(retryAtFor(card, Date.now()), actions.tryAgain)) : null,
     notice(opts)
@@ -250,7 +272,7 @@ function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions
     "section",
     { class: "card" },
     head("Model unavailable", badge("Unavailable", { danger: true })),
-    h("p", { class: "desc" }, `${modelLabel(card)} is temporarily unavailable. You weren't charged.`),
+    h("p", { class: "desc" }, `${modelLabel(card)} is temporarily unavailable. ${chargeSentence(card)}`),
     h("div", { class: "rows" }, ...rows),
     canRetry
       ? h(
@@ -277,7 +299,7 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
     "section",
     { class: "card" },
     head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Failed", { danger: true })),
-    h("p", { class: "desc" }, `The model couldn't finish ${what}. You weren't charged.`),
+    h("p", { class: "desc" }, `The model couldn't finish ${what}. ${chargeSentence(card)}`),
     h("div", { class: "rows" }, ...rows),
     canRetry
       ? h(
@@ -516,7 +538,8 @@ function carousel(card: CardData, actions: CardActions): HTMLElement {
   });
   // 工作流按次计费，单张价没意义，总价写在下面；超过 8 个的去 Atlas 看全部。
   const footerBits: (Node | string)[] = [];
-  if (each === undefined && card.price_usd !== undefined) footerBits.push(`Total ${formatUsd(card.price_usd)}`);
+  if (card.charge_status === "pending") footerBits.push("Charge pending");
+  else if (each === undefined && card.price_usd !== undefined) footerBits.push(`Total ${formatUsd(card.price_usd)}`);
   if (card.media.length > MAX_TILES) footerBits.push(`${card.media.length - MAX_TILES} more in Atlas`);
   return h(
     "section",

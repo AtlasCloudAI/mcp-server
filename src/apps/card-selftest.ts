@@ -107,6 +107,24 @@ const VARIANTS = {
     price: undefined,
     outputs: [],
   },
+  // 出了结果、还没结算：卡片写 Charge pending，不写价格也不写 $0。
+  charge_pending: {
+    status: "completed",
+    model: "bytedance/seedream-v4.7",
+    name: "Seedream v4.7",
+    type: "Image",
+    price: undefined,
+    outputs: [`${STATIC}/model/example/material/product-shot-01.jpg`],
+  },
+  // 审核没过但已经扣了一部分：失败卡写清扣了多少。
+  failed_partial: {
+    status: "failed",
+    model: "bytedance/seedance-2.5/text-to-video",
+    name: "Dreamina Seedance 2.5",
+    type: "Video",
+    price: "0.05",
+    outputs: [],
+  },
   // 故意给一个打不开的链接，看卡片「预览不可用」的样子。
   blocked: {
     status: "completed",
@@ -131,7 +149,17 @@ const FAILED_REASONS: Partial<Record<string, string>> = {
   failed: "Upstream timeout",
   failed_rate_limited: "Too Many Requests (429): the provider rate limit was exceeded",
   failed_unavailable: "The model is temporarily unavailable: ServerOverloaded",
+  failed_partial: "Output rejected by content review",
 };
+
+// 网关给的扣费状态（aiproxy#1074）；没列的样例按老网关处理（没有这个字段）。
+const CHARGE_SAMPLES: Partial<Record<string, string>> = {
+  charge_pending: "pending",
+  failed_partial: "partially_charged",
+};
+
+// 报价卡上的扣费账户和余额（需求文档 6.1），示例数字。
+const QUOTE_ACCOUNT = { name: "Ada Lovelace", email: "ada@example.com", balance_usd: 24.6 } as const;
 
 // 报价卡样例：参数照一单 Seedance 2.5 文生视频填，价格是示例数字。
 const QUOTE_SAMPLE = {
@@ -277,6 +305,10 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       expires_at: new Date(Date.now() + validMs).toISOString(),
       ...(sample.estimated !== undefined ? { estimated_usd: sample.estimated } : {}),
       ...(sample.partial ? { partial: true } : {}),
+      // Seedance 2.5 按实际用量结算。
+      ...(variant === "quote" ? { settles_on_usage: true } : {}),
+      ...(variant === "quote_partial" ? { estimate_missing: ["the reference videos' length"] } : {}),
+      account: { ...QUOTE_ACCOUNT },
       settings: settingsChips(QUOTE_SAMPLE.params),
       valid_seconds: 600,
       ...(sample.problem ? { problem: sample.problem } : {}),
@@ -347,6 +379,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         modelName: sample.name,
         modelType: sample.type,
         price: sample.price,
+        chargeStatus: CHARGE_SAMPLES[variant],
         error: FAILED_REASONS[variant],
         createdAt: new Date(Date.now() - 102_000).toISOString(),
         mediaExpired: variant === "expired",

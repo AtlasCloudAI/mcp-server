@@ -122,7 +122,8 @@ Returns:
               prepared.model,
               "image",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [
               {

@@ -15,6 +15,8 @@ const VARIANTS = [
   "failed_rate_limited",
   "failed_unavailable",
   "canceled",
+  "charge_pending",
+  "failed_partial",
   "blocked",
   "expired",
   "quote",

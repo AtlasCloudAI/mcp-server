@@ -443,9 +443,12 @@ export function renderQuoteCard(
   }
 
   if (state.phase === "low_balance") {
+    // 报错里带回的余额最新；没有时用报价时查到的。
+    const balance = state.balanceUsd ?? quote?.account?.balance_usd;
     const rows = [
       price ? row("Estimated cost", price) : null,
-      state.balanceUsd !== undefined ? row("Balance", signedUsd(state.balanceUsd)) : null,
+      balance !== undefined ? row("Balance", signedUsd(balance)) : null,
+      quote?.account ? billedToRow(quote.account) : null,
     ].filter((el): el is HTMLElement => el !== null);
     return h(
       "section",
@@ -616,13 +619,18 @@ export function renderQuoteCard(
         ]
       : [
           h("p", { class: "quote-price" }, quote?.partial ? `≈ ${price}` : price),
-          h(
-            "p",
-            { class: "note quote-note" },
-            quote?.partial ? "Some settings can't be priced exactly. The final cost may differ" : "Estimated",
-            ...validity
-          ),
+          h("p", { class: "note quote-note" }, estimateNote(quote), ...validity),
         ];
+  // 需求文档 6.1：报价写明从哪个账户扣、余额多少。
+  const account = quote?.account;
+  const billing = account
+    ? h(
+        "div",
+        { class: "rows" },
+        billedToRow(account),
+        account.balance_usd !== undefined ? row("Balance", signedUsd(account.balance_usd)) : null
+      )
+    : null;
 
   // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
   const canConfirm = quote !== undefined && quote.tool !== "";
@@ -640,6 +648,7 @@ export function renderQuoteCard(
     subtitle,
     chips(quote?.settings ?? []),
     ...amount,
+    billing,
     canConfirm
       ? h(
           "div",
@@ -655,4 +664,20 @@ export function renderQuoteCard(
 
 function notice(opts: ViewOptions): HTMLElement | null {
   return opts.notice ? h("p", { class: "note", role: "status" }, opts.notice) : null;
+}
+
+/** 价格下面那行：为什么是预估。 */
+function estimateNote(quote: QuoteInfo | undefined): string {
+  if (quote?.partial) {
+    const missing = quote.estimate_missing?.join(", ");
+    return missing
+      ? `Doesn't include ${missing} yet. The final cost may be higher`
+      : "Some settings can't be priced exactly. The final cost may differ";
+  }
+  return quote?.settles_on_usage ? "Estimated · settles on actual use" : "Estimated";
+}
+
+function billedToRow(account: NonNullable<QuoteInfo["account"]>): HTMLElement {
+  const label = account.email ? `${account.name} · ${account.email}` : account.name;
+  return row("Billed to", label, { title: label });
 }

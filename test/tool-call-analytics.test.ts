@@ -21,9 +21,11 @@ import { ApiRequestError } from "../src/services/api-client.js";
 import {
   normalizeGenerationStatus,
   sanitizeModel,
+  taskHash,
   ToolCallTelemetry,
 } from "../src/services/tool-call-telemetry.js";
 import { classifyToolError } from "../src/utils/error-handler.js";
+import { validateModelParams } from "../src/utils/schema-validator.js";
 import { SERVER_VERSION } from "../src/version.js";
 
 const BASE_ENV: NodeJS.ProcessEnv = {
@@ -44,8 +46,8 @@ const BASE_ENV: NodeJS.ProcessEnv = {
 
 test("a successful call carries the CLI fields and no error fields", () => {
   const call = new ToolCallTelemetry("atlas_generate_image", 1000);
-  call.annotate({ model: "bytedance/seedream-v4", execution_mode: "submit" });
-  call.annotate({ generation_status: "processing" });
+  call.annotate({ model: "bytedance/seedream-v4", execution_mode: "submit", stage: "submit" });
+  call.annotate({ generation_status: "processing", task_hash: "0123456789abcdef" });
   // 半路记下的错误不该跟着成功的调用出去
   call.recordError({ code: "network_error" });
   call.observeResponse({ jsonrpc: "2.0", id: 1, result: { content: [] } });
@@ -65,13 +67,15 @@ test("a successful call carries the CLI fields and no error fields", () => {
     is_error: false,
     model: "bytedance/seedream-v4",
     execution_mode: "submit",
+    stage: "submit",
     generation_status: "processing",
+    task_hash: "0123456789abcdef",
   });
 });
 
 test("a tool error reports the first recorded code with CLI category and retryable", () => {
   const call = new ToolCallTelemetry("atlas_generate_video", 0);
-  call.annotate({ execution_mode: "quote" });
+  call.annotate({ execution_mode: "estimate", stage: "schema" });
   call.recordError({ code: "model_schema_unavailable" });
   call.recordError({ code: "upstream_failure" });
   call.observeResponse({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [] } });
@@ -81,8 +85,21 @@ test("a tool error reports the first recorded code with CLI category and retryab
   assert.equal(props.error_code, "model_schema_unavailable");
   assert.equal(props.error_category, "model");
   assert.equal(props.retryable, true);
-  assert.equal(props.execution_mode, "quote");
+  assert.equal(props.execution_mode, "estimate");
+  assert.equal(props.stage, "schema");
+  assert.equal(props.failure_stage, "schema");
   assert.equal("http_status" in props, false);
+
+  const invalid = new ToolCallTelemetry("atlas_generate_image", 0);
+  invalid.recordError({ code: "invalid_param", param: "aspect_ratio" });
+  invalid.observeResponse({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [] } });
+  assert.equal(invalid.properties({}, 200).error_param, "aspect_ratio");
+
+  // 没出错的调用：阶段照记，失败阶段和错误字段都不出现
+  const quiet = new ToolCallTelemetry("atlas_list_models", 0).properties({}, 200);
+  assert.equal(quiet.stage, "command");
+  assert.equal("failure_stage" in quiet, false);
+  assert.equal("error_param" in quiet, false);
 });
 
 test("unrecorded tool errors fall back to the SDK validation text or upstream_failure", () => {
@@ -114,17 +131,65 @@ test("HTTP rejections and disconnects are classified without the tool running", 
   assert.equal(limited.error_code, "rate_limited");
   assert.equal(limited.retryable, true);
   assert.equal(limited.http_status, 429);
+  assert.equal(limited.failure_stage, "request");
 
   const unlinked = new ToolCallTelemetry("atlas_get_balance", 0).properties({}, 401);
   assert.equal(unlinked.error_code, "auth_required");
   assert.equal(unlinked.error_category, "auth");
+  assert.equal(unlinked.failure_stage, "auth");
 
-  const gone = new ToolCallTelemetry("atlas_get_prediction", 0).properties({}, 200, {
-    disconnected: true,
-  });
+  // 服务端替调用方等任务时客户端断开：记成等待被打断，阶段停在 wait
+  const waiting = new ToolCallTelemetry("atlas_get_prediction", 0);
+  waiting.annotate({ execution_mode: "wait", stage: "wait" });
+  const gone = waiting.properties({}, 200, { disconnected: true });
   assert.equal(gone.is_error, true);
   assert.equal(gone.error_code, "client_disconnected");
   assert.equal(gone.error_category, "network");
+  assert.equal(gone.wait_outcome, "interrupted");
+  assert.equal(gone.failure_stage, "wait");
+
+  // 已经等出结果、只是没来得及写回：保留真实的等待结果
+  const late = new ToolCallTelemetry("atlas_get_prediction", 0);
+  late.annotate({ execution_mode: "wait", wait_outcome: "completed" });
+  assert.equal(late.properties({}, 200, { disconnected: true }).wait_outcome, "completed");
+});
+
+test("task_hash is a stable 16-hex digest that never carries the raw ID", () => {
+  const hash = taskHash("pred_abc123");
+  assert.match(hash ?? "", /^[0-9a-f]{16}$/);
+  assert.equal(taskHash(" pred_abc123 "), hash);
+  assert.notEqual(taskHash("pred_abc124"), hash);
+  assert.equal(hash?.includes("abc123"), false);
+  assert.equal(taskHash(""), undefined);
+  assert.equal(taskHash(undefined), undefined);
+});
+
+test("error_param names only a parameter the model schema declares", () => {
+  const schema = {
+    components: {
+      schemas: {
+        Input: {
+          type: "object",
+          required: ["prompt"],
+          properties: {
+            prompt: { type: "string" },
+            aspect_ratio: { type: "string", enum: ["1:1", "16:9"] },
+          },
+        },
+      },
+    },
+  };
+  const badEnum = validateModelParams(schema, "vendor/model", { prompt: "x", aspect_ratio: "4:3" });
+  assert.equal(badEnum.ok, false);
+  assert.equal(badEnum.errorParam, "aspect_ratio");
+
+  const missing = validateModelParams(schema, "vendor/model", {});
+  assert.equal(missing.errorParam, "prompt");
+
+  // 调用方自造的参数名不报：它可能就是用户写的一段话
+  const unknown = validateModelParams(schema, "vendor/model", { prompt: "x", "my secret note": 1 });
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.errorParam, undefined);
 });
 
 test("generation status follows the CLI value set; models must look like catalog IDs", () => {
@@ -365,6 +430,8 @@ test("tool calls over HTTP emit one mcp_tool_call each, with no user data", asyn
   assert.equal(success.properties.environment, "dev");
   assert.equal(success.properties.version, SERVER_VERSION);
   assert.equal(success.properties.client_platform, "chatgpt");
+  assert.equal(success.properties.auth_method, "oauth");
+  assert.equal(success.properties.stage, "command");
   assert.equal(success.properties.is_error, false);
   assert.equal(typeof success.properties.duration_ms, "number");
   assert.equal("error_code" in success.properties, false);
@@ -388,6 +455,7 @@ test("tool calls over HTTP emit one mcp_tool_call each, with no user data", asyn
   const forbidden = await nextEvent(3);
   assert.equal(forbidden.properties.error_code, "access_denied");
   assert.equal(forbidden.properties.http_status, 403);
+  assert.equal(forbidden.properties.failure_stage, "auth");
 
   // 不是工具调用、sub 不是数字用户 ID：都不发
   await rpc("chatgpt:42", "tools/list", {});

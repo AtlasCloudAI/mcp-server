@@ -17,6 +17,7 @@ import {
   annotateToolCall,
   normalizeGenerationStatus,
   recordToolCallError,
+  taskHash,
 } from "../services/tool-call-telemetry.js";
 import {
   autoSubmitNotice,
@@ -277,6 +278,7 @@ Returns:
     }) => {
       try {
         // Step 1: Resolve model
+        annotateToolCall({ stage: "prepare" });
         const resolved = await resolveModel(model_keyword, type);
 
         if ("error" in resolved) {
@@ -292,6 +294,7 @@ Returns:
         annotateToolCall({ model: foundModel.model });
 
         // Step 2: Fetch schema
+        annotateToolCall({ stage: "schema" });
         const schema = await getModelSchema(foundModel);
         if (!schema) {
           recordToolCallError({ code: "model_schema_unavailable" });
@@ -327,7 +330,7 @@ Returns:
           paramsToValidate
         );
         if (!validation.ok) {
-          recordToolCallError({ code: "invalid_param" });
+          recordToolCallError({ code: "invalid_param", param: validation.errorParam });
           return {
             isError: true,
             content: [
@@ -439,6 +442,7 @@ Returns:
         annotateToolCall({
           generation_status:
             outputs.length > 0 ? "completed" : normalizeGenerationStatus(response.data?.status),
+          task_hash: taskHash(predictionId),
         });
         const finished =
           outputs.length > 0 ? await completedOutputContent(outputs, { profile: currentClientProfile() }) : null;

@@ -99,8 +99,8 @@ export async function issueGenerationConfirmation(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<GenerationConfirmationQuote> {
-  // 只报价、没提交：这是正常的第一步，不是错误。
-  annotateToolCall({ execution_mode: "quote" });
+  // 只报价、没提交：这是正常的第一步，不是错误。取值沿用 CLI 的 estimate。
+  annotateToolCall({ execution_mode: "estimate", stage: "quote" });
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(

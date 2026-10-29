@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getRequestContext } from "./request-context.js";
 
 /**
@@ -9,8 +10,29 @@ import { getRequestContext } from "./request-context.js";
  * 令牌、邮箱一律不进来——回填接口只接受下面这几个字段，没有放自由文本的口子。
  */
 
-/** quote：只报价没提交；submit：提交了（同步出结果也算）；wait / get：查任务，服务端等或不等。 */
-export type ExecutionMode = "quote" | "submit" | "wait" | "get";
+/**
+ * 取值沿用 CLI。estimate：只报价、没提交（CLI 的 generate.cost.* 也是这个值）；
+ * submit：提交了（同步出结果也算）；wait / get：查任务，服务端等或不等。
+ */
+export type ExecutionMode = "estimate" | "submit" | "wait" | "get";
+
+/**
+ * 调用最后停在哪一步，CLI 的 stage 取值的子集。没有回填时是 command，与 CLI 一致。
+ * auth / request 只用于工具没跑到的 HTTP 层拒绝。
+ */
+export type ToolCallStage =
+  | "command"
+  | "auth"
+  | "request"
+  | "prepare"
+  | "schema"
+  | "quote"
+  | "submit"
+  | "fetch"
+  | "wait";
+
+/** 与 CLI 同值。completed 只表示等到了终态，终态也可能是 failed。 */
+export type WaitOutcome = "completed" | "timed_out" | "interrupted" | "error";
 
 /** 与 CLI 的 recordGeneration 同一套值，见 normalizeGenerationStatus。 */
 export type GenerationStatus =
@@ -55,12 +77,17 @@ export interface ToolCallError {
   httpStatus?: number;
   /** CLI 的 error_cause：同一个码下更细的原因，只放固定枚举。 */
   cause?: string;
+  /** CLI 的 error_param：参数校验失败时，模型 schema 里声明过的字段名。不带字段值。 */
+  param?: string;
 }
 
 export interface ToolCallFields {
   model?: string;
   execution_mode?: ExecutionMode;
   generation_status?: GenerationStatus;
+  stage?: ToolCallStage;
+  wait_outcome?: WaitOutcome;
+  task_hash?: string;
 }
 
 // 与目录里的模型 ID 同形（tools/predictions.ts 的 modelIdPattern）。不同形的一律不报，
@@ -69,6 +96,19 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
 export function sanitizeModel(model: unknown): string | undefined {
   return typeof model === "string" && MODEL_ID.test(model) ? model : undefined;
+}
+
+/**
+ * 任务去重键：对任务 ID 加固定前缀做 SHA-256，取前 16 位十六进制。同一个任务的提交和
+ * 每次查询拿到同一个值，能数出唯一任务；不发原始任务 ID。CLI 还没有这个字段，
+ * 它要接的话用同一前缀和算法，两边就能对上。
+ */
+export function taskHash(predictionId: unknown): string | undefined {
+  if (typeof predictionId !== "string" || predictionId.trim() === "") return undefined;
+  return createHash("sha256")
+    .update(`atlas-task:${predictionId.trim()}`)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 const ACTIVE = new Set(["created", "starting", "running", "in_progress"]);
@@ -177,29 +217,36 @@ export class ToolCallTelemetry {
     options: { disconnected?: boolean; now?: number } = {}
   ): Record<string, unknown> {
     const now = options.now ?? performance.now();
+    const fields: ToolCallFields = { ...this.fields };
     let error: ToolCallError | undefined;
     if (options.disconnected) {
       error = { code: "client_disconnected" };
+      // 服务端还在替调用方等任务，客户端先走了：与 CLI 本地等待被打断同义。
+      if (fields.execution_mode === "wait") fields.wait_outcome ??= "interrupted";
     } else if (httpStatus >= 400) {
       // 工具没跑到（限流、scope 不够、账户没绑凭据……），按本服务的响应状态分类。
       error = { code: errorCodeForHttpStatus(httpStatus), httpStatus };
+      fields.stage ??= httpStatus === 401 || httpStatus === 403 ? "auth" : "request";
     } else if (this.responseIsError) {
       error = this.error ?? { code: this.responseFallback ?? "upstream_failure" };
     }
+    fields.stage ??= "command";
     const props: Record<string, unknown> = {
       ...base,
       command: this.command,
       duration_ms: Math.max(0, Math.round(now - this.startedAt)),
       is_error: error !== undefined,
-      ...this.fields,
+      ...fields,
     };
     if (error) {
       const [category, retryable] = ERROR_CODES[error.code];
       props.error_code = error.code;
       props.error_category = category;
       props.retryable = retryable;
+      props.failure_stage = fields.stage;
       if (error.httpStatus) props.http_status = error.httpStatus;
       if (error.cause) props.error_cause = error.cause;
+      if (error.param) props.error_param = error.param;
     }
     return props;
   }

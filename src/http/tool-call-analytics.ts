@@ -116,6 +116,8 @@ export function trackToolCalls(
     product: PRODUCT,
     environment: settings.environment,
     version: SERVER_VERSION,
+    // 托管版只认 OAuth 令牌；字段留着是为了和 CLI 的 auth_method 同列。
+    auth_method: "oauth",
   };
   return (req, res, next) => {
     const payload = asRecord(req.body);

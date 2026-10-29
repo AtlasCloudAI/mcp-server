@@ -212,7 +212,7 @@ export async function executeIdempotently<T>(
   const namespacedKey = `${subject}:${toolName}:${idempotencyKey}`;
   // 走到这里的都是计费提交（生成、对话；上传只在 stdio 下有）。重放已完成的结果也记
   // submit：对调用方来说这就是那次提交的答复。
-  annotateToolCall({ execution_mode: "submit" });
+  annotateToolCall({ execution_mode: "submit", stage: "submit" });
   return store.execute(
     namespacedKey,
     idempotencyFingerprint(args),

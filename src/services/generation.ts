@@ -14,6 +14,7 @@ import {
   annotateToolCall,
   normalizeGenerationStatus,
   recordToolCallError,
+  taskHash,
 } from "./tool-call-telemetry.js";
 
 export type SubmitResult =
@@ -54,6 +55,8 @@ export async function prepareGeneration(
   params: Record<string, unknown>,
   opts: SubmitOptions
 ): Promise<PrepareResult> {
+  // 查模型、取 schema、校验参数都算 schema 阶段，与 CLI 一致。
+  annotateToolCall({ stage: "schema" });
   const found = await findModelByExactId(modelId);
   if (!found) {
     recordToolCallError({ code: "model_not_found" });
@@ -86,7 +89,7 @@ export async function prepareGeneration(
   const finalParams = fillRequiredDefaults(schema, params);
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
-    recordToolCallError({ code: "invalid_param" });
+    recordToolCallError({ code: "invalid_param", param: validation.errorParam });
     return { ok: false, message: formatValidationError(found.model, validation) };
   }
 
@@ -132,6 +135,7 @@ export async function submitPreparedGeneration(
   annotateToolCall({
     generation_status:
       outputs.length > 0 ? "completed" : normalizeGenerationStatus(response.data?.status),
+    task_hash: taskHash(predictionId),
   });
 
   // Which branch a model takes is not documented anywhere and differs per model,

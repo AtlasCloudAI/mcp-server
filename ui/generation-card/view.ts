@@ -20,6 +20,8 @@ import {
 
 export interface CardActions {
   download(media: CardMedia): void;
+  /** 用这个结果继续创作：交给模型当下一次的输入，重新报价（需求文档 6.3）。 */
+  continueWith(media: CardMedia): void;
   openInAtlas(): void;
   copyLink(url: string): Promise<boolean>;
   refresh(): void;
@@ -33,6 +35,8 @@ export interface ViewOptions {
   canRefresh: boolean;
   /** 宿主允许卡片往对话里发消息（重试、换模型）。 */
   canMessage: boolean;
+  /** 宿主能把结果交给模型（发消息或写模型上下文）：结果卡显示「Continue」。 */
+  canContinue: boolean;
   /** 卡片自己等了很久还没结果：显示「Still generating」。 */
   stalled: boolean;
   /** 正在刷新：刷新按钮置灰。 */
@@ -45,8 +49,8 @@ const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.8v1
 const ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></svg>';
 const ICON_SPINNER = '<svg class="spin" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/></svg>';
 const ICON_CUBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 3.8 7.4v9.2l8.2 4.6 8.2-4.6V7.4L12 2.8zm0 2.3 5.9 3.3L12 11.7 6.1 8.4 12 5.1zM5.8 10.1l5.2 2.9v5.8l-5.2-2.9v-5.8zm7.2 8.7V13l5.2-2.9v5.8L13 18.8z" fill="currentColor"/></svg>';
-const ICON_IMAGE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>';
-const ICON_FILE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>';
+export const ICON_IMAGE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>';
+export const ICON_FILE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>';
 
 type Child = Node | string | null | undefined | false;
 
@@ -181,6 +185,12 @@ function notice(opts: ViewOptions): HTMLElement | null {
   return opts.notice ? h("p", { class: "note", role: "status" }, opts.notice) : null;
 }
 
+/** 参数小标签（设计稿：1080p · 10 s · 16:9 · Audio）。没有就不占位置。 */
+export function chips(settings: string[] | undefined): HTMLElement | null {
+  if (!settings || settings.length === 0) return null;
+  return h("div", { class: "chips" }, ...settings.map((label) => h("span", { class: "chip" }, label)));
+}
+
 function secondsSince(iso: string | undefined, now: number): number | null {
   if (!iso) return null;
   const at = Date.parse(iso);
@@ -232,6 +242,7 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
     "section",
     { class: "card" },
     head(title, label),
+    chips(card.settings),
     card.state === "transfer_pending"
       ? h("p", { class: "desc" }, "Your file is ready and is being saved to Atlas.")
       : null,
@@ -324,11 +335,14 @@ function canceledCard(card: CardData): HTMLElement {
 
 // ---------- 作品 ----------
 
-function resultActions(card: CardData, media: CardMedia, actions: CardActions): HTMLElement {
+function resultActions(card: CardData, media: CardMedia, actions: CardActions, opts: ViewOptions): HTMLElement {
   return h(
     "div",
     { class: "actions" },
     button("Download", "primary", () => actions.download(media)),
+    opts.canContinue && media.kind !== "3d" && media.kind !== "other"
+      ? button("Continue", "secondary", () => actions.continueWith(media))
+      : null,
     button("Open in Atlas", "secondary", actions.openInAtlas)
   );
 }
@@ -353,7 +367,7 @@ function previewBlocked(card: CardData, media: CardMedia, actions: CardActions):
   );
 }
 
-function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
+function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
   const img = h("img", {
     src: media.url,
     alt: `${KIND_LABEL[media.kind]} from ${modelLabel(card)}`,
@@ -366,11 +380,12 @@ function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     { class: "card" },
     h("div", { class: "media" }, img),
     h("p", { class: "caption" }, captionText(card, media)),
-    resultActions(card, media, actions)
+    chips(card.settings),
+    resultActions(card, media, actions, opts)
   );
 }
 
-function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
+function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
   const caption = h("p", { class: "caption" }, captionText(card, media));
   const video = h("video", { src: `${media.url}#t=0.1`, preload: "metadata", playsinline: "", referrerpolicy: "no-referrer" });
   video.playsInline = true;
@@ -396,7 +411,8 @@ function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     { class: "card" },
     h("div", { class: "media" }, video, play),
     caption,
-    resultActions(card, media, actions)
+    chips(card.settings),
+    resultActions(card, media, actions, opts)
   );
 }
 
@@ -414,7 +430,7 @@ function waveHeights(seed: string, count: number): number[] {
   return out;
 }
 
-function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
+function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
   const audio = h("audio", { src: media.url, preload: "metadata", referrerpolicy: "no-referrer" });
   const time = h("span", { class: "audio-time" }, "0:00 / –:––");
   const bars = waveHeights(media.url, 30).map((height) => h("span", { style: `height:${height}px` }));
@@ -469,11 +485,12 @@ function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     h("p", { class: "title-lg" }, `${KIND_LABEL[media.kind]} · ${modelLabel(card)}`),
     h("div", { class: "audio-player" }, play, wave, time, audio),
     price ? h("p", { class: "caption" }, price) : null,
-    resultActions(card, media, actions)
+    chips(card.settings),
+    resultActions(card, media, actions, opts)
   );
 }
 
-function fileCard(card: CardData, media: CardMedia, actions: CardActions): HTMLElement {
+function fileCard(card: CardData, media: CardMedia, actions: CardActions, opts: ViewOptions): HTMLElement {
   const is3d = media.kind === "3d";
   const ext = fileNameOf(media.url, "").split(".").pop()?.toUpperCase();
   return h(
@@ -490,7 +507,7 @@ function fileCard(card: CardData, media: CardMedia, actions: CardActions): HTMLE
       )
     ),
     h("p", { class: "caption" }, captionText(card, media, ext ? [ext] : [])),
-    resultActions(card, media, actions)
+    resultActions(card, media, actions, opts)
   );
 }
 
@@ -521,39 +538,63 @@ function tileMedia(media: CardMedia, alt: string): HTMLElement {
 
 const MAX_TILES = 8;
 
-function carousel(card: CardData, actions: CardActions): HTMLElement {
+/**
+ * 多个结果按网格排（需求文档 6.3「按网格展示，允许分别预览和下载」）。每格能直接下载；点图
+ * 打开这一个结果的完整卡片（预览、下载、继续创作），「All N results」回到网格。
+ */
+function resultGrid(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
   const each = perItemPrice(card);
   const shown = card.media.slice(0, MAX_TILES);
-  const tiles = shown.map((media, i) => {
-    const label = `${KIND_LABEL[media.kind]} ${i + 1}`;
-    const sub = [modelLabel(card), each !== undefined ? formatUsd(each) : null].filter(Boolean).join(" · ");
+  const grid = (): HTMLElement => {
+    const tiles = shown.map((media, i) => {
+      const label = `${KIND_LABEL[media.kind]} ${i + 1}`;
+      const sub = [modelLabel(card), each !== undefined ? formatUsd(each) : null].filter(Boolean).join(" · ");
+      return h(
+        "article",
+        { class: "tile" },
+        h(
+          "button",
+          { type: "button", class: "tile-open", "aria-label": `Open ${label}`, onclick: () => focus(media, i) },
+          tileMedia(media, `${label} from ${modelLabel(card)}`)
+        ),
+        h("p", { class: "tile-title" }, label),
+        h("p", { class: "tile-sub" }, sub),
+        button("Download", "secondary", () => actions.download(media), { small: true })
+      );
+    });
+    // 工作流按次计费，单张价没意义，总价写在下面；超过 8 个的去 Atlas 看全部。
+    const footerBits: (Node | string)[] = [];
+    if (card.charge_status === "pending") footerBits.push("Charge pending");
+    else if (each === undefined && card.price_usd !== undefined) footerBits.push(`Total ${formatUsd(card.price_usd)}`);
+    if (card.media.length > MAX_TILES) footerBits.push(`${card.media.length - MAX_TILES} more in Atlas`);
     return h(
-      "article",
-      { class: "tile" },
-      tileMedia(media, `${label} from ${modelLabel(card)}`),
-      h("p", { class: "tile-title" }, label),
-      h("p", { class: "tile-sub" }, sub),
-      button("Download", "secondary", () => actions.download(media), { small: true })
+      "section",
+      { "aria-label": `${card.media.length} results` },
+      chips(card.settings),
+      // 列数跟着个数走：2 张两列、3 张三列、4 张及以上四列，排出来是整行；窄屏 CSS 收成两列。
+      h("div", { class: "results-grid", style: `--cols:${Math.min(shown.length, 4)}` }, ...tiles),
+      footerBits.length > 0 || card.media.length > MAX_TILES
+        ? h(
+            "div",
+            { class: "results-footer" },
+            ...footerBits.map((bit) => h("span", {}, bit)),
+            button("Open in Atlas", "secondary", actions.openInAtlas, { small: true })
+          )
+        : null
     );
-  });
-  // 工作流按次计费，单张价没意义，总价写在下面；超过 8 个的去 Atlas 看全部。
-  const footerBits: (Node | string)[] = [];
-  if (card.charge_status === "pending") footerBits.push("Charge pending");
-  else if (each === undefined && card.price_usd !== undefined) footerBits.push(`Total ${formatUsd(card.price_usd)}`);
-  if (card.media.length > MAX_TILES) footerBits.push(`${card.media.length - MAX_TILES} more in Atlas`);
-  return h(
-    "section",
-    { "aria-label": `${card.media.length} results` },
-    h("div", { class: "carousel" }, ...tiles),
-    footerBits.length > 0 || card.media.length > MAX_TILES
-      ? h(
-          "div",
-          { class: "carousel-footer" },
-          ...footerBits.map((bit) => h("span", {}, bit)),
-          button("Open in Atlas", "secondary", actions.openInAtlas, { small: true })
-        )
-      : null
-  );
+  };
+  const focus = (media: CardMedia, index: number): void => {
+    const back = h(
+      "button",
+      { type: "button", class: "history-back", onclick: () => swap(grid()) },
+      `← All ${card.media.length} results`
+    );
+    const one = { ...card, media: [media], price_usd: each };
+    const single = singleResult(one, media, actions, swap, opts);
+    single.setAttribute("aria-label", `${KIND_LABEL[media.kind]} ${index + 1} of ${card.media.length}`);
+    swap(h("div", {}, back, single));
+  };
+  return grid();
 }
 
 function expiredCard(actions: CardActions): HTMLElement {
@@ -566,7 +607,26 @@ function expiredCard(actions: CardActions): HTMLElement {
   );
 }
 
-function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
+function singleResult(
+  card: CardData,
+  media: CardMedia,
+  actions: CardActions,
+  swap: (el: HTMLElement) => void,
+  opts: ViewOptions
+): HTMLElement {
+  switch (media.kind) {
+    case "image":
+      return imageCard(card, media, actions, swap, opts);
+    case "video":
+      return videoCard(card, media, actions, swap, opts);
+    case "audio":
+      return audioCard(card, media, actions, swap, opts);
+    default:
+      return fileCard(card, media, actions, opts);
+  }
+}
+
+function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
   if (card.media_expired) return expiredCard(actions);
   if (card.media.length === 0) {
     return h(
@@ -577,18 +637,8 @@ function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement
       h("div", { class: "actions" }, button("Open in Atlas", "secondary", actions.openInAtlas))
     );
   }
-  if (card.media.length > 1) return carousel(card, actions);
-  const media = card.media[0];
-  switch (media.kind) {
-    case "image":
-      return imageCard(card, media, actions, swap);
-    case "video":
-      return videoCard(card, media, actions, swap);
-    case "audio":
-      return audioCard(card, media, actions, swap);
-    default:
-      return fileCard(card, media, actions);
-  }
+  if (card.media.length > 1) return resultGrid(card, actions, swap, opts);
+  return singleResult(card, card.media[0]!, actions, swap, opts);
 }
 
 // ---------- 入口 ----------
@@ -631,7 +681,7 @@ export function renderCard(card: CardData, opts: ViewOptions, actions: CardActio
       view = canceledCard(card);
       break;
     default:
-      view = resultCard(card, actions, swap);
+      view = resultCard(card, actions, swap, opts);
   }
   holder.append(view);
   return holder;

@@ -479,7 +479,7 @@ Returns:
 
         return {
           structuredContent: {
-            ...generationStructuredContent(predictionId, foundModel, kind),
+            ...generationStructuredContent(predictionId, foundModel, kind, requestBody),
             ...(finished ? { status: "completed" as const, outputs } : {}),
           },
           content: [

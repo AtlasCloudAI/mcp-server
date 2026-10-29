@@ -174,7 +174,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "image"
+            "image",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },

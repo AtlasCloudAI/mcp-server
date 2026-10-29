@@ -8,6 +8,7 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
+import { handOff } from "./handoff.js";
 import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, newIdempotencyKey } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
@@ -58,6 +59,7 @@ function viewOptions(): ViewOptions {
   return {
     canRefresh: sample || caps.serverTools !== undefined,
     canMessage: sample || caps.message !== undefined,
+    canContinue: sample || caps.message !== undefined || caps.updateModelContext !== undefined,
     stalled,
     refreshing,
     notice,
@@ -389,6 +391,26 @@ const actions: CardActions = {
   },
   switchModel() {
     sendUserMessage("That generation failed. Please suggest a different model for the same request.");
+  },
+  continueWith(media: CardMedia) {
+    if (card?.sample) {
+      setNotice("This is a sample card, so nothing was sent.");
+      return;
+    }
+    // 结果交给模型当下一次的输入：模型按需问一句要怎么改，再报价，用户确认后才生成。
+    const kind = media.kind === "video" ? "video" : media.kind === "audio" ? "audio" : "image";
+    const model = card?.model_name ?? card?.model_id ?? "Atlas Cloud";
+    const forModel =
+      `The user wants to keep creating from this Atlas Cloud ${kind} (task ${card?.prediction_id ?? "unknown"}, ` +
+      `made with ${model}). Use it as the input of the next generation: ${media.url}\n` +
+      "Ask what they want changed if they have not said, then quote the next step before generating.";
+    void handOff(app, forModel, {
+      short: `Continue from this ${kind}.`,
+      ask: "Ask me what to change, then quote the next step.",
+    }).then((result) => {
+      if (result === "failed" || result === "unsupported") setNotice("Couldn't pass this on. Describe the next step in the chat instead.");
+      else if (result === "context") setNotice("Added to the chat context. Say what to change next.");
+    });
   },
 };
 

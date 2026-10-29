@@ -11,6 +11,7 @@ import { z } from "zod";
 import { generationApi, headStillServes } from "../services/api-client.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
+import { settingsChips } from "./card-params.js";
 import {
   completedAtOf,
   createdAtOf,
@@ -231,6 +232,10 @@ export interface QuoteInfo {
   estimate_missing?: string[];
   /** 扣费账户和可用余额（需求文档 6.1）；查不到就没有。 */
   account?: { name: string; email?: string; balance_usd?: number };
+  /** 这一单要生成什么：提示词（截断过）。 */
+  prompt?: string;
+  /** 这一单引用的素材，报价卡上显示缩略图和名称。 */
+  inputs?: (CardMedia & { name: string })[];
   /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
@@ -251,6 +256,8 @@ export interface GenerationCardData {
   model_type?: string;
   /** 实际扣费（美元），来自查结果接口的 price；拿不到就不显示。 */
   price_usd?: number;
+  /** 主要参数小标签（1080p · 10 s · 16:9），来自提交的参数或查结果带回的原始请求。 */
+  settings?: string[];
   /**
    * 查结果接口的 charge_status（aiproxy#1074）：没结算完时 price 是空的，卡片据此写
    * 「待结算」而不是什么都不写或写 $0；失败卡据此说清退没退、扣没扣。老网关没有这个字段。
@@ -334,6 +341,7 @@ export function buildGenerationCardData(input: {
   modelType?: string;
   price?: unknown;
   chargeStatus?: unknown;
+  settings?: string[];
   error?: string;
   createdAt?: string;
   completedAt?: string;
@@ -350,6 +358,7 @@ export function buildGenerationCardData(input: {
     ...(input.modelType ? { model_type: input.modelType } : {}),
     ...(price !== undefined ? { price_usd: price } : {}),
     ...(chargeStatus ? { charge_status: chargeStatus } : {}),
+    ...(input.settings && input.settings.length > 0 ? { settings: input.settings } : {}),
     media: input.outputs.map((url) => ({ url, kind: cardMediaKind(url) })),
     ...(input.error ? { error: input.error } : {}),
     open_url: openInAtlasUrl(input.modelId),
@@ -378,6 +387,24 @@ export async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<
     clearTimeout(timer);
   }
 }
+
+/** 查结果带回的原始请求（?include_input=1）：对象或 JSON 字符串；老网关不给。 */
+function requestInput(raw: unknown): Record<string, unknown> | undefined {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** 卡片要的查结果参数：带回原始请求，结果卡才能显示主要参数。 */
+export const CARD_PREDICTION_PARAMS = { include_input: 1 } as const;
 
 /** 从查结果接口的返回拼卡片数据。模型名查不到、HEAD 失败都不影响结果。 */
 export async function predictionCardData(
@@ -411,6 +438,7 @@ export async function predictionCardData(
     modelType: model?.type,
     price: data.price,
     chargeStatus: data.charge_status,
+    settings: settingsChips(requestInput(data.input)),
     error: result.data?.error || undefined,
     createdAt: isoOf(createdAtOf(result)),
     completedAt,
@@ -447,6 +475,7 @@ export function registerCardStatusTool(server: McpServer): void {
           generationApi<PredictionResponse>(
             `/model/prediction/${encodeURIComponent(prediction_id)}`,
             {
+              params: CARD_PREDICTION_PARAMS,
               responseSchema: predictionResponseSchema,
               timeout: budget.timeoutMs,
               maxRetries: budget.maxRetries,

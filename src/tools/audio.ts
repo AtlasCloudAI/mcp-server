@@ -168,7 +168,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "audio"
+            "audio",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },
@@ -325,7 +326,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "transcription"
+            "transcription",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },

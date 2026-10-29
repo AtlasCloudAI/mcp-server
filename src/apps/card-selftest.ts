@@ -8,7 +8,7 @@ import {
   cardStateOf,
   generationCardToolMeta,
 } from "./generation-card.js";
-import { settingsChips } from "./generation-quote.js";
+import { inputsOf, promptOf, settingsChips } from "./card-params.js";
 import { HISTORY_META_KEY, type HistoryCardData, type HistoryCardItem } from "./history-card.js";
 import { UPLOAD_MAX_FILES, UPLOAD_META_KEY, type UploadCardData, type UploadSampleFile } from "./upload-card.js";
 import { ASSETS_MAX_PICK, ASSETS_META_KEY, type AssetCardData, type AssetCardItem } from "./asset-library.js";
@@ -158,15 +158,29 @@ const CHARGE_SAMPLES: Partial<Record<string, string>> = {
   failed_partial: "partially_charged",
 };
 
+// 结果卡、进度卡上的主要参数（示例）。
+const SETTINGS_SAMPLES: Record<string, string[]> = {
+  Image: ["2048×2048"],
+  Video: ["1080p", "10 s", "16:9", "Audio"],
+  Audio: ["30 s"],
+};
+
 // 报价卡上的扣费账户和余额（需求文档 6.1），示例数字。
 const QUOTE_ACCOUNT = { name: "Ada Lovelace", email: "ada@example.com", balance_usd: 24.6 } as const;
 
 // 报价卡样例：参数照一单 Seedance 2.5 文生视频填，价格是示例数字。
 const QUOTE_SAMPLE = {
   tool: "atlas_generate_video",
-  model: "bytedance/seedance-2.5/text-to-video",
+  model: "bytedance/seedance-2.5/image-to-video",
   name: "Dreamina Seedance 2.5",
-  params: { prompt: "A beer bottle splashing into icy water", resolution: "1080p", duration: 10, aspect_ratio: "16:9", generate_audio: true },
+  params: {
+    prompt: "The perfume bottle turns slowly on wet black stone, water splashing around it, macro lens, slow push-in",
+    image: `${STATIC}/model/example/material/product-shot-01.jpg`,
+    resolution: "1080p",
+    duration: 10,
+    aspect_ratio: "16:9",
+    generate_audio: true,
+  },
 };
 
 // balance、previous：余额不足、价格变了两个状态里显示的示例数字。
@@ -309,6 +323,8 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       ...(variant === "quote" ? { settles_on_usage: true } : {}),
       ...(variant === "quote_partial" ? { estimate_missing: ["the reference videos' length"] } : {}),
       account: { ...QUOTE_ACCOUNT },
+      prompt: promptOf(QUOTE_SAMPLE.params),
+      inputs: inputsOf(QUOTE_SAMPLE.params).map((input) => ({ ...input, kind: cardMediaKind(input.url) })),
       settings: settingsChips(QUOTE_SAMPLE.params),
       valid_seconds: 600,
       ...(sample.problem ? { problem: sample.problem } : {}),
@@ -380,6 +396,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         modelType: sample.type,
         price: sample.price,
         chargeStatus: CHARGE_SAMPLES[variant],
+        settings: SETTINGS_SAMPLES[sample.type],
         error: FAILED_REASONS[variant],
         createdAt: new Date(Date.now() - 102_000).toISOString(),
         mediaExpired: variant === "expired",

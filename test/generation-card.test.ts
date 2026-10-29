@@ -20,6 +20,8 @@ const UI_MIME = "text/html;profile=mcp-app";
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 
 let fake: Server;
+/** 假网关收到的查结果请求的查询串。 */
+const predictionQueries: string[] = [];
 /** 假网关收到的生成提交带的 Idempotency-Key（没带就是空串）。 */
 const submitKeys: string[] = [];
 let origin = "";
@@ -60,6 +62,17 @@ function predictionFor(id: string): Record<string, unknown> {
         created_at: now,
         completed_at: now,
       };
+    // 查结果带回原始请求（?include_input=1）：结果卡据此显示主要参数。网关可能给对象，也可能给字符串。
+    case "withinput":
+      return {
+        model: "black-forest-labs/flux-schnell",
+        status: "completed",
+        outputs: [`${origin}/media/done.jpg`],
+        price: "0.003",
+        input: JSON.stringify({ model: "black-forest-labs/flux-schnell", prompt: "a cat", size: "1024*1024" }),
+        created_at: now,
+        completed_at: now,
+      };
     // 网关给了扣费状态（aiproxy#1074）：出了结果还没结算，价格是空的。
     case "unsettled":
       return {
@@ -93,6 +106,7 @@ before(async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const match = url.pathname.match(/^\/api\/v1\/model\/prediction\/([^/]+)$/);
     if (req.method === "GET" && match) {
+      predictionQueries.push(url.search);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: 200, data: { id: match[1], ...predictionFor(match[1]!) } }));
       return;
@@ -456,4 +470,28 @@ test("提交生成时把幂等键带给生成网关：网关按它认出重复�
   const withoutKey = await submitPreparedGeneration(prepared);
   assert.ok(withoutKey.ok);
   assert.deepEqual(submitKeys, ["7d0b2f5e-0d8c-4a43-9c55-6f1f2d6a0b11", ""]);
+});
+
+test("卡片打开时查结果要原始请求，结果卡显示主要参数；关着时不要", async () => {
+  let restore = withEnv({ MCP_UI_CARDS: "1" });
+  let session = await connect({ rendersCards: false });
+  try {
+    predictionQueries.length = 0;
+    const card = cardOf(await session.client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "withinput" } }));
+    assert.deepEqual(card?.settings, ["1024×1024"]);
+    assert.match(predictionQueries[0] ?? "", /include_input=1/);
+  } finally {
+    await session.close();
+    restore();
+  }
+  restore = withEnv({ MCP_UI_CARDS: undefined });
+  session = await connect({ rendersCards: false });
+  try {
+    predictionQueries.length = 0;
+    await session.client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "withinput" } });
+    assert.doesNotMatch(predictionQueries[0] ?? "", /include_input/);
+  } finally {
+    await session.close();
+    restore();
+  }
 });

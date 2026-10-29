@@ -545,6 +545,7 @@ test("个人账户没有名字时用用户名兜底（test 上实测 account.nam
 test("任务内容和输入素材：提示词截断，参数里的链接不认字段名、去重、最多 8 个", () => {
   assert.equal(promptOf({ prompt: "  a   paper\nboat  " }), "a paper boat");
   assert.equal(promptOf({ text: "hello" }), "hello");
+  assert.equal(promptOf({ user_prompt: "Orange earbuds, summer campaign" }), "Orange earbuds, summer campaign");
   assert.equal(promptOf({ image: "https://x/a.jpg" }), undefined);
   const long = promptOf({ prompt: "x".repeat(400) })!;
   assert.equal(long.length, 280);

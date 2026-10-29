@@ -60,7 +60,8 @@ export function settingsChips(params: Record<string, unknown> | undefined): stri
   return chips.slice(0, 5);
 }
 
-const PROMPT_FIELDS = ["prompt", "text", "text_prompt"] as const;
+// 工作流（Marketing Studio）的需求描述叫 user_prompt。
+const PROMPT_FIELDS = ["prompt", "user_prompt", "text", "text_prompt"] as const;
 const PROMPT_MAX = 280;
 
 /** 这一单要生成什么（需求文档 6.1「任务内容」）：提示词，过长截断。没有提示词就不显示。 */

@@ -214,6 +214,29 @@ export function fillRequiredDefaults(
   return out;
 }
 
+/**
+ * 把首选默认值（默认路由模型的产品默认参数）填进调用方没给的字段。只填 schema 里
+ * 有的字段，有枚举的必须在枚举里：默认值表和某个模型的 schema 对不上时宁可不填，
+ * 也不能把本来能过的请求弄成校验失败。
+ */
+export function fillPreferredDefaults(
+  schema: Record<string, unknown> | null | undefined,
+  params: Record<string, unknown>,
+  preferred: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...params };
+  const properties = extractInputSchema(schema)?.input.properties;
+  if (!properties) return out;
+  for (const [key, value] of Object.entries(preferred)) {
+    if (out[key] !== undefined && out[key] !== null) continue;
+    const prop = properties[key];
+    if (!prop) continue;
+    if (Array.isArray(prop.enum) && !prop.enum.includes(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 // Build the "allowed parameters" Markdown appended to errors to guide the AI
 export function summarizeInputSchema(
   input: InputSchema,

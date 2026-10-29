@@ -1,10 +1,12 @@
 import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
 import { generationApi } from "./api-client.js";
 import {
+  fillPreferredDefaults,
   fillRequiredDefaults,
   validateModelParams,
   formatValidationError,
 } from "../utils/schema-validator.js";
+import { routeDefaultParams } from "./default-models.js";
 import type { Model } from "../types.js";
 import {
   predictionResponseSchema,
@@ -38,7 +40,8 @@ interface SubmitOptions {
 /**
  * Shared submit flow for image / video / audio generation:
  *   1. resolve the model and verify its type
- *   2. fill required defaults from the model schema
+ *   2. fill the default-route settings the caller left out, then required
+ *      defaults from the model schema
  *   3. validate params against the schema (blocks before any billable call)
  *   4. submit and return the prediction id
  *
@@ -73,7 +76,10 @@ export async function prepareGeneration(
         "No billable request was submitted. Retry later or choose another model whose schema can be inspected.",
     };
   }
-  const finalParams = fillRequiredDefaults(schema, params);
+  const finalParams = fillRequiredDefaults(
+    schema,
+    fillPreferredDefaults(schema, params, routeDefaultParams(found.model))
+  );
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
     return { ok: false, message: formatValidationError(found.model, validation) };

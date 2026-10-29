@@ -92,12 +92,14 @@ export async function prepareGeneration(
 }
 
 export async function submitPreparedGeneration(
-  prepared: PreparedGeneration
+  prepared: PreparedGeneration,
+  idempotencyKey?: string
 ): Promise<SubmitResult> {
   const response = await generationApi<PredictionResponse>(prepared.endpoint, {
     method: "POST",
     body: prepared.body,
     responseSchema: predictionResponseSchema,
+    ...idempotencyHeaders(idempotencyKey),
   });
 
   const predictionId = response.data?.id;
@@ -126,6 +128,15 @@ export async function submitPreparedGeneration(
   );
 
   return { ok: true, predictionId, model: prepared.model, outputs };
+}
+
+/**
+ * 把这一单的幂等键也交给生成网关（aiproxy#1074 起插件和接口密钥请求也按它去重）。服务端
+ * 自己的幂等记录挡住了大多数重复，这一层管的是它挡不住的：提交到网关后超时、记录丢了，
+ * 同一个键再交一次时网关直接认出原任务，不会再建一单、再扣一次。
+ */
+export function idempotencyHeaders(key: string | undefined): { headers?: Record<string, string> } {
+  return key ? { headers: { "Idempotency-Key": key } } : {};
 }
 
 export async function submitGeneration(

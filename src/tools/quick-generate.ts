@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { generationApi } from "../services/api-client.js";
+import { idempotencyHeaders } from "../services/generation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import {
   formatGenerationPricing,
@@ -407,6 +408,7 @@ Returns:
               method: "POST",
               body: requestBody,
               responseSchema: predictionResponseSchema,
+              ...idempotencyHeaders(submitKey),
             })
         );
 

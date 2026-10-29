@@ -146,7 +146,7 @@ Returns:
           "atlas_generate_video",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {

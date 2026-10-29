@@ -143,7 +143,7 @@ Returns:
           "atlas_generate_audio",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {
@@ -296,7 +296,7 @@ Returns:
           "atlas_transcribe_audio",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {

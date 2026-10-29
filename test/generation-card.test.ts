@@ -20,6 +20,8 @@ const UI_MIME = "text/html;profile=mcp-app";
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 
 let fake: Server;
+/** 假网关收到的生成提交带的 Idempotency-Key（没带就是空串）。 */
+const submitKeys: string[] = [];
 let origin = "";
 
 function predictionFor(id: string): Record<string, unknown> {
@@ -93,6 +95,12 @@ before(async () => {
     if (req.method === "GET" && match) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: 200, data: { id: match[1], ...predictionFor(match[1]!) } }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/v1/model/generateImage") {
+      submitKeys.push(String(req.headers["idempotency-key"] ?? ""));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: 200, data: { id: "submitted_1", status: "processing", outputs: [] } }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/v1/models") {
@@ -432,4 +440,20 @@ test("卡片前端：单张价在待结算时不算；structuredContent 兜底�
   });
   assert.equal(parsed?.charge_status, "partially_charged");
   assert.equal(parsed?.price_usd, 0.05);
+});
+
+test("提交生成时把幂等键带给生成网关：网关按它认出重复提交（aiproxy#1074）", async () => {
+  const { submitPreparedGeneration } = await import("../src/services/generation.js");
+  const prepared = {
+    model: { uuid: "m", model: "black-forest-labs/flux-schnell", type: "Image", displayName: "Flux Schnell", profile: "", avatar: "", readme: "", tags: [] },
+    body: { model: "black-forest-labs/flux-schnell", prompt: "a cat" },
+    endpoint: "/model/generateImage",
+    typeLabel: "image",
+  };
+  submitKeys.length = 0;
+  const withKey = await submitPreparedGeneration(prepared, "7d0b2f5e-0d8c-4a43-9c55-6f1f2d6a0b11");
+  assert.ok(withKey.ok);
+  const withoutKey = await submitPreparedGeneration(prepared);
+  assert.ok(withoutKey.ok);
+  assert.deepEqual(submitKeys, ["7d0b2f5e-0d8c-4a43-9c55-6f1f2d6a0b11", ""]);
 });

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
-import { api } from "../services/api-client.js";
+import { generationApi } from "../services/api-client.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import {
   formatGenerationPricing,
@@ -399,8 +399,11 @@ Returns:
             ...confirmedRequest,
           },
           submitKey,
+          // 和 atlas_generate_image/video/audio 一样直接提交给生成网关：直连 kubedl 时
+          // （test 的 ATLASCLOUD_API_BASE_URL）/model/generate* 不放行插件令牌，只有
+          // 生产网关会把它转给 aiproxy。
           () =>
-            api<PredictionResponse>(endpoint, {
+            generationApi<PredictionResponse>(endpoint, {
               method: "POST",
               body: requestBody,
               responseSchema: predictionResponseSchema,

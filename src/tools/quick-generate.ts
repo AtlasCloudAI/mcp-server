@@ -3,6 +3,7 @@ import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { generationApi } from "../services/api-client.js";
+import { idempotencyHeaders } from "../services/generation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { resolveDefaultModel, routeDefaultParams } from "../services/default-models.js";
 import {
@@ -424,6 +425,7 @@ Returns:
               method: "POST",
               body: requestBody,
               responseSchema: predictionResponseSchema,
+              ...idempotencyHeaders(submitKey),
             })
         );
 

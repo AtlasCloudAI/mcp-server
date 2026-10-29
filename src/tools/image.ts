@@ -154,7 +154,7 @@ Returns:
           "atlas_generate_image",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {

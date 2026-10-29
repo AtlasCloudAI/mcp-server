@@ -9,6 +9,7 @@ const CATALOG = [
   ["bytedance/seedance-2.5/image-to-video", "Video"],
   ["kwaivgi/kling-v4.0/text-to-video", "Video"],
   ["bytedance/seedream-v5.0-flash/text-to-image", "Image"],
+  ["google/nano-banana-2.1/text-to-image", "Image"],
 ].map(([id, type]) => ({ uuid: id, model: id, type, displayName: id }));
 
 test("atlas_quick_generate 不给 model_keyword 时按线上目录走默认路由", async (t) => {
@@ -37,7 +38,8 @@ test("atlas_quick_generate 不给 model_keyword 时按线上目录走默认路�
 
   const t2i = await resolveDefaultModel("Image", { hasImage: false });
   assert.ok("model" in t2i);
-  assert.equal(t2i.model.model, "bytedance/seedream-v5.0-flash/text-to-image");
+  // 目录里只有 Seedream 5.0 Flash（不是路由里的 Pro）：不拿别的档位顶替，顺延到 Nano Banana 2.1。
+  assert.equal(t2i.model.model, "google/nano-banana-2.1/text-to-image");
 
   const edit = await resolveDefaultModel("Image", { hasImage: true });
   assert.ok("error" in edit);

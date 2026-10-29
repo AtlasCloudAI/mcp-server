@@ -2,15 +2,17 @@ import type { Model } from "../types.js";
 import { getModels } from "./doc-fetcher.js";
 
 /**
- * 用户没点名模型时的默认路由（产品 10-28 定）。
+ * 用户没点名模型时的默认路由（产品 10-28 定，10-29 定了档位和默认参数）。
  *
  * 每类按顺序排，取第一个「在线上目录里、且有这个任务变体」的；排在前面的下线了
  * 或者做不了这件事，就顺延到下一个。用户点名的模型永远优先。这张表只管文生 / 图生 /
  * 参考生视频和文生图 / 改图，对口型、视频编辑、超分、3D 这类任务不在范围里，
  * 照常从目录里挑。
  *
- * 需求里「seedreamv5」「nano banana」没写档位：按目录自己的 priority 取排最前的
- * 那一档（Seedream v5.0 Flash、Nano Banana 2），产品要换档只改这里。
+ * 「标准版」= 不带 -prime / -fast / -mini / -developer 后缀的那一档。默认参数见
+ * routeDefaultParams：上游默认不一定是产品要的（Kling 4.0、Wan 3.0 默认 1080p，
+ * Seedance、Wan 文生视频默认 adaptive 比例，Nano Banana 2.1 默认 auto 比例），所以
+ * 服务端显式填上，报价和生成按同一组参数走。
  */
 export type DefaultRouteTask =
   | "text-to-video"
@@ -21,12 +23,24 @@ export type DefaultRouteTask =
 
 export type DefaultRouteType = "Video" | "Image";
 
+type RouteParams = Readonly<Record<string, unknown>>;
+
 interface DefaultRouteEntry {
   name: string;
   models: Partial<Record<DefaultRouteTask, string>>;
+  /** 调用方没给时填的参数，按任务变体分。 */
+  params: Partial<Record<DefaultRouteTask, RouteParams>>;
 }
 
-function videoFamily(name: string, family: string): DefaultRouteEntry {
+// 视频统一 720p、5 秒（每次一条，上游本来就只出一条），不选 -sr / -esr 超分档。
+const VIDEO_DEFAULTS: RouteParams = { resolution: "720p", duration: 5 };
+
+/**
+ * 文生视频默认 16:9；图生视频跟随输入图片比例，不填比例（Seedance 图生视频只认
+ * adaptive，Kling、Wan 图生视频没有比例字段）；参考生视频需求没写，也不填。
+ * ratioKey 是这个家族的比例字段名：Seedance、Wan 叫 ratio，Kling 叫 aspect_ratio。
+ */
+function videoFamily(name: string, family: string, ratioKey: string): DefaultRouteEntry {
   return {
     name,
     models: {
@@ -34,29 +48,61 @@ function videoFamily(name: string, family: string): DefaultRouteEntry {
       "image-to-video": `${family}/image-to-video`,
       "reference-to-video": `${family}/reference-to-video`,
     },
+    params: {
+      "text-to-video": { ...VIDEO_DEFAULTS, [ratioKey]: "16:9" },
+      "image-to-video": VIDEO_DEFAULTS,
+      "reference-to-video": VIDEO_DEFAULTS,
+    },
   };
 }
 
-function imageFamily(name: string, family: string): DefaultRouteEntry {
+function imageFamily(
+  name: string,
+  family: string,
+  textToImage: RouteParams,
+  edit: RouteParams = textToImage
+): DefaultRouteEntry {
   return {
     name,
     models: { "text-to-image": `${family}/text-to-image`, edit: `${family}/edit` },
+    params: { "text-to-image": textToImage, edit },
   };
 }
 
 export const DEFAULT_MODEL_ROUTES: Record<DefaultRouteType, readonly DefaultRouteEntry[]> = {
   Video: [
-    videoFamily("Seedance 2.5", "bytedance/seedance-2.5"),
-    videoFamily("Kling 4.0", "kwaivgi/kling-v4.0"),
-    videoFamily("Wan 3.0", "alibaba/wan-3.0"),
-    videoFamily("Seedance 2.0", "bytedance/seedance-2.0"),
+    videoFamily("Seedance 2.5", "bytedance/seedance-2.5", "ratio"),
+    videoFamily("Kling 4.0", "kwaivgi/kling-v4.0", "aspect_ratio"),
+    videoFamily("Wan 3.0", "alibaba/wan-3.0", "ratio"),
+    videoFamily("Seedance 2.0", "bytedance/seedance-2.0", "ratio"),
   ],
   Image: [
-    imageFamily("Seedream v5.0 Flash", "bytedance/seedream-v5.0-flash"),
-    imageFamily("GPT Image 2.5 Sunburst", "openai/gpt-image-2.5-sunburst"),
-    imageFamily("Nano Banana 2", "google/nano-banana-2"),
-    imageFamily("GPT Image 2", "openai/gpt-image-2"),
+    imageFamily("Seedream 5.0 Pro", "bytedance/seedream-v5.0-pro", { size: "2048*2048" }),
+    imageFamily("GPT Image 2.5 Sunburst", "openai/gpt-image-2.5-sunburst", {
+      size: "1024x1024",
+      quality: "medium",
+      n: 1,
+    }),
+    // 改图跟随输入图片比例（auto），和图生视频同一个原则；文生图按需求 1:1。
+    imageFamily(
+      "Nano Banana 2.1",
+      "google/nano-banana-2.1",
+      { resolution: "1k", aspect_ratio: "1:1" },
+      { resolution: "1k" }
+    ),
+    imageFamily("GPT Image 2", "openai/gpt-image-2", { size: "1024x1024", quality: "medium" }),
   ],
+};
+
+// 写进工具描述的默认参数，和上面的表一一对应。
+const DEFAULT_SETTINGS: Record<DefaultRouteType, string> = {
+  Video:
+    "Default settings for these models are 720p, 5 seconds and one video, with 16:9 for text-to-video; " +
+    "image-to-video keeps the input image's aspect ratio, and upscaled resolutions (-sr / -esr) are off. ",
+  Image:
+    "Default settings for these models are one image at Seedream 5.0 Pro 2048*2048, " +
+    "GPT Image 2.5 Sunburst and GPT Image 2 1024x1024 at medium quality, and Nano Banana 2.1 1k at 1:1 " +
+    "(its edit variant keeps the input image's aspect ratio). ",
 };
 
 const TASK_LABELS: Record<DefaultRouteTask, string> = {
@@ -86,8 +132,25 @@ export function defaultRouteGuidance(type: DefaultRouteType): string {
   return (
     `Default model: when the user has not named a model, the default is ${first!.name} — ${variants}. ` +
     `When it is missing from atlas_list_models or cannot take the inputs, the same variant of the next model in this order applies: ${fallbacks}. ` +
+    DEFAULT_SETTINGS[type] +
+    "The server fills in any of these settings the request leaves out; values the user asks for take precedence. " +
     "A model the user names takes precedence, and tasks outside these variants are chosen from the catalog."
   );
+}
+
+/**
+ * 默认路由模型的默认参数（不管这个模型是用户点名的还是路由选的）。不在路由表里的
+ * 模型返回空对象，照旧用上游默认。
+ */
+export function routeDefaultParams(modelId: string): RouteParams {
+  for (const entries of Object.values(DEFAULT_MODEL_ROUTES)) {
+    for (const entry of entries) {
+      for (const [task, id] of Object.entries(entry.models)) {
+        if (id === modelId) return entry.params[task as DefaultRouteTask] ?? {};
+      }
+    }
+  }
+  return {};
 }
 
 /** 服务器说明里的一句话版本。 */

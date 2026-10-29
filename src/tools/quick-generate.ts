@@ -4,7 +4,7 @@ import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { api } from "../services/api-client.js";
 import { executeIdempotently } from "../services/idempotency.js";
-import { resolveDefaultModel } from "../services/default-models.js";
+import { resolveDefaultModel, routeDefaultParams } from "../services/default-models.js";
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
@@ -25,6 +25,7 @@ import {
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
 import {
+  fillPreferredDefaults,
   validateModelParams,
   formatValidationError,
 } from "../utils/schema-validator.js";
@@ -312,13 +313,18 @@ Returns:
         }
 
         // Step 3: Build params
-        const requestBody = buildQuickGenerateParams(
+        // 默认路由模型的默认参数在 extra_params 之后补：用户要的值优先。
+        const requestBody = fillPreferredDefaults(
           schema,
-          foundModel.model,
-          prompt,
-          image_url,
-          audio_url,
-          extra_params
+          buildQuickGenerateParams(
+            schema,
+            foundModel.model,
+            prompt,
+            image_url,
+            audio_url,
+            extra_params
+          ),
+          routeDefaultParams(foundModel.model)
         );
 
         // Step 3b: Validate the built params against the schema before submitting,

@@ -11,6 +11,7 @@ import {
   settingsChips,
   withAvailableBalance,
   withGenerationCard,
+  withQuoteDetails,
 } from "../src/apps/generation-quote.js";
 import {
   RATE_LIMIT_WAIT_MS,
@@ -395,4 +396,127 @@ test("余额不足的报错后面附上可用余额；查不到就原样返回�
   } finally {
     restore();
   }
+});
+
+/** /public/v1/account 和 /balance 的假接口；status 给 404/403 模拟后端没上或没权限。 */
+function accountFetcher(calls: string[], status: { account?: number; balance?: number } = {}): typeof fetch {
+  return (async (url: string | URL) => {
+    const path = String(url);
+    calls.push(path);
+    const json = (body: unknown, code = 200) =>
+      new Response(JSON.stringify(body), { status: code, headers: { "content-type": "application/json" } });
+    if (path.endsWith("/account")) {
+      return status.account
+        ? json({ error: "not_found" }, status.account)
+        : json({
+            object: "account",
+            account: { id: "acc_1", name: "Ada Lovelace", type: "personal" },
+            user: { name: "Ada Lovelace", email: "ada@example.com" },
+          });
+    }
+    return status.balance
+      ? json({ error: "insufficient_scope" }, status.balance)
+      : json({
+          object: "balance",
+          scope: "user",
+          account: { id: "acc_1", name: "Ada Lovelace", type: "personal" },
+          available: { value: "8.5", currency: "USD" },
+        });
+  }) as unknown as typeof fetch;
+}
+
+const QUOTE_WITH_PARAMS = {
+  ...QUOTE_RESULT,
+  structuredContent: {
+    ...QUOTE_RESULT.structuredContent,
+    estimate_reason: "settles_on_usage",
+    // 服务端补了默认值：调用方没给分辨率和时长。
+    params: { prompt: "a paper boat", resolution: "720p", duration: 5, ratio: "16:9" },
+  },
+};
+
+test("报价补上主要参数和扣费账户：文字和结构化结果都有，卡片显示账户和余额", async () => {
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key", MCP_UI_CARDS: "1" });
+  const calls: string[] = [];
+  try {
+    const result = await withQuoteDetails(
+      { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
+      { fetcher: accountFetcher(calls) }
+    );
+    const extra = (result.content[1] as { text: string }).text;
+    assert.match(extra, /\*\*Settings\*\*: 720p · 5 s · 16:9/);
+    assert.match(extra, /\*\*Billing account\*\*: Ada Lovelace \(personal account, ada@example\.com\) · \$8\.50 available/);
+    assert.deepEqual((result.structuredContent as Record<string, unknown>).billing_account, {
+      name: "Ada Lovelace",
+      type: "personal",
+      user_name: "Ada Lovelace",
+      user_email: "ada@example.com",
+      available_usd: 8.5,
+    });
+    assert.equal(calls.length, 2);
+
+    const card = await withGenerationCard(
+      fakeServer(false),
+      "atlas_generate_video",
+      async () => ({ ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] }),
+      { fetcher: accountFetcher([]) }
+    )({ ...VIDEO_ARGS, params: { prompt: "a paper boat" } }, {});
+    const quote = (card._meta?.["atlascloud/card"] as { quote: Record<string, unknown> }).quote;
+    // 参数标签按实际提交的参数，不按调用方给的（这里调用方没给分辨率）。
+    assert.deepEqual(quote.settings, ["720p", "5 s", "16:9"]);
+    assert.deepEqual(quote.account, { name: "Ada Lovelace", email: "ada@example.com", balance_usd: 8.5 });
+    assert.equal(quote.settles_on_usage, true);
+  } finally {
+    restore();
+  }
+});
+
+test("扣费账户查不到：后端没上 /account 时退回余额接口里的账户名；都没有就只补参数；不是报价不查", async () => {
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key" });
+  try {
+    const noAccountApi = await withQuoteDetails(
+      { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
+      { fetcher: accountFetcher([], { account: 404 }) }
+    );
+    assert.match((noAccountApi.content[1] as { text: string }).text, /Billing account\*\*: Ada Lovelace \(personal account\) · \$8\.50 available/);
+
+    const nothing = await withQuoteDetails(
+      { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
+      { fetcher: accountFetcher([], { account: 404, balance: 403 }) }
+    );
+    const text = (nothing.content[1] as { text: string }).text;
+    assert.match(text, /Settings/);
+    assert.doesNotMatch(text, /Billing account/);
+    assert.equal((nothing.structuredContent as Record<string, unknown>).billing_account, undefined);
+
+    // 只有账户、余额没权限：显示账户不显示余额。
+    const noBalance = await withQuoteDetails(
+      { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
+      { fetcher: accountFetcher([], { balance: 403 }) }
+    );
+    assert.match((noBalance.content[1] as { text: string }).text, /ada@example\.com\)\nInclude/);
+
+    const calls: string[] = [];
+    const submitted = { structuredContent: { status: "submitted", prediction_id: "p" }, content: [] };
+    assert.equal(await withQuoteDetails(submitted, { fetcher: accountFetcher(calls) }), submitted);
+    const failed = { isError: true, content: [{ type: "text" as const, text: "Error" }] };
+    assert.equal(await withQuoteDetails(failed, { fetcher: accountFetcher(calls) }), failed);
+    assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("卡片前端：宿主丢了 _meta 时，报价兜底也带上扣费账户和结算方式", () => {
+  const card = cardFromToolResult(
+    {
+      structuredContent: {
+        ...QUOTE_WITH_PARAMS.structuredContent,
+        billing_account: { name: "Ada Lovelace", user_email: "ada@example.com", available_usd: -1.25 },
+      },
+    },
+    { tool: "atlas_generate_video", args: VIDEO_ARGS }
+  );
+  assert.deepEqual(card?.quote?.account, { name: "Ada Lovelace", email: "ada@example.com", balance_usd: -1.25 });
+  assert.equal(card?.quote?.settles_on_usage, true);
 });

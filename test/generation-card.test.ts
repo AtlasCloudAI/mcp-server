@@ -58,6 +58,29 @@ function predictionFor(id: string): Record<string, unknown> {
         created_at: now,
         completed_at: now,
       };
+    // 网关给了扣费状态（aiproxy#1074）：出了结果还没结算，价格是空的。
+    case "unsettled":
+      return {
+        model: "black-forest-labs/flux-schnell",
+        status: "completed",
+        outputs: [`${origin}/media/done.jpg`],
+        price: "",
+        charge_status: "pending",
+        created_at: now,
+        completed_at: now,
+      };
+    // 审核失败但已经扣了一部分。
+    case "partial":
+      return {
+        model: "black-forest-labs/flux-schnell",
+        status: "failed",
+        outputs: [],
+        error: "Output rejected by content review",
+        price: "0.05",
+        charge_status: "partially_charged",
+        created_at: now,
+        completed_at: now,
+      };
     default:
       return { status: "failed", outputs: [], error: "Upstream timeout" };
   }
@@ -361,4 +384,52 @@ test("卡片前端：金额、任务 ID、单张价的格式", () => {
     perItemPrice({ state: "succeeded", prediction_id: "p", media, price_usd: 0.26, model_id: "atlascloud/studio/product-visuals" }),
     undefined
   );
+});
+
+test("查结果：带上扣费状态；没结算完写待结算，不写 $0", async () => {
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  const { client, close } = await connect({ rendersCards: false });
+  try {
+    const unsettled = await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "unsettled" } });
+    const card = cardOf(unsettled);
+    assert.equal(card?.charge_status, "pending");
+    assert.equal(card?.price_usd, undefined);
+    const text = (unsettled.content as Array<{ type: string; text?: string }>)[0]!.text ?? "";
+    assert.match(text, /\*\*Charge\*\*: pending settlement/);
+    assert.doesNotMatch(text, /\$0\.\d/);
+    assert.equal((unsettled.structuredContent as Record<string, unknown>).charge_status, "pending");
+    assert.equal((unsettled.structuredContent as Record<string, unknown>).price_usd, undefined);
+
+    const partial = await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "partial" } });
+    assert.equal(cardOf(partial)?.charge_status, "partially_charged");
+    assert.equal(cardOf(partial)?.price_usd, 0.05);
+    assert.match(
+      (partial.content as Array<{ text?: string }>)[0]!.text ?? "",
+      /\*\*Charge\*\*: \$0\.05, a partial charge/
+    );
+
+    // 老网关没有 charge_status：有价格就写价格，卡片照旧。
+    const done = await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "done" } });
+    assert.equal(cardOf(done)?.charge_status, undefined);
+    assert.match((done.content as Array<{ text?: string }>)[0]!.text ?? "", /\*\*Charge\*\*: \$0\.003/);
+  } finally {
+    await close();
+    restore();
+  }
+});
+
+test("卡片前端：单张价在待结算时不算；structuredContent 兜底也带扣费状态", () => {
+  const card = {
+    state: "succeeded" as const,
+    prediction_id: "p",
+    media: [{ url: "https://x/a.jpg", kind: "image" as const }],
+    price_usd: 0.2,
+  };
+  assert.equal(perItemPrice(card), 0.2);
+  assert.equal(perItemPrice({ ...card, charge_status: "pending" }), undefined);
+  const parsed = cardFromToolResult({
+    structuredContent: { prediction_id: "p", status: "failed", outputs: [], price_usd: 0.05, charge_status: "partially_charged" },
+  });
+  assert.equal(parsed?.charge_status, "partially_charged");
+  assert.equal(parsed?.price_usd, 0.05);
 });

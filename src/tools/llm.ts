@@ -40,6 +40,9 @@ import {
   generationCardEnabled,
   generationCardToolMeta,
   predictionCardData,
+  chargeStatusOf,
+  priceOf,
+  type ChargeStatus,
 } from "../apps/generation-card.js";
 import {
   completedAtOf,
@@ -57,6 +60,35 @@ import {
   predictionResponseSchema,
   type PredictionResponse,
 } from "../response-schemas.js";
+
+/** 和卡片同一种写法：不足 1 美元时保留到 4 位小数（$0.015），至少 2 位。 */
+function chargeUsd(value: number): string {
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  const trimmed = value.toFixed(4).replace(/0+$/, "");
+  return `$${(trimmed.split(".")[1]?.length ?? 0) < 2 ? value.toFixed(2) : trimmed}`;
+}
+
+/**
+ * 查结果里给模型看的一行扣费（需求文档 6.3：结算完才写实际费用，没结算完写待结算，
+ * 不把未知费用说成 $0）。老网关没有 charge_status 时只在有价格时写价格。
+ */
+export function chargeLine(status: ChargeStatus | undefined, priceUsd: number | undefined): string | null {
+  const usd = priceUsd !== undefined ? chargeUsd(priceUsd) : null;
+  switch (status) {
+    case "charged":
+      return `- **Charge**: ${usd ?? "charged (amount not available yet)"}`;
+    case "partially_charged":
+      return `- **Charge**: ${usd ? `${usd}, ` : ""}a partial charge for the part of the job that ran`;
+    case "pending":
+      return "- **Charge**: pending settlement — the final amount is not known yet; do not report it as $0";
+    case "not_charged":
+      return "- **Charge**: not charged";
+    case "refunded":
+      return "- **Charge**: refunded";
+    default:
+      return usd ? `- **Charge**: ${usd}` : null;
+  }
+}
 
 export function registerLLMTools(
   server: McpServer,
@@ -334,6 +366,8 @@ Examples:
         transfer_pending: z.boolean().optional(),
         error: z.string().optional(),
         metrics: z.record(z.unknown()).optional(),
+        price_usd: z.number().optional(),
+        charge_status: z.string().optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
       ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
@@ -359,6 +393,12 @@ Examples:
         if (result.data?.error) {
           lines.push(`## Error\n\n${result.data.error}`);
         }
+
+        const data = result.data as Record<string, unknown> | undefined;
+        const priceUsd = priceOf(data?.price);
+        const chargeStatus = chargeStatusOf(data?.charge_status);
+        const charge = chargeLine(chargeStatus, priceUsd);
+        if (charge) lines.push(`${charge}\n`);
 
         const outputUrls = predictionOutputUrls(result);
         const transferPending =
@@ -446,6 +486,8 @@ Examples:
             ...(transferPending ? { transfer_pending: true } : {}),
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
+            ...(priceUsd !== undefined && chargeStatus !== "pending" ? { price_usd: priceUsd } : {}),
+            ...(chargeStatus ? { charge_status: chargeStatus } : {}),
           },
           content: [
             { type: "text", text: lines.join("\n") },

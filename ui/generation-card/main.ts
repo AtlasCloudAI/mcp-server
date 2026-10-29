@@ -182,6 +182,9 @@ function setNotice(text: string | undefined, ttlMs = 4000): void {
   }
 }
 
+/** 还在跑的任务：卡上的价格是报价时的预估，刷新没给价格时沿用。 */
+const UNSETTLED_STATES = new Set<string>(["quote", "queued", "running", "transfer_pending"]);
+
 function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   const parsed = cardFromToolResult(result, { tool: app.getHostContext()?.toolInfo?.tool.name, args: toolArgs });
   if (!parsed) return false;
@@ -195,6 +198,9 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   };
   const next = { ...kept, ...carry, ...parsed };
   if (parsed.price_usd !== undefined) next.price_usd = parsed.price_usd;
+  // 网关给了扣费状态、任务也结束了：价格只认结果里的，预估价不能顶替实扣，没结算完
+  // 显示「待结算」（需求文档 6.3）。老网关没有 charge_status，照旧沿用。
+  else if (parsed.charge_status !== undefined && !UNSETTLED_STATES.has(parsed.state)) delete next.price_usd;
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
   card = card?.sample ? { ...next, sample: true } : next;
   loadError = undefined;

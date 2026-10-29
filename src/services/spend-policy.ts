@@ -47,6 +47,11 @@ const calculateResponseSchema = z.preprocess(
       // videos it was not allowed to probe, for instance. The true cost is then
       // higher than what came back, so the number cannot clear a threshold.
       estimate_partial: z.boolean().optional(),
+      // Why the figure is an estimate ("settles_on_usage": billed on what the job
+      // actually used) and, for a partial one, what it left out
+      // ("reference_video_duration"). aiproxy#1074; older gateways omit both.
+      estimate_reason: z.string().optional(),
+      estimate_missing: z.array(z.string()).optional(),
     })
     .passthrough()
 );
@@ -62,11 +67,17 @@ export interface SpendDecision {
   reason: string;
   /** The platform flagged the quote as incomplete: the real charge is higher. */
   partial?: boolean;
+  /** Why the quote is an estimate, as the platform put it. */
+  estimateReason?: string;
+  /** What a partial quote left out. */
+  estimateMissing?: string[];
 }
 
 export interface Quote {
   usd: number | null;
   partial: boolean;
+  reason?: string;
+  missing?: string[];
 }
 
 /**
@@ -83,7 +94,19 @@ export async function fetchQuote(
     responseSchema: calculateResponseSchema,
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
   });
-  return { usd: quote.price ?? null, partial: quote.estimate_partial === true };
+  return {
+    usd: quote.price ?? null,
+    partial: quote.estimate_partial === true,
+    ...(quote.estimate_reason ? { reason: quote.estimate_reason } : {}),
+    ...(quote.estimate_missing?.length ? { missing: quote.estimate_missing } : {}),
+  };
+}
+
+function estimateDetails(quote: Quote | null): Pick<SpendDecision, "estimateReason" | "estimateMissing"> {
+  return {
+    ...(quote?.reason ? { estimateReason: quote.reason } : {}),
+    ...(quote?.missing ? { estimateMissing: quote.missing } : {}),
+  };
 }
 
 /**
@@ -141,6 +164,7 @@ export async function evaluateSpend(
       quotedUsd: quote?.usd ?? null,
       thresholdUsd,
       ...(quote?.partial ? { partial: true } : {}),
+      ...estimateDetails(quote),
       reason: "every generation is confirmed with the user",
     };
   }
@@ -172,6 +196,7 @@ export async function evaluateSpend(
       quotedUsd,
       thresholdUsd,
       partial: true,
+      ...estimateDetails(quote),
       reason: "quote is partial, the real charge is higher",
     };
   }
@@ -180,6 +205,7 @@ export async function evaluateSpend(
       autoSubmit: false,
       quotedUsd,
       thresholdUsd,
+      ...estimateDetails(quote),
       reason: "quote is at or above the threshold",
     };
   }
@@ -187,6 +213,7 @@ export async function evaluateSpend(
     autoSubmit: true,
     quotedUsd,
     thresholdUsd,
+    ...estimateDetails(quote),
     reason: "quote is below the threshold",
   };
 }
@@ -366,27 +393,53 @@ export function confirmationCostNotice(decision: SpendDecision): string {
     );
   }
   if (decision.partial) {
+    const missing = decision.estimateMissing?.map(estimateMissingLabel).join(", ");
     return (
       `- **Estimated cost**: at least ${formatUsd(decision.quotedUsd)} — the platform could not ` +
-      `see everything it needs to price this request (for example a reference video's length), ` +
+      `see everything it needs to price this request (${missing ? `not included: ${missing}` : "for example a reference video's length"}), ` +
       `so the real charge will be higher.`
     );
   }
+  const settles =
+    decision.estimateReason === ESTIMATE_SETTLES_ON_USAGE
+      ? " The final charge is settled on what the job actually uses, so it can differ slightly."
+      : "";
   if (decision.thresholdUsd <= 0) {
     return (
       `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
-      `every generation is confirmed with the user before it runs).`
+      `every generation is confirmed with the user before it runs).${settles}`
     );
   }
   return (
     `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
-    `at or above the ${formatUsd(decision.thresholdUsd)} auto-submit limit, so it needs confirmation).`
+    `at or above the ${formatUsd(decision.thresholdUsd)} auto-submit limit, so it needs confirmation).${settles}`
   );
 }
 
+/** estimate_reason when the charge is settled on actual usage (token-billed video, for one). */
+export const ESTIMATE_SETTLES_ON_USAGE = "settles_on_usage";
+
+const ESTIMATE_MISSING_LABELS: Record<string, string> = {
+  reference_video_duration: "the reference videos' length",
+};
+
+export function estimateMissingLabel(code: string): string {
+  return ESTIMATE_MISSING_LABELS[code] ?? code.replace(/_/g, " ");
+}
+
 /** The same figure for structuredContent. */
-export function costEstimate(decision: SpendDecision): { usd: number | null; partial: boolean } {
-  return { usd: decision.quotedUsd, partial: decision.partial === true };
+export function costEstimate(decision: SpendDecision): {
+  usd: number | null;
+  partial: boolean;
+  reason?: string;
+  missing?: string[];
+} {
+  return {
+    usd: decision.quotedUsd,
+    partial: decision.partial === true,
+    ...(decision.estimateReason ? { reason: decision.estimateReason } : {}),
+    ...(decision.estimateMissing ? { missing: decision.estimateMissing } : {}),
+  };
 }
 
 /**

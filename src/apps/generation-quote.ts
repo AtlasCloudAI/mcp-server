@@ -1,7 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { balanceResponseSchema } from "../response-schemas.js";
+import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
+import { billingAccount, describeBillingAccount } from "../services/billing-account.js";
 import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
@@ -111,8 +113,13 @@ export function generationResultCard(
     if (typeof token !== "string" || typeof key !== "string") return undefined;
     const validSeconds = positiveNumber(content.confirmation_valid_seconds);
     const estimate = typeof content.estimated_cost_usd === "number" ? content.estimated_cost_usd : undefined;
-    // 图片、视频、音频工具的参数在 params 里；快速生成直接平铺在参数上。
-    const params = record(args.params) ?? callArgs;
+    // 优先用工具给出的实际提交参数（含服务端补的默认值）；老结构里没有时，图片、视频、
+    // 音频工具的参数在 params 里，快速生成直接平铺在参数上。
+    const params = record(content.params) ?? record(args.params) ?? callArgs;
+    const account = record(content.billing_account);
+    const missing = Array.isArray(content.estimate_missing)
+      ? content.estimate_missing.filter((code): code is string => typeof code === "string")
+      : [];
     return {
       ...buildGenerationCardData({
         predictionId: "",
@@ -134,7 +141,18 @@ export function generationResultCard(
           : {}),
         ...(estimate !== undefined ? { estimated_usd: estimate } : {}),
         ...(content.estimate_partial === true ? { partial: true } : {}),
+        ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
+        ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
         settings: settingsChips(params),
+        ...(account && typeof account.name === "string"
+          ? {
+              account: {
+                name: account.name,
+                ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
+                ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
+              },
+            }
+          : {}),
       },
     };
   }
@@ -209,16 +227,51 @@ const QUOTE_CARD_NOTE =
   "returns the job the card already started rather than a second one.";
 
 /**
- * 给生成工具的处理函数套一层：结果里带上卡片数据。卡片没打开时原样返回。
- * 客户端声明能渲染卡片时，报价结果再多一句话，告诉模型卡片上能直接确认。
+ * 报价结果补上「主要参数」和扣费账户（需求文档 6.1）。不管卡片开没开都补：Codex、
+ * Claude Code 这类只看文字的客户端也要能告诉用户从哪个账户扣。查不到账户就只补参数。
+ */
+export async function withQuoteDetails(
+  result: CallToolResult,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<CallToolResult> {
+  const content = record(result.structuredContent);
+  if (result.isError || content?.status !== "confirmation_required") return result;
+  const settings = settingsChips(record(content.params));
+  const account = await billingAccount(options);
+  const lines = [
+    settings.length > 0 ? `- **Settings**: ${settings.join(" · ")}` : null,
+    account ? `- **Billing account**: ${describeBillingAccount(account)}` : null,
+  ].filter((line): line is string => line !== null);
+  if (lines.length === 0) return result;
+  return {
+    ...result,
+    structuredContent: { ...content, ...(account ? { billing_account: account } : {}) },
+    content: [
+      ...result.content,
+      {
+        type: "text" as const,
+        text:
+          lines.join("\n") +
+          "\nInclude these settings" +
+          (account ? " and the billing account the charge goes to" : "") +
+          " when showing the quote.",
+      },
+    ],
+  };
+}
+
+/**
+ * 给生成工具的处理函数套一层：报价补上参数和扣费账户，结果里带上卡片数据。卡片没打开时
+ * 只补报价信息。客户端声明能渲染卡片时，报价结果再多一句话，告诉模型卡片上能直接确认。
  */
 export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
   server: McpServer,
   tool: (typeof CARD_GENERATION_TOOLS)[number],
-  handler: (args: Args, extra: Extra) => Promise<CallToolResult>
+  handler: (args: Args, extra: Extra) => Promise<CallToolResult>,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
 ): (args: Args, extra: Extra) => Promise<CallToolResult> {
   return async (args, extra) => {
-    const result = await handler(args, extra);
+    const result = await withQuoteDetails(await handler(args, extra), options);
     if (!generationCardEnabled()) return result;
     if (result.isError) return withAvailableBalance(result);
     const card = generationResultCard(tool, args, result.structuredContent);

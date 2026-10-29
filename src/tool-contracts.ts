@@ -140,6 +140,21 @@ export const generationOutputSchema = {
   // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
   estimated_cost_usd: z.number().optional(),
   estimate_partial: z.boolean().optional(),
+  // 预估的原因（settles_on_usage：按实际用量结算）和不完整预估漏掉的部分
+  estimate_reason: z.string().optional(),
+  estimate_missing: z.array(z.string()).optional(),
+  // 实际要提交的参数（含服务端补的默认值）：报价上的「主要参数」按它显示
+  params: z.record(z.unknown()).optional(),
+  // 扣费账户（需求文档 6.1）：查不到就不给
+  billing_account: z
+    .object({
+      name: z.string(),
+      type: z.string().optional(),
+      user_name: z.string().optional(),
+      user_email: z.string().optional(),
+      available_usd: z.number().optional(),
+    })
+    .optional(),
 };
 
 export type GenerationStructuredContent = Record<string, unknown> &
@@ -202,8 +217,10 @@ export function generationConfirmationStructuredContent(
     idempotencyKey: string;
     pricing: z.infer<typeof generationPricingSchema>;
   },
-  estimate?: { usd: number | null; partial: boolean }
+  estimate?: { usd: number | null; partial: boolean; reason?: string; missing?: string[] },
+  body?: Record<string, unknown>
 ): GenerationStructuredContent {
+  const { model: _model, ...params } = body ?? {};
   return {
     model_id: model.model,
     model_name: model.displayName,
@@ -214,7 +231,13 @@ export function generationConfirmationStructuredContent(
     idempotency_key: confirmation.idempotencyKey,
     pricing: confirmation.pricing,
     ...(estimate && estimate.usd !== null
-      ? { estimated_cost_usd: estimate.usd, ...(estimate.partial ? { estimate_partial: true } : {}) }
+      ? {
+          estimated_cost_usd: estimate.usd,
+          ...(estimate.partial ? { estimate_partial: true } : {}),
+          ...(estimate.reason ? { estimate_reason: estimate.reason } : {}),
+          ...(estimate.missing ? { estimate_missing: estimate.missing } : {}),
+        }
       : {}),
+    ...(body ? { params } : {}),
   };
 }

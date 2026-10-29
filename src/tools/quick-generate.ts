@@ -365,7 +365,8 @@ Returns:
               foundModel,
               kind,
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              requestBody
             ),
             content: [{
               type: "text",

@@ -203,3 +203,36 @@ test("报价里写出本次的幂等键，要求确认时原样传回", () => {
   assert.match(notice, /send this exact value back/);
   assert.match(notice, /do not generate a new one/);
 });
+
+test("报价带上预估原因和漏掉的部分，确认文字说清楚", async (t) => {
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: undefined, ATLASCLOUD_API_KEY: "test-key" });
+  const settles = await evaluateSpend(
+    {},
+    { fetcher: quoteFetcher({ code: 200, data: { price: "1.5", estimated: true, estimate_reason: "settles_on_usage" } }) }
+  );
+  assert.equal(settles.estimateReason, "settles_on_usage");
+  assert.match(confirmationCostNotice(settles), /\$1\.50 for these exact parameters.*settled on what the job actually uses/);
+
+  const partial = await evaluateSpend(
+    {},
+    {
+      fetcher: quoteFetcher({
+        code: 200,
+        data: {
+          price: "0.5",
+          estimated: true,
+          estimate_partial: true,
+          estimate_reason: "settles_on_usage",
+          estimate_missing: ["reference_video_duration"],
+        },
+      }),
+    }
+  );
+  assert.deepEqual(partial.estimateMissing, ["reference_video_duration"]);
+  assert.match(confirmationCostNotice(partial), /at least \$0\.50 .*not included: the reference videos' length/);
+
+  // 老网关不给这两个字段：文字和以前一样。
+  const plain = await evaluateSpend({}, { fetcher: quoteFetcher({ code: 200, data: { price: "0.2" } }) });
+  assert.equal(plain.estimateReason, undefined);
+  assert.doesNotMatch(confirmationCostNotice(plain), /settled/);
+});

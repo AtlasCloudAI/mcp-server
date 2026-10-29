@@ -26,6 +26,12 @@ export interface QuoteInfo {
   expires_at?: string;
   estimated_usd?: number;
   partial?: boolean;
+  /** 按实际用量结算，最终扣费可能和预估略有出入。 */
+  settles_on_usage?: boolean;
+  /** 不完整的预估漏掉了什么（服务端给的说法）。 */
+  estimate_missing?: string[];
+  /** 扣费账户和可用余额；查不到就没有。 */
+  account?: { name: string; email?: string; balance_usd?: number };
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
   valid_seconds?: number;
@@ -45,6 +51,8 @@ export interface CardData {
   model_name?: string;
   model_type?: string;
   price_usd?: number;
+  /** charged / partially_charged / pending / not_charged / refunded，见 src/apps/generation-card.ts。 */
+  charge_status?: string;
   media: CardMedia[];
   error?: string;
   open_url?: string;
@@ -169,10 +177,24 @@ function quoteFromStructured(
             ...(seconds > 0 ? { expires_at: new Date(Date.now() + seconds * 1000).toISOString(), valid_seconds: seconds } : {}),
             ...(typeof structured.estimated_cost_usd === "number" ? { estimated_usd: structured.estimated_cost_usd } : {}),
             ...(structured.estimate_partial === true ? { partial: true } : {}),
+            ...(structured.estimate_reason === "settles_on_usage" ? { settles_on_usage: true } : {}),
+            ...billingAccountOf(structured.billing_account),
             settings: [],
           },
         }
       : {}),
+  };
+}
+
+function billingAccountOf(raw: unknown): { account?: { name: string; email?: string; balance_usd?: number } } {
+  const account = record(raw);
+  if (!account || typeof account.name !== "string") return {};
+  return {
+    account: {
+      name: account.name,
+      ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
+      ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
+    },
   };
 }
 
@@ -201,6 +223,8 @@ export function cardFromToolResult(
     prediction_id: structured.prediction_id,
     media: outputs.map((url) => ({ url, kind: kindOfUrl(url) })),
     ...(typeof structured.error === "string" && structured.error ? { error: structured.error } : {}),
+    ...(typeof structured.price_usd === "number" ? { price_usd: structured.price_usd } : {}),
+    ...(typeof structured.charge_status === "string" ? { charge_status: structured.charge_status } : {}),
     open_url: SITE_URL,
   };
 }
@@ -302,6 +326,7 @@ export function fileNameOf(url: string, fallback: string): string {
 
 /** 工作流一次跑出几张图是按次计费；单模型多张图按张计费，单张价才有意义。 */
 export function perItemPrice(card: CardData): number | undefined {
+  if (card.charge_status === "pending") return undefined;
   if (card.price_usd === undefined || card.media.length === 0) return undefined;
   if (card.model_id?.startsWith("atlascloud/")) return undefined;
   return card.price_usd / card.media.length;

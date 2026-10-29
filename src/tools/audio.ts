@@ -115,7 +115,8 @@ Returns:
               prepared.model,
               "audio",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [{
               type: "text",
@@ -267,7 +268,8 @@ Returns:
               prepared.model,
               "transcription",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [{
               type: "text",

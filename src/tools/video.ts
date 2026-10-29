@@ -118,7 +118,8 @@ Returns:
               prepared.model,
               "video",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [{
               type: "text",

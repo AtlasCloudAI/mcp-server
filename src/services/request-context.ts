@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { IdempotencyStore } from "./idempotency.js";
+import type { ToolCallTelemetry } from "./tool-call-telemetry.js";
 import type { UploadTicketStore } from "./upload-ticket-store.js";
 
 export interface AtlasRequestContext {
@@ -24,6 +25,8 @@ export interface AtlasRequestContext {
   uploadTicketStore?: UploadTicketStore;
   /** 报价记录：确认时按参数找回报价，不靠模型抄回令牌（generation-confirmation.ts）。 */
   quoteStore?: UploadTicketStore;
+  /** 本次工具调用的统计对象。只有开了埋点、且这是一次 tools/call 时才有。 */
+  toolCall?: ToolCallTelemetry;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

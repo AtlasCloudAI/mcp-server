@@ -14,6 +14,12 @@ import {
 } from "../services/media-preview.js";
 import { currentClientProfile } from "../services/client-profile.js";
 import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  taskHash,
+} from "../services/tool-call-telemetry.js";
+import {
   autoSubmitNotice,
   confirmationCostNotice,
   costEstimate,
@@ -272,9 +278,12 @@ Returns:
     }) => {
       try {
         // Step 1: Resolve model
+        annotateToolCall({ stage: "prepare" });
         const resolved = await resolveModel(model_keyword, type);
 
         if ("error" in resolved) {
+          // 有候选是关键词太宽（调用方得改成确切 ID），没候选才是真找不到。
+          recordToolCallError({ code: resolved.candidates ? "invalid_param" : "model_not_found" });
           return {
             isError: true,
             content: [{ type: "text", text: resolved.error }],
@@ -282,10 +291,13 @@ Returns:
         }
 
         const { model: foundModel } = resolved;
+        annotateToolCall({ model: foundModel.model });
 
         // Step 2: Fetch schema
+        annotateToolCall({ stage: "schema" });
         const schema = await getModelSchema(foundModel);
         if (!schema) {
+          recordToolCallError({ code: "model_schema_unavailable" });
           return {
             isError: true,
             content: [
@@ -318,6 +330,7 @@ Returns:
           paramsToValidate
         );
         if (!validation.ok) {
+          recordToolCallError({ code: "invalid_param", param: validation.errorParam });
           return {
             isError: true,
             content: [
@@ -403,6 +416,7 @@ Returns:
 
         const predictionId = response.data?.id;
         if (!predictionId) {
+          recordToolCallError({ code: "submission_unknown" });
           return {
             isError: true,
             content: [
@@ -425,6 +439,11 @@ Returns:
         // 同步完成的模型结果就在提交响应里，别再让模型去轮询一个已经结束的任务。
         const settled = response.data?.outputs ?? response.data?.output;
         const outputs = Array.isArray(settled) ? settled : settled ? [settled] : [];
+        annotateToolCall({
+          generation_status:
+            outputs.length > 0 ? "completed" : normalizeGenerationStatus(response.data?.status),
+          task_hash: taskHash(predictionId),
+        });
         const finished =
           outputs.length > 0 ? await completedOutputContent(outputs, { profile: currentClientProfile() }) : null;
 

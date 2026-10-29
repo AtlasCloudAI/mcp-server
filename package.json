@@ -68,6 +68,7 @@
     "express-rate-limit": "8.6.2",
     "jose": "6.2.8",
     "oidc-provider": "9.11.3",
+    "posthog-node": "5.56.1",
     "redis": "5.8.2",
     "undici": "7.29.0",
     "zod": "3.25.76"

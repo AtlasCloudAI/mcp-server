@@ -64,6 +64,65 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
   }
 }
 
+/**
+ * Which product is calling, for usage analytics (`client_platform` on
+ * `mcp_tool_call`).
+ *
+ * Metadata-document clients are told apart by their client_id URL, as above.
+ * Dynamically registered clients get a random client_id, so they are told apart
+ * by name prefix instead. Names seen at registration on the Atlas authorization
+ * server (2026-10-15): "WorkBuddy", "WorkBuddy Connector (custom-mcp:...)",
+ * "Hermes Agent", "OpenClaw MCP", "Cursor". The resource server never sees that
+ * registration, so the name it matches comes from the MCP `initialize`
+ * clientInfo, or failing that the User-Agent header.
+ */
+export type ClientPlatform =
+  | "chatgpt"
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "workbuddy"
+  | "hermes"
+  | "openclaw"
+  | "grok"
+  | "unknown";
+
+const NAME_PREFIXES: ReadonlyArray<readonly [string, ClientPlatform]> = [
+  ["workbuddy", "workbuddy"],
+  ["hermes", "hermes"],
+  ["openclaw", "openclaw"],
+  ["cursor", "cursor"],
+  ["grok", "grok"],
+  ["claude", "claude"],
+  ["codex", "codex"],
+  ["chatgpt", "chatgpt"],
+  ["openai", "chatgpt"],
+];
+
+/** The platform a client or user-agent name belongs to, or undefined if none matches. */
+export function platformFromName(name: string | undefined): ClientPlatform | undefined {
+  const normalized = name?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return NAME_PREFIXES.find(([prefix]) => normalized.startsWith(prefix))?.[1];
+}
+
+export function clientPlatform(
+  clientId: string | undefined,
+  clientName?: string
+): ClientPlatform {
+  switch (knownClient(clientId)) {
+    case "chatgpt":
+      return "chatgpt";
+    case "codex":
+      return "codex";
+    case "claude":
+    case "claude-code":
+      return "claude";
+    default:
+      return platformFromName(clientName) ?? "unknown";
+  }
+}
+
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
   return clientProfile(getRequestContext()?.authInfo.clientId);

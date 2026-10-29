@@ -5,6 +5,7 @@ import { getModels, findModel, getModelSchema } from "../services/doc-fetcher.js
 import { formatModelList, formatModelInfo, truncate } from "../utils/formatter.js";
 import { generateLLMPrompt } from "../utils/prompt-gen.js";
 import { handleError } from "../utils/error-handler.js";
+import { annotateToolCall, recordToolCallError } from "../services/tool-call-telemetry.js";
 import {
   modelInfoOutputSchema,
   modelPageLimitSchema,
@@ -116,6 +117,7 @@ Returns:
     async ({ model: modelParam, model_id }) => {
       const model = modelParam ?? model_id;
       if (!model) {
+        recordToolCallError({ code: "invalid_param" });
         return {
           isError: true,
           content: [{ type: "text", text: "Pass the model ID as `model` (the model_id value from atlas_list_models)." }],
@@ -124,6 +126,7 @@ Returns:
       try {
         const found = await findModel(model);
         if (!found) {
+          recordToolCallError({ code: "model_not_found" });
           return {
             isError: true,
             content: [
@@ -134,6 +137,7 @@ Returns:
             ],
           };
         }
+        annotateToolCall({ model: found.model });
 
         // Fetch the schema first: the default-parameter quote needs its defaults
         const schema = await getModelSchema(found);

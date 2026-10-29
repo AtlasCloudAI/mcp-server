@@ -5,6 +5,7 @@ import test, { before } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { inputsOf, promptOf } from "../src/apps/card-params.js";
 import {
   CARD_GENERATION_TOOLS,
   generationResultCard,
@@ -539,4 +540,56 @@ test("个人账户没有名字时用用户名兜底（test 上实测 account.nam
   } finally {
     restore();
   }
+});
+
+test("任务内容和输入素材：提示词截断，参数里的链接不认字段名、去重、最多 8 个", () => {
+  assert.equal(promptOf({ prompt: "  a   paper\nboat  " }), "a paper boat");
+  assert.equal(promptOf({ text: "hello" }), "hello");
+  assert.equal(promptOf({ image: "https://x/a.jpg" }), undefined);
+  const long = promptOf({ prompt: "x".repeat(400) })!;
+  assert.equal(long.length, 280);
+  assert.ok(long.endsWith("…"));
+
+  const inputs = inputsOf({
+    prompt: "https://not-an-input.example/a.jpg",
+    model: "https://x/model",
+    image: "https://cdn.example/products/front%20shot.jpg",
+    reference_images: ["https://cdn.example/products/front%20shot.jpg", "https://cdn.example/b.png"],
+    refers: [{ url: "https://cdn.example/clip.mp4" }],
+    duration: 5,
+    note: "not a link",
+  });
+  assert.deepEqual(inputs, [
+    { url: "https://cdn.example/products/front%20shot.jpg", name: "front shot.jpg" },
+    { url: "https://cdn.example/b.png", name: "b.png" },
+    { url: "https://cdn.example/clip.mp4", name: "clip.mp4" },
+  ]);
+  const many = inputsOf({ images: Array.from({ length: 12 }, (_, i) => `https://cdn.example/${i}.jpg`) });
+  assert.equal(many.length, 8);
+  assert.equal(inputsOf({ image: "https://cdn.example/" })[0]!.name, "Input 1");
+});
+
+test("报价卡带任务内容和素材缩略图；提交后的进度卡带实际提交的参数标签", () => {
+  const quote = generationResultCard("atlas_generate_video", VIDEO_ARGS, {
+    ...QUOTE_RESULT.structuredContent,
+    params: { prompt: "a paper boat", image: "https://cdn.example/boat.jpg", resolution: "720p", duration: 5 },
+  });
+  assert.equal(quote?.quote?.prompt, "a paper boat");
+  assert.deepEqual(quote?.quote?.inputs, [{ url: "https://cdn.example/boat.jpg", name: "boat.jpg", kind: "image" }]);
+
+  // 调用方只给了提示词，服务端补了 720p、5 秒：进度卡按实际提交的显示。
+  const submitted = generationResultCard(
+    "atlas_generate_video",
+    { ...VIDEO_ARGS, params: { prompt: "a paper boat" } },
+    {
+      prediction_id: "p1",
+      model_id: "bytedance/seedance-2.5/text-to-video",
+      model_name: "Seedance 2.5",
+      kind: "video",
+      status: "submitted",
+      params: { prompt: "a paper boat", resolution: "720p", duration: 5, ratio: "16:9" },
+    }
+  );
+  assert.equal(submitted?.state, "running");
+  assert.deepEqual(submitted?.settings, ["720p", "5 s", "16:9"]);
 });

@@ -197,14 +197,17 @@ export function toModelSummary(model: Model): {
 export function generationStructuredContent(
   predictionId: string,
   model: Model,
-  kind: SubmitKind
+  kind: SubmitKind,
+  body?: Record<string, unknown>
 ): GenerationStructuredContent {
+  const { model: _model, ...params } = body ?? {};
   return {
     prediction_id: predictionId,
     model_id: model.model,
     model_name: model.displayName,
     kind,
     status: "submitted",
+    ...(body ? { params } : {}),
   };
 }
 

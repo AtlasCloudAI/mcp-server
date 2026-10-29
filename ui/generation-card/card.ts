@@ -32,6 +32,10 @@ export interface QuoteInfo {
   estimate_missing?: string[];
   /** 扣费账户和可用余额；查不到就没有。 */
   account?: { name: string; email?: string; balance_usd?: number };
+  /** 这一单要生成什么（提示词，截断过）。 */
+  prompt?: string;
+  /** 这一单引用的素材：缩略图和名称。 */
+  inputs?: (CardMedia & { name: string })[];
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
   valid_seconds?: number;
@@ -51,6 +55,8 @@ export interface CardData {
   model_name?: string;
   model_type?: string;
   price_usd?: number;
+  /** 主要参数小标签（1080p · 10 s · 16:9）。 */
+  settings?: string[];
   /** charged / partially_charged / pending / not_charged / refunded，见 src/apps/generation-card.ts。 */
   charge_status?: string;
   media: CardMedia[];

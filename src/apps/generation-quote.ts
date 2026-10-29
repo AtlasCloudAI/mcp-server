@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { balanceResponseSchema } from "../response-schemas.js";
 import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
+import { inputsOf, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount } from "../services/billing-account.js";
 import type { BalanceResponse } from "../types.js";
@@ -12,6 +13,8 @@ import {
   clientRendersCards,
   generationCardEnabled,
   generationCardToolMeta,
+  cardMediaKind,
+  type QuoteInfo,
 } from "./generation-card.js";
 
 // 生成工具的报价卡：报价结果显示成「确认生成」卡片，用户在卡里点 Generate，卡片自己
@@ -39,56 +42,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function positiveNumber(value: unknown): number | undefined {
-  const n = typeof value === "string" ? Number.parseFloat(value) : typeof value === "number" ? value : NaN;
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
+export { settingsChips } from "./card-params.js";
 
-/**
- * 参数里挑几个用户关心的做成小标签（设计稿：1080p · 10 s · 16:9 · Audio）。
- * 只认常见字段名，认不出来就不显示，不去猜。
- */
-export function settingsChips(params: Record<string, unknown> | undefined): string[] {
-  if (!params) return [];
-  const chips: string[] = [];
-  const resolution = params.resolution;
-  if (typeof resolution === "string" && resolution.trim()) chips.push(resolution.trim());
-  else if (typeof resolution === "number") chips.push(`${resolution}p`);
-
-  for (const key of ["size", "image_size"]) {
-    const size = params[key];
-    if (typeof size === "string" && size.trim()) {
-      chips.push(size.trim().replace(/^(\d+)\s*[*xX×]\s*(\d+)$/, "$1×$2"));
-      break;
-    }
-    const box = record(size);
-    if (box && positiveNumber(box.width) && positiveNumber(box.height)) {
-      chips.push(`${box.width}×${box.height}`);
-      break;
-    }
-  }
-
-  // 顺序照设计稿：1080p · 10 s · 16:9 · Audio
-  const duration = positiveNumber(params.duration);
-  if (duration !== undefined) chips.push(`${duration} s`);
-
-  // Kling、Veo 叫 aspect_ratio，Seedance、Wan 叫 ratio。
-  const aspect = params.aspect_ratio ?? params.ratio;
-  if (typeof aspect === "string" && aspect.trim()) chips.push(aspect.trim());
-
-  for (const key of ["num_images", "max_images", "n", "count"]) {
-    const n = positiveNumber(params[key]);
-    if (n !== undefined && n > 1) {
-      chips.push(`${n} images`);
-      break;
-    }
-  }
-
-  // 只认布尔 true：Wan 的 audio 也可能是一条音频链接。
-  if ([params.generate_audio, params.audio, params.enable_audio, params.sound].some((v) => v === true)) {
-    chips.push("Audio");
-  }
-  return chips.slice(0, 5);
+/** 报价卡上的「任务内容」和「输入素材」（需求文档 6.1）。 */
+function quoteTask(params: Record<string, unknown> | undefined): Pick<QuoteInfo, "prompt" | "inputs"> {
+  const prompt = promptOf(params);
+  const inputs = inputsOf(params).map((input) => ({ ...input, kind: cardMediaKind(input.url) }));
+  return {
+    ...(prompt ? { prompt } : {}),
+    ...(inputs.length > 0 ? { inputs } : {}),
+  };
 }
 
 /** 由工具结果拼卡片数据；不是报价也不是提交（比如出错）就返回 undefined。 */
@@ -144,6 +107,7 @@ export function generationResultCard(
         ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
         ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
         settings: settingsChips(params),
+        ...quoteTask(params),
         ...(account && typeof account.name === "string"
           ? {
               account: {
@@ -158,6 +122,7 @@ export function generationResultCard(
   }
 
   if (content.status === "submitted" || content.status === "completed") {
+    const submittedParams = record(content.params) ?? record(args.params) ?? callArgs;
     const predictionId = content.prediction_id;
     if (typeof predictionId !== "string" || !predictionId) return undefined;
     const outputs = Array.isArray(content.outputs)
@@ -174,6 +139,7 @@ export function generationResultCard(
         modelName,
         modelType,
         createdAt: new Date().toISOString(),
+        settings: settingsChips(submittedParams),
       }),
       retry: { tool, arguments: callArgs },
     };

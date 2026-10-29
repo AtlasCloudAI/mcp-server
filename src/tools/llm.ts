@@ -40,6 +40,7 @@ import {
   generationCardEnabled,
   generationCardToolMeta,
   predictionCardData,
+  CARD_PREDICTION_PARAMS,
   chargeStatusOf,
   priceOf,
   type ChargeStatus,
@@ -378,6 +379,8 @@ Examples:
           generationApi<PredictionResponse>(
             `/model/prediction/${encodeURIComponent(prediction_id)}`,
             {
+              // 卡片打开时多要一份原始请求，结果卡才能显示主要参数。
+              ...(generationCardEnabled() ? { params: CARD_PREDICTION_PARAMS } : {}),
               responseSchema: predictionResponseSchema,
               timeout: budget.timeoutMs,
               maxRetries: budget.maxRetries,

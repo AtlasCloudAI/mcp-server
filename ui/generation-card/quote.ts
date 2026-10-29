@@ -16,7 +16,7 @@ import {
   newIdempotencyKey,
   typeLabel,
 } from "./card.js";
-import { type ViewOptions, badge, button, h, head, retryButton, row } from "./view.js";
+import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 const CHECK_TOOL = "atlas_card_check_submission";
@@ -392,9 +392,42 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function chips(settings: string[]): HTMLElement | null {
-  if (settings.length === 0) return null;
-  return h("div", { class: "chips" }, ...settings.map((label) => h("span", { class: "chip" }, label)));
+/** 报价卡上「生成什么、用什么」（需求文档 6.1、5.2）：提示词两行，引用的素材带缩略图和名称。 */
+function task(quote: QuoteInfo | undefined): HTMLElement[] {
+  const parts: HTMLElement[] = [];
+  if (quote?.prompt) parts.push(h("p", { class: "quote-prompt", title: quote.prompt }, quote.prompt));
+  const inputs = quote?.inputs ?? [];
+  if (inputs.length > 0) {
+    const shown = inputs.slice(0, MAX_INPUTS_SHOWN);
+    parts.push(
+      h(
+        "div",
+        { class: "quote-inputs", "aria-label": `${inputs.length} input file${inputs.length === 1 ? "" : "s"}` },
+        ...shown.map(inputItem),
+        inputs.length > shown.length ? h("span", { class: "quote-input-more" }, `+${inputs.length - shown.length}`) : null
+      )
+    );
+  }
+  return parts;
+}
+
+const MAX_INPUTS_SHOWN = 4;
+
+function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number]): HTMLElement {
+  const thumb = h("span", { class: "quote-input-thumb" });
+  const fallback = () => thumb.replaceChildren(h("span", { html: input.kind === "image" ? ICON_IMAGE : ICON_FILE }));
+  if (input.kind === "image") {
+    const img = h("img", { src: input.url, alt: "", decoding: "async", loading: "lazy", referrerpolicy: "no-referrer" });
+    img.addEventListener("error", fallback, { once: true });
+    thumb.append(img);
+  } else if (input.kind === "video") {
+    const video = h("video", { src: `${input.url}#t=0.1`, preload: "metadata", muted: true, playsinline: "", referrerpolicy: "no-referrer" });
+    video.addEventListener("error", fallback, { once: true });
+    thumb.append(video);
+  } else {
+    fallback();
+  }
+  return h("span", { class: "quote-input", title: input.name }, thumb, h("span", { class: "quote-input-name" }, input.name));
 }
 
 /** 「报价 10 分钟内有效」里的时长。 */
@@ -646,6 +679,7 @@ export function renderQuoteCard(
     { class: "card" },
     head("Approve this generation", status),
     subtitle,
+    ...task(quote),
     chips(quote?.settings ?? []),
     ...amount,
     billing,

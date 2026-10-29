@@ -399,7 +399,11 @@ test("余额不足的报错后面附上可用余额；查不到就原样返回�
 });
 
 /** /public/v1/account 和 /balance 的假接口；status 给 404/403 模拟后端没上或没权限。 */
-function accountFetcher(calls: string[], status: { account?: number; balance?: number } = {}): typeof fetch {
+function accountFetcher(
+  calls: string[],
+  status: { account?: number; balance?: number } = {},
+  accountName = "Ada Lovelace"
+): typeof fetch {
   return (async (url: string | URL) => {
     const path = String(url);
     calls.push(path);
@@ -410,7 +414,7 @@ function accountFetcher(calls: string[], status: { account?: number; balance?: n
         ? json({ error: "not_found" }, status.account)
         : json({
             object: "account",
-            account: { id: "acc_1", name: "Ada Lovelace", type: "personal" },
+            account: { id: "acc_1", name: accountName, type: "personal" },
             user: { name: "Ada Lovelace", email: "ada@example.com" },
           });
     }
@@ -419,7 +423,7 @@ function accountFetcher(calls: string[], status: { account?: number; balance?: n
       : json({
           object: "balance",
           scope: "user",
-          account: { id: "acc_1", name: "Ada Lovelace", type: "personal" },
+          account: { id: "acc_1", name: accountName, type: "personal" },
           available: { value: "8.5", currency: "USD" },
         });
   }) as unknown as typeof fetch;
@@ -519,4 +523,20 @@ test("卡片前端：宿主丢了 _meta 时，报价兜底也带上扣费账户�
   );
   assert.deepEqual(card?.quote?.account, { name: "Ada Lovelace", email: "ada@example.com", balance_usd: -1.25 });
   assert.equal(card?.quote?.settles_on_usage, true);
+});
+
+test("个人账户没有名字时用用户名兜底（test 上实测 account.name 为空）", async () => {
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key" });
+  try {
+    const result = await withQuoteDetails(
+      { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
+      { fetcher: accountFetcher([], {}, "") }
+    );
+    assert.match(
+      (result.content[1] as { text: string }).text,
+      /Billing account\*\*: Ada Lovelace \(personal account, ada@example\.com\) · \$8\.50 available/
+    );
+  } finally {
+    restore();
+  }
 });

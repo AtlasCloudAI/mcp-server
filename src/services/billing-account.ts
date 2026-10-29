@@ -51,7 +51,10 @@ export async function billingAccount(
       () => undefined
     ),
   ]);
-  const name = account?.account.name || balance?.account?.name;
+  // 个人账户在库里没有名字（实测 test 上 account.name 为空）：用户名、邮箱兜底，和授权页
+  // 「Signed in as …」一致。
+  const name =
+    account?.account.name || balance?.account?.name || account?.user?.name || account?.user?.email;
   if (!name) return undefined;
   const type = account?.account.type || balance?.account?.type;
   const available = Number(balance?.available?.value);

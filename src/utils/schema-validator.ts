@@ -180,6 +180,29 @@ function formatAjvError(error: ErrorObject): string {
   return `Parameter \`${path}\` ${error.message ?? "is invalid"}.`;
 }
 
+// anyOf / oneOf 的每个分支都只差一个必填字段时（比如「参考图、参考视频至少给一个」），Ajv 会把
+// 每个分支缺的字段各报一条，再加一条「must match a schema in anyOf」。照搬读起来像这几个字段
+// 全都必填，模型会去把它们都补上，所以合成一句「至少给其中一个」。分支里有别的错误时照旧逐条报。
+function formatAjvErrors(errors: ErrorObject[]): string[] {
+  const merged = new Map<ErrorObject, string>();
+  const absorbed = new Set<ErrorObject>();
+  for (const error of errors) {
+    if (error.keyword !== "anyOf" && error.keyword !== "oneOf") continue;
+    const prefix = `${error.schemaPath}/`;
+    const branches = errors.filter((e) => e !== error && e.schemaPath.startsWith(prefix));
+    if (
+      branches.length === 0 ||
+      !branches.every((e) => e.keyword === "required" && e.instancePath === error.instancePath)
+    ) {
+      continue;
+    }
+    const names = [...new Set(branches.map((e) => String(e.params.missingProperty ?? "unknown")))];
+    merged.set(error, `Provide at least one of ${names.map((name) => `\`${name}\``).join(", ")}.`);
+    for (const branch of branches) absorbed.add(branch);
+  }
+  return errors.filter((e) => !absorbed.has(e)).map((e) => merged.get(e) ?? formatAjvError(e));
+}
+
 // Keep only the first sentence of a description to keep error messages short
 function firstSentence(desc?: string): string {
   if (!desc) return "";
@@ -332,7 +355,7 @@ export function validateModelParams(
   }
   const valid = validate({ model: modelId, ...params });
   const errors = [
-    ...(valid ? [] : (validate.errors ?? []).map(formatAjvError)),
+    ...(valid ? [] : formatAjvErrors(validate.errors ?? [])),
     ...multiSelectErrors(input, params),
   ];
 

@@ -1,5 +1,6 @@
 import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
 import { generationApi } from "./api-client.js";
+import { checkInputLinks, formatInputLinkProblems, inputLinkCheckEnabled } from "./input-link-check.js";
 import {
   fillRequiredDefaults,
   validateModelParams,
@@ -77,6 +78,15 @@ export async function prepareGeneration(
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
     return { ok: false, message: formatValidationError(found.model, validation) };
+  }
+
+  // 素材链接先检查（需求文档 5.2）：打不开、是网页、类型不对的链接，在报价之前就说清楚是哪一条，
+  // 而不是等网关下载失败、任务挂掉之后才知道。
+  if (inputLinkCheckEnabled()) {
+    const problems = await checkInputLinks(finalParams);
+    if (problems.length > 0) {
+      return { ok: false, message: formatInputLinkProblems(problems) };
+    }
   }
 
   const body = { model: found.model, ...finalParams };

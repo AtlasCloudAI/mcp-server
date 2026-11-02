@@ -9,7 +9,8 @@ export const ASSETS_META_KEY = "atlascloud/assets";
 /** 一次最多选几个素材交给模型，和上传卡一致。 */
 export const ASSETS_MAX_PICK = 10;
 
-export type AssetMediaType = "image" | "video" | "audio";
+// 3D 是资产库二期加的（GLB），test 上的 AssetD 已支持按它筛。
+export type AssetMediaType = "image" | "video" | "audio" | "3d";
 export type AssetCardKind = AssetMediaType | "other";
 export type AssetOrigin = "upload" | "generated" | "input";
 
@@ -36,6 +37,8 @@ export interface AssetCardData {
   /** 还有下一页时的游标。 */
   next_cursor?: string;
   max_pick: number;
+  /** 资产库没开通（充值后才能用）：卡片显示「Top up to use your Asset Library」。 */
+  locked?: boolean;
   /** 测试卡片：只显示，不真的换地址。 */
   sample?: boolean;
 }

@@ -12,20 +12,27 @@ import {
   formatUsd,
   isModelUnavailable,
   isRateLimited,
+  isTemplate,
   modelLabel,
   perItemPrice,
   shortId,
   typeLabel,
 } from "./card.js";
 
+// 设计稿 v2（10-29）：结果卡只留「下载」和「查看记录」；想接着改就在对话里说。
 export interface CardActions {
   download(media: CardMedia): void;
-  /** 用这个结果继续创作：交给模型当下一次的输入，重新报价（需求文档 6.3）。 */
-  continueWith(media: CardMedia): void;
+  /** 多个结果一起下载（设计稿「Download all」）。 */
+  downloadAll(media: CardMedia[]): void;
+  /** 「View in Atlas」「View request」：在 Atlas 打开这一单。 */
   openInAtlas(): void;
-  copyLink(url: string): Promise<boolean>;
+  /** 「View all N」：宿主支持时全屏看全部结果。 */
+  expand(): void;
+  /** 从全部结果返回：退出全屏。 */
+  collapse(): void;
   refresh(): void;
   keepWaiting(): void;
+  /** 失败后「Edit and re-quote」：按原参数重新报价，用户在报价卡上改或确认。 */
   tryAgain(): void;
   switchModel(): void;
 }
@@ -35,8 +42,6 @@ export interface ViewOptions {
   canRefresh: boolean;
   /** 宿主允许卡片往对话里发消息（重试、换模型）。 */
   canMessage: boolean;
-  /** 宿主能把结果交给模型（发消息或写模型上下文）：结果卡显示「Continue」。 */
-  canContinue: boolean;
   /** 卡片自己等了很久还没结果：显示「Still generating」。 */
   stalled: boolean;
   /** 正在刷新：刷新按钮置灰。 */
@@ -50,6 +55,7 @@ const ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4
 const ICON_SPINNER = '<svg class="spin" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/></svg>';
 const ICON_CUBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 3.8 7.4v9.2l8.2 4.6 8.2-4.6V7.4L12 2.8zm0 2.3 5.9 3.3L12 11.7 6.1 8.4 12 5.1zM5.8 10.1l5.2 2.9v5.8l-5.2-2.9v-5.8zm7.2 8.7V13l5.2-2.9v5.8L13 18.8z" fill="currentColor"/></svg>';
 export const ICON_IMAGE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>';
+const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5m0 0L5 7m3 3 3-3M3 12.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 export const ICON_FILE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>';
 
 type Child = Node | string | null | undefined | false;
@@ -148,9 +154,13 @@ export function row(label: string, value: string, opts: { mono?: boolean; title?
   );
 }
 
+/** 出了结果但还没结算：写「Cost pending」，不写价格也不写 $0（需求文档 6.3、设计稿 v2「待结算」）。 */
+function costPending(card: CardData): boolean {
+  return card.charge_status === "pending" && card.state === "succeeded";
+}
+
 function priceText(card: CardData): string | null {
-  // 出了结果但还没结算：写「待结算」，不写价格也不写 $0（需求文档 6.3）。
-  if (card.charge_status === "pending" && card.state === "succeeded") return "Charge pending";
+  if (costPending(card)) return "Cost pending";
   return card.price_usd !== undefined ? formatUsd(card.price_usd) : null;
 }
 
@@ -174,11 +184,25 @@ function chargeSentence(card: CardData): string {
   }
 }
 
-function captionText(card: CardData, media: CardMedia, extra: string[] = []): string {
-  const parts = [KIND_LABEL[media.kind], modelLabel(card), ...extra];
-  const price = priceText(card);
-  if (price) parts.push(price);
-  return parts.join(" · ");
+/**
+ * 结果下面那一行（设计稿 v2「Image · Seedream 5.0 Pro · 2048 × 2048 · $0.04」）：类型、模型、
+ * 主要参数、价格；没结算时价格换成「Cost pending」小标签。lead 替换开头的类型词（多张时写「4 images」）。
+ */
+function caption(
+  card: CardData,
+  media: CardMedia | undefined,
+  opts: { extra?: string[]; lead?: string; bare?: boolean } = {}
+): HTMLElement {
+  const lead = opts.bare ? [] : [opts.lead ?? (media ? KIND_LABEL[media.kind] : typeLabel(card)), modelLabel(card)];
+  const parts = [...lead, ...(card.settings ?? []), ...(opts.extra ?? [])];
+  const pending = costPending(card);
+  if (!pending && card.price_usd !== undefined) parts.push(formatUsd(card.price_usd));
+  return h(
+    "p",
+    { class: "caption" },
+    parts.join(" · "),
+    pending ? h("span", { class: "badge caption-badge" }, "Cost pending") : null
+  );
 }
 
 function notice(opts: ViewOptions): HTMLElement | null {
@@ -199,12 +223,19 @@ function secondsSince(iso: string | undefined, now: number): number | null {
 
 // ---------- 生成进度 ----------
 
+/** 进度卡标题：「Video · Dreamina Seedance 2.5」；模板写「Image ads · Marketing Studio」（设计稿 v2「模板执行中」）。 */
+function progressTitle(card: CardData): string {
+  return isTemplate(card) ? `${modelLabel(card)} · Marketing Studio` : `${typeLabel(card)} · ${modelLabel(card)}`;
+}
+
 function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
-  const title = `${typeLabel(card)} · ${modelLabel(card)}`;
+  const title = progressTitle(card);
   const price = priceText(card);
   const refresh = opts.canRefresh
     ? button("Refresh", "secondary", actions.refresh, { disabled: opts.refreshing })
     : null;
+  // 设计稿 v2：排队中、生成中加「View in Atlas」，可以去 Atlas 看这条记录。
+  const viewInAtlas = button("View in Atlas", "secondary", actions.openInAtlas);
 
   if (opts.stalled) {
     return h(
@@ -247,7 +278,7 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
       ? h("p", { class: "desc" }, "Your file is ready and is being saved to Atlas.")
       : null,
     h("div", { class: "rows" }, ...rows),
-    refresh ? h("div", { class: "actions" }, refresh) : null,
+    h("div", { class: "actions" }, refresh, viewInAtlas),
     notice(opts)
   );
 }
@@ -298,7 +329,7 @@ function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions
 }
 
 function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
-  // 有原参数时 Try again 直接重新报价，只要宿主允许调工具；否则要能发消息。
+  // 有原参数时直接重新报价，只要宿主允许调工具；否则要能发消息。
   const canRetry = opts.canMessage || (card.retry !== undefined && opts.canRefresh);
   if (isRateLimited(card.error)) return rateLimitedCard(card, opts, actions, canRetry);
   if (isModelUnavailable(card.error)) return unavailableCard(card, opts, actions, canRetry);
@@ -306,20 +337,19 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
   const what = kind === "generation" ? "this generation" : `this ${kind}`;
   const rows = [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })];
   if (card.error) rows.push(row("Reason", card.error, { title: card.error }));
+  // 设计稿 v2：按钮改成「修改后重新报价」和「查看记录」。重新报价出一张新报价卡，在那上面改或确认。
   return h(
     "section",
     { class: "card" },
-    head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Failed", { danger: true })),
+    head(progressTitle(card), badge("Failed", { danger: true })),
     h("p", { class: "desc" }, `The model couldn't finish ${what}. ${chargeSentence(card)}`),
     h("div", { class: "rows" }, ...rows),
-    canRetry
-      ? h(
-          "div",
-          { class: "actions" },
-          button("Try again", "primary", actions.tryAgain),
-          opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
-        )
-      : null,
+    h(
+      "div",
+      { class: "actions" },
+      canRetry ? button("Edit and re-quote", "primary", actions.tryAgain) : null,
+      button("View request", canRetry ? "secondary" : "primary", actions.openInAtlas)
+    ),
     notice(opts)
   );
 }
@@ -334,59 +364,65 @@ function canceledCard(card: CardData): HTMLElement {
 }
 
 // ---------- 作品 ----------
+// 设计稿 v2（10-29）：结果卡只留「Download」和「View request」；参数和价格写在图下面一行。
 
-function resultActions(card: CardData, media: CardMedia, actions: CardActions, opts: ViewOptions): HTMLElement {
+function resultActions(media: CardMedia, actions: CardActions): HTMLElement {
   return h(
     "div",
     { class: "actions" },
     button("Download", "primary", () => actions.download(media)),
-    opts.canContinue && media.kind !== "3d" && media.kind !== "other"
-      ? button("Continue", "secondary", () => actions.continueWith(media))
-      : null,
-    button("Open in Atlas", "secondary", actions.openInAtlas)
+    button("View request", "secondary", actions.openInAtlas)
   );
 }
 
-/** 预览加载不出来（宿主拦了来源、链接失效）：灰底说明 + 在 Atlas 打开 / 复制链接。 */
-function previewBlocked(card: CardData, media: CardMedia, actions: CardActions): HTMLElement {
-  const copy = button("Copy link", "secondary", async () => {
-    const ok = await actions.copyLink(media.url);
-    copy.textContent = ok ? "Copied" : "Couldn't copy";
-    setTimeout(() => (copy.textContent = "Copy link"), 1600);
-  });
+const PREVIEW_WORD: Record<CardMedia["kind"], string> = { image: "image", video: "video", audio: "audio", "3d": "model", other: "file" };
+
+/**
+ * 预览加载不出来（宿主拦了来源、链接一时打不开）：文件已经生成好了，可以重试预览或直接下载
+ * （设计稿 v2「预览加载失败」）。
+ */
+function previewFailed(card: CardData, media: CardMedia, actions: CardActions, retry: () => void): HTMLElement {
   return h(
     "section",
     { class: "card" },
     h(
       "div",
       { class: "placeholder" },
-      h("div", {}, h("span", { class: "placeholder-icon", html: ICON_IMAGE }), "Preview isn't available in this app")
+      h(
+        "div",
+        {},
+        h("span", { class: "placeholder-icon", html: ICON_IMAGE }),
+        `Your ${PREVIEW_WORD[media.kind]} is ready, but the preview didn't load.`
+      )
     ),
-    h("p", { class: "caption" }, captionText(card, media)),
-    h("div", { class: "actions" }, button("Open in Atlas", "primary", actions.openInAtlas), copy)
+    caption(card, media),
+    h(
+      "div",
+      { class: "actions" },
+      button("Retry preview", "primary", retry),
+      button("Download", "secondary", () => actions.download(media))
+    )
   );
 }
 
-function imageCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
+function imageCard(card: CardData, media: CardMedia, actions: CardActions, fail: () => void): HTMLElement {
   const img = h("img", {
     src: media.url,
     alt: `${KIND_LABEL[media.kind]} from ${modelLabel(card)}`,
     decoding: "async",
     referrerpolicy: "no-referrer",
   });
-  img.addEventListener("error", () => swap(previewBlocked(card, media, actions)), { once: true });
-  return h(
-    "section",
-    { class: "card" },
-    h("div", { class: "media" }, img),
-    h("p", { class: "caption" }, captionText(card, media)),
-    chips(card.settings),
-    resultActions(card, media, actions, opts)
-  );
+  img.addEventListener("error", fail, { once: true });
+  return h("section", { class: "card" }, h("div", { class: "media" }, img), caption(card, media), resultActions(media, actions));
 }
 
-function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
-  const caption = h("p", { class: "caption" }, captionText(card, media));
+/** 参数里已经有时长（10 s）就不再补视频读出来的时长。 */
+function hasDuration(card: CardData): boolean {
+  return (card.settings ?? []).some((label) => /^\d+(\.\d+)?\s?s$/.test(label));
+}
+
+function videoCard(card: CardData, media: CardMedia, actions: CardActions, fail: () => void): HTMLElement {
+  let line = caption(card, media);
   const video = h("video", { src: `${media.url}#t=0.1`, preload: "metadata", playsinline: "", referrerpolicy: "no-referrer" });
   video.playsInline = true;
   const play = h("button", {
@@ -401,19 +437,14 @@ function videoCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     },
   });
   video.addEventListener("loadedmetadata", () => {
-    if (Number.isFinite(video.duration) && video.duration > 0) {
-      caption.textContent = captionText(card, media, [`${Math.round(video.duration)} s`]);
+    if (!hasDuration(card) && Number.isFinite(video.duration) && video.duration > 0) {
+      const next = caption(card, media, { extra: [`${Math.round(video.duration)} s`] });
+      line.replaceWith(next);
+      line = next;
     }
   });
-  video.addEventListener("error", () => swap(previewBlocked(card, media, actions)), { once: true });
-  return h(
-    "section",
-    { class: "card" },
-    h("div", { class: "media" }, video, play),
-    caption,
-    chips(card.settings),
-    resultActions(card, media, actions, opts)
-  );
+  video.addEventListener("error", fail, { once: true });
+  return h("section", { class: "card" }, h("div", { class: "media" }, video, play), line, resultActions(media, actions));
 }
 
 /** 装饰性波形：按链接算出固定的高低，不解码音频（跨域读不到数据，也没必要）。 */
@@ -430,7 +461,7 @@ function waveHeights(seed: string, count: number): number[] {
   return out;
 }
 
-function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
+function audioCard(card: CardData, media: CardMedia, actions: CardActions, fail: () => void): HTMLElement {
   const audio = h("audio", { src: media.url, preload: "metadata", referrerpolicy: "no-referrer" });
   const time = h("span", { class: "audio-time" }, "0:00 / –:––");
   const bars = waveHeights(media.url, 30).map((height) => h("span", { style: `height:${height}px` }));
@@ -465,7 +496,7 @@ function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap:
   };
   audio.addEventListener("pause", onStop);
   audio.addEventListener("ended", onStop);
-  audio.addEventListener("error", () => swap(previewBlocked(card, media, actions)), { once: true });
+  audio.addEventListener("error", fail, { once: true });
   wave.addEventListener("click", (event) => {
     const rect = wave.getBoundingClientRect();
     if (Number.isFinite(audio.duration) && rect.width > 0) {
@@ -478,36 +509,35 @@ function audioCard(card: CardData, media: CardMedia, actions: CardActions, swap:
     if (event.key === "ArrowLeft") audio.currentTime = Math.max(0, audio.currentTime - 5);
   });
 
-  const price = priceText(card);
+  // 标题已经写了类型和模型，下面那行只写参数和价格（设计稿「32 s · $0.15」）。
   return h(
     "section",
     { class: "card" },
     h("p", { class: "title-lg" }, `${KIND_LABEL[media.kind]} · ${modelLabel(card)}`),
     h("div", { class: "audio-player" }, play, wave, time, audio),
-    price ? h("p", { class: "caption" }, price) : null,
-    chips(card.settings),
-    resultActions(card, media, actions, opts)
+    caption(card, media, { bare: true }),
+    resultActions(media, actions)
   );
 }
 
-function fileCard(card: CardData, media: CardMedia, actions: CardActions, opts: ViewOptions): HTMLElement {
+/** 3D 和其他文件：聊天里看不了，给文件名、格式和下载（设计稿 v2「3D」：去掉预览图，改成文件 + 下载）。 */
+function fileCard(card: CardData, media: CardMedia, actions: CardActions): HTMLElement {
   const is3d = media.kind === "3d";
-  const ext = fileNameOf(media.url, "").split(".").pop()?.toUpperCase();
+  const name = fileNameOf(media.url, is3d ? "3D model" : "Result file");
+  const ext = name.includes(".") ? name.split(".").pop()!.toUpperCase() : undefined;
+  const price = priceText(card);
+  const sub = [is3d ? "3D model" : "File", modelLabel(card), ext, price].filter(Boolean).join(" · ");
   return h(
     "section",
     { class: "card" },
     h(
       "div",
-      { class: `placeholder${is3d ? " tall" : ""}` },
-      h(
-        "div",
-        {},
-        h("span", { html: is3d ? ICON_CUBE : ICON_FILE }),
-        is3d ? "3D preview isn't available in this app" : fileNameOf(media.url, "Result file")
-      )
+      { class: "file-row" },
+      h("span", { class: "file-icon", html: is3d ? ICON_CUBE : ICON_FILE }),
+      h("span", { class: "file-text" }, h("span", { class: "file-name", title: name }, name), h("span", { class: "file-sub" }, sub))
     ),
-    h("p", { class: "caption" }, captionText(card, media, ext ? [ext] : [])),
-    resultActions(card, media, actions, opts)
+    h("p", { class: "note" }, `This app can't preview ${is3d ? "3D models" : "this file"}. Download to view.`),
+    resultActions(media, actions)
   );
 }
 
@@ -536,65 +566,136 @@ function tileMedia(media: CardMedia, alt: string): HTMLElement {
   return box;
 }
 
-const MAX_TILES = 8;
+/** 对话里最多摆 4 格：2–4 个两列排，5 个以上第 4 格写「+N」（设计稿 v2「多张」）。 */
+const GRID_SHOWN = 4;
 
 /**
- * 多个结果按网格排（需求文档 6.3「按网格展示，允许分别预览和下载」）。每格能直接下载；点图
- * 打开这一个结果的完整卡片（预览、下载、继续创作），「All N results」回到网格。
+ * 正在看「全部结果」的任务。切全屏时宿主会通知显示模式变了，卡片整张重画；记在这里，
+ * 重画出来还是全部结果，不会跳回四格。
  */
-function resultGrid(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
-  const each = perItemPrice(card);
-  const shown = card.media.slice(0, MAX_TILES);
+const showingAll = new Set<string>();
+
+const PLURAL: Record<CardMedia["kind"], string> = { image: "images", video: "videos", audio: "audio files", "3d": "3D models", other: "files" };
+
+/** 「4 images」「3 videos」；类型混着的写「5 results」。 */
+function countLabel(media: CardMedia[]): string {
+  const kinds = new Set(media.map((m) => m.kind));
+  return `${media.length} ${kinds.size === 1 ? PLURAL[media[0]!.kind] : "results"}`;
+}
+
+/**
+ * 多个结果（需求文档 6.3「按网格展示，允许分别预览和下载」）。卡里不滑动：2–4 个两列网格 +
+ * 「Download all」；5 个以上摆 4 格、最后一格写「+N」，点「View all N」看全部（宿主支持时全屏），
+ * 全部结果里每格能单独下载。点任何一格打开那一个结果的完整卡片。
+ */
+function resultGrid(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
+  const total = card.media.length;
+  const many = total > GRID_SHOWN;
+  const lead = countLabel(card.media);
+
   const grid = (): HTMLElement => {
-    const tiles = shown.map((media, i) => {
+    const tiles = card.media.slice(0, GRID_SHOWN).map((media, i) => {
+      const more = many && i === GRID_SHOWN - 1 ? total - GRID_SHOWN : 0;
       const label = `${KIND_LABEL[media.kind]} ${i + 1}`;
-      const sub = [modelLabel(card), each !== undefined ? formatUsd(each) : null].filter(Boolean).join(" · ");
+      return h(
+        "button",
+        {
+          type: "button",
+          class: "tile-open",
+          "aria-label": more ? `View all ${total}` : `Open ${label}`,
+          onclick: () => (more ? showAll() : focus(media, i, grid)),
+        },
+        tileMedia(media, `${label} from ${modelLabel(card)}`),
+        more ? h("span", { class: "tile-more" }, `+${more}`) : null
+      );
+    });
+    return h(
+      "section",
+      { class: "card results", "aria-label": lead },
+      h("div", { class: "results-grid" }, ...tiles),
+      caption(card, undefined, { lead }),
+      h(
+        "div",
+        { class: "actions" },
+        many
+          ? button(`View all ${total}`, "primary", showAll)
+          : button("Download all", "primary", () => actions.downloadAll(card.media)),
+        button("View request", "secondary", actions.openInAtlas)
+      )
+    );
+  };
+
+  const all = (): HTMLElement => {
+    const tiles = card.media.map((media, i) => {
+      const label = `${KIND_LABEL[media.kind]} ${i + 1}`;
       return h(
         "article",
         { class: "tile" },
         h(
           "button",
-          { type: "button", class: "tile-open", "aria-label": `Open ${label}`, onclick: () => focus(media, i) },
+          { type: "button", class: "tile-open", "aria-label": `Open ${label}`, onclick: () => focus(media, i, all) },
           tileMedia(media, `${label} from ${modelLabel(card)}`)
         ),
-        h("p", { class: "tile-title" }, label),
-        h("p", { class: "tile-sub" }, sub),
-        button("Download", "secondary", () => actions.download(media), { small: true })
+        h(
+          "div",
+          { class: "tile-bar" },
+          h("span", { class: "tile-label" }, label),
+          h("button", {
+            type: "button",
+            class: "tile-download",
+            "aria-label": `Download ${label}`,
+            html: ICON_DOWNLOAD,
+            onclick: () => actions.download(media),
+          })
+        )
       );
     });
-    // 工作流按次计费，单张价没意义，总价写在下面；超过 8 个的去 Atlas 看全部。
-    const footerBits: (Node | string)[] = [];
-    if (card.charge_status === "pending") footerBits.push("Charge pending");
-    else if (each === undefined && card.price_usd !== undefined) footerBits.push(`Total ${formatUsd(card.price_usd)}`);
-    if (card.media.length > MAX_TILES) footerBits.push(`${card.media.length - MAX_TILES} more in Atlas`);
     return h(
-      "section",
-      { "aria-label": `${card.media.length} results` },
-      chips(card.settings),
-      // 列数跟着个数走：2 张两列、3 张三列、4 张及以上四列，排出来是整行；窄屏 CSS 收成两列。
-      h("div", { class: "results-grid", style: `--cols:${Math.min(shown.length, 4)}` }, ...tiles),
-      footerBits.length > 0 || card.media.length > MAX_TILES
-        ? h(
-            "div",
-            { class: "results-footer" },
-            ...footerBits.map((bit) => h("span", {}, bit)),
-            button("Open in Atlas", "secondary", actions.openInAtlas, { small: true })
-          )
-        : null
+      "div",
+      {},
+      h(
+        "button",
+        {
+          type: "button",
+          class: "history-back",
+          onclick: () => {
+            showingAll.delete(card.prediction_id);
+            actions.collapse();
+            swap(grid());
+          },
+        },
+        "← Back"
+      ),
+      h(
+        "section",
+        { class: "card results", "aria-label": lead },
+        head(lead, null),
+        h("div", { class: "results-grid all" }, ...tiles),
+        caption(card, undefined, { lead }),
+        h("div", { class: "actions" }, button("Download all", "primary", () => actions.downloadAll(card.media)))
+      )
     );
   };
-  const focus = (media: CardMedia, index: number): void => {
-    const back = h(
-      "button",
-      { type: "button", class: "history-back", onclick: () => swap(grid()) },
-      `← All ${card.media.length} results`
-    );
-    const one = { ...card, media: [media], price_usd: each };
-    const single = singleResult(one, media, actions, swap, opts);
-    single.setAttribute("aria-label", `${KIND_LABEL[media.kind]} ${index + 1} of ${card.media.length}`);
-    swap(h("div", {}, back, single));
+
+  const showAll = (): void => {
+    showingAll.add(card.prediction_id);
+    actions.expand();
+    swap(all());
   };
-  return grid();
+
+  const focus = (media: CardMedia, index: number, from: () => HTMLElement): void => {
+    // 工作流按次计费，单张价没意义；单模型多张按张计费才写单价。
+    const one = { ...card, media: [media], price_usd: perItemPrice(card) };
+    const show = (): void => {
+      const back = h("button", { type: "button", class: "history-back", onclick: () => swap(from()) }, `← All ${total} results`);
+      const single = singleResult(one, media, actions, show);
+      single.setAttribute("aria-label", `${KIND_LABEL[media.kind]} ${index + 1} of ${total}`);
+      swap(h("div", {}, back, single));
+    };
+    show();
+  };
+
+  return showingAll.has(card.prediction_id) ? all() : grid();
 }
 
 function expiredCard(actions: CardActions): HTMLElement {
@@ -607,26 +708,32 @@ function expiredCard(actions: CardActions): HTMLElement {
   );
 }
 
-function singleResult(
-  card: CardData,
-  media: CardMedia,
-  actions: CardActions,
-  swap: (el: HTMLElement) => void,
-  opts: ViewOptions
-): HTMLElement {
+/**
+ * 一个结果的完整卡片。reshow：重画这张卡（「Retry preview」按它重来一遍）；预览出错时先换成
+ * 「预览加载失败」。
+ */
+function singleResult(card: CardData, media: CardMedia, actions: CardActions, reshow: () => void): HTMLElement {
+  const holder = h("div");
+  const fail = () => holder.replaceChildren(previewFailed(card, media, actions, reshow));
+  let view: HTMLElement;
   switch (media.kind) {
     case "image":
-      return imageCard(card, media, actions, swap, opts);
+      view = imageCard(card, media, actions, fail);
+      break;
     case "video":
-      return videoCard(card, media, actions, swap, opts);
+      view = videoCard(card, media, actions, fail);
+      break;
     case "audio":
-      return audioCard(card, media, actions, swap, opts);
+      view = audioCard(card, media, actions, fail);
+      break;
     default:
-      return fileCard(card, media, actions, opts);
+      view = fileCard(card, media, actions);
   }
+  holder.append(view);
+  return holder;
 }
 
-function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void, opts: ViewOptions): HTMLElement {
+function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement) => void): HTMLElement {
   if (card.media_expired) return expiredCard(actions);
   if (card.media.length === 0) {
     return h(
@@ -634,11 +741,12 @@ function resultCard(card: CardData, actions: CardActions, swap: (el: HTMLElement
       { class: "card" },
       head(`${typeLabel(card)} · ${modelLabel(card)}`, badge("Done")),
       h("p", { class: "desc" }, "The task finished without a file to show."),
-      h("div", { class: "actions" }, button("Open in Atlas", "secondary", actions.openInAtlas))
+      h("div", { class: "actions" }, button("View request", "secondary", actions.openInAtlas))
     );
   }
-  if (card.media.length > 1) return resultGrid(card, actions, swap, opts);
-  return singleResult(card, card.media[0]!, actions, swap, opts);
+  if (card.media.length > 1) return resultGrid(card, actions, swap);
+  const show = (): void => swap(singleResult(card, card.media[0]!, actions, show));
+  return singleResult(card, card.media[0]!, actions, show);
 }
 
 // ---------- 入口 ----------
@@ -681,7 +789,7 @@ export function renderCard(card: CardData, opts: ViewOptions, actions: CardActio
       view = canceledCard(card);
       break;
     default:
-      view = resultCard(card, actions, swap, opts);
+      view = resultCard(card, actions, swap);
   }
   holder.append(view);
   return holder;

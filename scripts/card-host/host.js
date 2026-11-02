@@ -19,6 +19,9 @@ const VARIANTS = [
   "failed_partial",
   "blocked",
   "expired",
+  "images_many",
+  "model_3d",
+  "template_running",
   "quote",
   "quote_partial",
   "quote_unpriced",
@@ -28,6 +31,7 @@ const VARIANTS = [
   "quote_settings_changed",
   "quote_rate_limited",
   "quote_model_unavailable",
+  "quote_template",
   "history",
   "upload",
   "upload_uploading",
@@ -35,8 +39,11 @@ const VARIANTS = [
   "upload_problem",
   "upload_failed",
   "upload_expired",
+  "upload_too_many",
   "assets",
   "assets_empty",
+  "assets_no_match",
+  "assets_locked",
 ];
 
 // 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，

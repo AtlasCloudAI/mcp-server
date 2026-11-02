@@ -142,6 +142,33 @@ const VARIANTS = {
     price: "0.03",
     outputs: [`${STATIC}/model/example/material/product-shot-01.jpg`],
   },
+  // 5 个以上：卡里摆 4 格，第 4 格写「+2」（设计稿 v2「多张 · 5 张以上」）。
+  images_many: {
+    status: "completed",
+    model: "bytedance/seedream-v4.7",
+    name: "Seedream v4.7",
+    type: "Image",
+    price: "0.18",
+    outputs: [1, 2, 3, 4, 5, 6].map((n) => `${STATIC}/model/example/material/product-shot-0${n}.jpg`),
+  },
+  // 3D：聊天里看不了，只给文件和下载。链接只用来显示文件名。
+  model_3d: {
+    status: "completed",
+    model: "tencent/hunyuan3d-pro/image-to-3d",
+    name: "Hunyuan 3D Pro",
+    type: "Image",
+    price: "0.3",
+    outputs: [`${STATIC}/selftest/sneaker-model.glb`],
+  },
+  // Marketing Studio 模板跑着：进度卡标题写模板名（设计稿 v2「模板执行中」）。
+  template_running: {
+    status: "processing",
+    model: "atlascloud/studio/product-visuals",
+    name: "Image ads",
+    type: "Image",
+    price: "0.24",
+    outputs: [],
+  },
 } as const;
 
 // 失败样例的原因：普通失败、上游限流、模型暂时不可用（卡片按原因换样子）。
@@ -160,7 +187,7 @@ const CHARGE_SAMPLES: Partial<Record<string, string>> = {
 
 // 结果卡、进度卡上的主要参数（示例）。
 const SETTINGS_SAMPLES: Record<string, string[]> = {
-  Image: ["2048×2048"],
+  Image: ["2048 × 2048"],
   Video: ["1080p", "10 s", "16:9", "Audio"],
   Audio: ["30 s"],
 };
@@ -194,7 +221,22 @@ const QUOTE_VARIANTS = {
   quote_settings_changed: { estimated: 1.34, partial: false, expired: false, problem: "settings_changed", balance: undefined, previous: undefined },
   quote_rate_limited: { estimated: 1.34, partial: false, expired: false, problem: "rate_limited", balance: undefined, previous: undefined },
   quote_model_unavailable: { estimated: 1.34, partial: false, expired: false, problem: "model_unavailable", balance: undefined, previous: undefined },
+  // Marketing Studio 模板的报价：整套模板一个总价（设计稿 v2「模板方案」）。
+  quote_template: { estimated: 0.24, partial: false, expired: false, problem: undefined, balance: undefined, previous: undefined },
 } as const;
+
+// 模板报价样例：Image ads 出 4 张，素材是上传卡传的耳机图。
+const TEMPLATE_SAMPLE = {
+  tool: "atlas_generate_image",
+  model: "atlascloud/studio/product-visuals",
+  name: "Image ads",
+  params: {
+    user_prompt: "Four ad images for my wireless earbuds: clean studio, lifestyle, close-up and a gym scene",
+    product_image: [`${STATIC}/model/example/material/product-shot-05.jpg`],
+    count: 4,
+    ratio: "1:1",
+  },
+};
 
 type Variant = keyof typeof VARIANTS | keyof typeof QUOTE_VARIANTS | "history" | (typeof ASSET_VARIANTS)[number];
 
@@ -234,7 +276,7 @@ function historySample(): HistoryCardData {
 const MB = 1_048_576;
 const FRONT = { name: "sneaker-front.jpg", size_bytes: Math.round(2.4 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-01.jpg` } as const;
 const SIDE = { name: "sneaker-side.jpg", size_bytes: Math.round(1.8 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-02.jpg` } as const;
-const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boolean }> = {
+const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boolean; overflow?: { picked: number; added: number } }> = {
   upload: { files: [] },
   upload_uploading: {
     files: [
@@ -251,6 +293,11 @@ const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boo
   },
   upload_failed: { files: [{ ...FRONT, status: "failed", error: "Upload failed" }] },
   upload_expired: { files: [{ ...FRONT, status: "uploading", progress: 0 }], expired: true },
+  // 一次选了 12 个：只收前 10 个（设计稿 v2「超出数量上限」）。
+  upload_too_many: {
+    files: Array.from({ length: 10 }, (_, i) => ({ ...(i % 2 ? SIDE : FRONT), name: `product-${i + 1}.jpg`, status: "done" as const })),
+    overflow: { picked: 12, added: 10 },
+  },
 };
 
 function uploadSample(variant: string): UploadCardData {
@@ -264,14 +311,18 @@ function uploadSample(variant: string): UploadCardData {
     sample: true,
     sample_files: sample.files,
     ...(sample.expired ? { sample_expired: true } : {}),
+    ...(sample.overflow ? { sample_overflow: sample.overflow } : {}),
   };
 }
 
 // 资产库卡：设计稿「全屏视图」里的「从资产库选取」和「资产库为空」。示例素材是公开的产品图。
-const ASSET_VARIANTS = ["assets", "assets_empty"] as const;
+// assets_no_match：搜「red sneaker」没找到；assets_locked：资产库没开通（充值后才能用）。
+const ASSET_VARIANTS = ["assets", "assets_empty", "assets_no_match", "assets_locked"] as const;
 
 function assetsSample(variant: string): AssetCardData {
   const day = 86_400_000;
+  if (variant === "assets_locked") return { view: "assets", items: [], max_pick: ASSETS_MAX_PICK, locked: true, sample: true };
+  if (variant === "assets_no_match") return { view: "assets", query: "red sneaker", items: [], max_pick: ASSETS_MAX_PICK, sample: true };
   const items: AssetCardItem[] =
     variant === "assets_empty"
       ? []
@@ -293,6 +344,8 @@ function assetsSample(variant: string): AssetCardData {
             created_at: new Date(Date.now() - 12 * day).toISOString(),
             model: "atlascloud/studio/ugc-ad",
           },
+          { asset_id: "asset_selftest_audio", label: "Audio · MiniMax Music 3.0 result", kind: "audio", origin: "generated", created_at: new Date(Date.now() - 13 * day).toISOString() },
+          { asset_id: "asset_selftest_3d", label: "sneaker-model.glb", kind: "3d", origin: "upload", created_at: new Date(Date.now() - 14 * day).toISOString() },
         ];
   return { view: "assets", items, max_pick: ASSETS_MAX_PICK, sample: true };
 }
@@ -300,20 +353,24 @@ function assetsSample(variant: string): AssetCardData {
 function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
   const validMs = sample.expired ? -60_000 : 10 * 60_000;
+  const template = variant === "quote_template";
+  const base = template ? TEMPLATE_SAMPLE : QUOTE_SAMPLE;
+  // 素材来源：普通样例是从资产库选的，模板样例是上传卡传的。
+  const source = template ? ("upload" as const) : ("library" as const);
   return {
     ...buildGenerationCardData({
       predictionId: "",
       status: "quote",
       outputs: [],
       transferPending: false,
-      modelId: QUOTE_SAMPLE.model,
-      modelName: QUOTE_SAMPLE.name,
-      modelType: "Video",
+      modelId: base.model,
+      modelName: base.name,
+      modelType: template ? "Image" : "Video",
     }),
     state: "quote",
     quote: {
-      tool: QUOTE_SAMPLE.tool,
-      arguments: { model: QUOTE_SAMPLE.model, params: QUOTE_SAMPLE.params },
+      tool: base.tool,
+      arguments: { model: base.model, params: base.params },
       idempotency_key: `selftest-${variant}`,
       confirmation_token: "selftest",
       expires_at: new Date(Date.now() + validMs).toISOString(),
@@ -323,9 +380,9 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       ...(variant === "quote" ? { settles_on_usage: true } : {}),
       ...(variant === "quote_partial" ? { estimate_missing: ["the reference videos' length"] } : {}),
       account: { ...QUOTE_ACCOUNT },
-      prompt: promptOf(QUOTE_SAMPLE.params),
-      inputs: inputsOf(QUOTE_SAMPLE.params).map((input) => ({ ...input, kind: cardMediaKind(input.url) })),
-      settings: settingsChips(QUOTE_SAMPLE.params),
+      prompt: promptOf(base.params),
+      inputs: inputsOf(base.params).map((input) => ({ ...input, kind: cardMediaKind(input.url), source })),
+      settings: settingsChips(base.params),
       valid_seconds: 600,
       ...(sample.problem ? { problem: sample.problem } : {}),
       ...(sample.balance !== undefined ? { sample_balance_usd: sample.balance } : {}),
@@ -378,7 +435,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         const card = quoteSample(variant as keyof typeof QUOTE_VARIANTS);
         return {
           _meta: { [CARD_META_KEY]: { ...card, sample: true } },
-          structuredContent: { status: "confirmation_required", model_id: QUOTE_SAMPLE.model, model_name: QUOTE_SAMPLE.name },
+          structuredContent: { status: "confirmation_required", model_id: card.model_id, model_name: card.model_name },
           content: [
             { type: "text", text: `Self-test quote card "${variant}" rendered with sample data. Nothing was quoted, generated or billed.` },
           ],

@@ -8,7 +8,6 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
-import { handOff } from "./handoff.js";
 import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, newIdempotencyKey } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
@@ -18,6 +17,7 @@ import { type AssetCardData, type Library, type LibraryDeps, assetsFromToolResul
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
+const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 /** 卡片自己最多等这么久，之后显示「Still generating」，用户点 Keep waiting 再等一轮。 */
 const POLL_BUDGET_MS = 10 * 60 * 1000;
 /** 两次刷新之间至少隔这么久（服务端本身会等最多 20 秒再回答）。 */
@@ -59,7 +59,6 @@ function viewOptions(): ViewOptions {
   return {
     canRefresh: sample || caps.serverTools !== undefined,
     canMessage: sample || caps.message !== undefined,
-    canContinue: sample || caps.message !== undefined || caps.updateModelContext !== undefined,
     stalled,
     refreshing,
     notice,
@@ -165,8 +164,8 @@ function render(force = false): void {
   else if (card) view = renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
-  // 历史列表全屏时放宽到 720（设计稿全屏视图宽 720），其余照旧 560。
-  root.classList.toggle("wide", historyOpts?.fullscreen === true);
+  // 全屏时放宽到 720（设计稿全屏视图宽 720：历史列表、全部结果），其余照旧 560。
+  root.classList.toggle("wide", app.getHostContext()?.displayMode === "fullscreen");
   root.replaceChildren(view);
   if (card?.sample) root.append(diagnostics());
 }
@@ -302,29 +301,6 @@ const MIME: Record<string, string> = {
   audio: "audio/*",
 };
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // 沙箱 iframe 常常没有剪贴板权限，退回到老办法
-  }
-  try {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.append(area);
-    area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 function sendUserMessage(text: string): void {
   if (card?.sample) {
     setNotice("This is a sample card, so nothing was sent.");
@@ -338,33 +314,54 @@ function sendUserMessage(text: string): void {
     .catch(() => setNotice("Couldn't send that. Type it in the chat instead."));
 }
 
+/** 交给宿主下载（一个或几个文件）；宿主不支持或下载没成，返回 false。 */
+async function hostDownload(media: CardMedia[]): Promise<boolean> {
+  if (hostCaps().downloadFile === undefined) return false;
+  try {
+    const { isError } = await app.downloadFile({
+      contents: media.map((m, i) => ({
+        type: "resource_link" as const,
+        uri: m.url,
+        name: fileNameOf(m.url, media.length > 1 ? `atlas-cloud-result-${i + 1}` : "atlas-cloud-result"),
+        ...(MIME[m.kind] ? { mimeType: MIME[m.kind] } : {}),
+      })),
+    });
+    return !isError;
+  } catch {
+    // 宿主不支持或用户取消
+    return false;
+  }
+}
+
 const actions: CardActions = {
   download(media: CardMedia) {
     void (async () => {
-      if (hostCaps().downloadFile !== undefined) {
-        try {
-          const { isError } = await app.downloadFile({
-            contents: [
-              {
-                type: "resource_link",
-                uri: media.url,
-                name: fileNameOf(media.url, "atlas-cloud-result"),
-                ...(MIME[media.kind] ? { mimeType: MIME[media.kind] } : {}),
-              },
-            ],
-          });
-          if (!isError) return;
-        } catch {
-          // 宿主不支持或用户取消：退回到打开链接
-        }
+      // 宿主下载不了：退回到打开链接
+      if (!(await hostDownload([media]))) await openUrl(media.url);
+    })();
+  },
+  downloadAll(media: CardMedia[]) {
+    void (async () => {
+      if (card?.sample) {
+        setNotice("This is a sample card, so nothing was downloaded.");
+        return;
       }
-      await openUrl(media.url);
+      // 一次打开好几个链接会被浏览器拦：宿主下载不了就去 Atlas 那条记录里下。
+      if (!(await hostDownload(media))) {
+        setNotice("This app can't download several files at once. Opening the request in Atlas.");
+        await openUrl(card?.open_url || SITE_URL);
+      }
     })();
   },
   openInAtlas() {
     void openUrl(card?.open_url || SITE_URL);
   },
-  copyLink: copyText,
+  expand() {
+    requestMode("fullscreen");
+  },
+  collapse() {
+    requestMode("inline");
+  },
   refresh() {
     void refreshOnce().then(() => pollLoop());
   },
@@ -374,11 +371,11 @@ const actions: CardActions = {
     void pollLoop();
   },
   tryAgain() {
-    // 知道原来的工具和参数：用新的幂等键再报一次价（不扣费），卡片变回报价卡等用户确认。
-    // 不知道（比如从查结果进来的卡片）就请模型重试。
+    // 「Edit and re-quote」：知道原来的工具和参数就用新的幂等键再报一次价（不扣费），卡片变回
+    // 报价卡，用户在上面改或确认。不知道（比如从查结果进来的卡片）就请模型重新报价。
     const retry = card?.retry;
     if (!retry || card?.sample || hostCaps().serverTools === undefined) {
-      sendUserMessage("That generation failed. Please try it again with the same model and settings.");
+      sendUserMessage("That generation failed. Please give me a new quote for it; I may want to change something first.");
       return;
     }
     void app
@@ -391,26 +388,6 @@ const actions: CardActions = {
   },
   switchModel() {
     sendUserMessage("That generation failed. Please suggest a different model for the same request.");
-  },
-  continueWith(media: CardMedia) {
-    if (card?.sample) {
-      setNotice("This is a sample card, so nothing was sent.");
-      return;
-    }
-    // 结果交给模型当下一次的输入：模型按需问一句要怎么改，再报价，用户确认后才生成。
-    const kind = media.kind === "video" ? "video" : media.kind === "audio" ? "audio" : "image";
-    const model = card?.model_name ?? card?.model_id ?? "Atlas Cloud";
-    const forModel =
-      `The user wants to keep creating from this Atlas Cloud ${kind} (task ${card?.prediction_id ?? "unknown"}, ` +
-      `made with ${model}). Use it as the input of the next generation: ${media.url}\n` +
-      "Ask what they want changed if they have not said, then quote the next step before generating.";
-    void handOff(app, forModel, {
-      short: `Continue from this ${kind}.`,
-      ask: "Ask me what to change, then quote the next step.",
-    }).then((result) => {
-      if (result === "failed" || result === "unsupported") setNotice("Couldn't pass this on. Describe the next step in the chat instead.");
-      else if (result === "context") setNotice("Added to the chat context. Say what to change next.");
-    });
   },
 };
 
@@ -539,6 +516,7 @@ function libraryDeps(extra: Pick<LibraryDeps, "uploadInstead"> & Partial<Library
     notice: (text) => setNotice(text),
     noticeText: () => notice,
     expand: () => requestMode("fullscreen"),
+    topUp: () => void openUrl(BILLING_URL),
     ...extra,
   };
 }

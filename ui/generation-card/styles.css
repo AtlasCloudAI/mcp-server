@@ -248,20 +248,26 @@ p {
 /* ---- 多图轮播（宿主规范：3–8 个结果用轮播，外面不再套卡片框） ---- */
 
 .results-grid {
-  margin-top: 4px;
   display: grid;
-  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
-  gap: 16px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* 全部结果：一行 4 个，窄屏 3 个（设计稿 v2「全部结果」）。 */
+.results-grid.all {
+  margin-top: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 8px;
 }
 
 @media (max-width: 420px) {
-  .results-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .results-grid.all {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-.chips + .results-grid {
-  margin-top: 12px;
+.results .caption {
+  margin-top: 10px;
 }
 
 .tile {
@@ -269,6 +275,7 @@ p {
 }
 
 .tile-open {
+  position: relative;
   display: block;
   width: 100%;
   padding: 0;
@@ -302,38 +309,6 @@ p {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-.tile-title {
-  margin-top: 12px;
-  font-size: 15px;
-  line-height: 20px;
-  font-weight: 600;
-}
-
-.tile-sub {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--ac-text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tile .btn {
-  margin-top: 12px;
-}
-
-.results-footer {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--ac-text-3);
 }
 
 /* ---- 音频 ---- */
@@ -780,14 +755,9 @@ button.history-row:focus-visible {
   cursor: pointer;
 }
 
-.upload-drop:hover,
-.card.upload.dragging .upload-drop {
+.upload-drop:hover {
   border-color: var(--ac-text-3);
   background: var(--ac-surface);
-}
-
-.card.upload.dragging {
-  border-color: var(--ac-text-3);
 }
 
 .upload-drop:focus-visible,
@@ -807,11 +777,6 @@ button.history-row:focus-visible {
   font-size: 14px;
   line-height: 20px;
   font-weight: 500;
-}
-
-.upload-link {
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .upload-drop-hint {
@@ -1173,4 +1138,222 @@ button.history-row:focus-visible {
   align-self: center;
   font-size: 12px;
   color: var(--ac-text-3);
+}
+
+/* ---- 设计稿 v2（10-29）补的几样 ---- */
+
+/* 报价卡底部一行：Billed to … / Balance $… */
+.billing {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ac-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.billing strong {
+  font-weight: 600;
+  color: var(--ac-text);
+}
+
+.billing strong.danger {
+  color: var(--ac-danger-text);
+}
+
+.billing-to {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-balance {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 报价卡素材：名字下面一行来源（Asset Library / Uploaded） */
+.quote-input-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.quote-input-source {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ac-text-3);
+}
+
+/* 结果下面那行里的「Cost pending」 */
+.caption-badge {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+/* 3D 和其他看不了的文件 */
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+}
+
+.file-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-2);
+  background: var(--ac-badge-bg);
+}
+
+.file-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.file-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 多张结果：第 4 格上的「+N」 */
+.tile-more {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* 全部结果：每格下面「Image 1」+ 下载 */
+.tile-bar {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.tile-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.tile-download {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--ac-secondary-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--ac-text-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.tile-download svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+/* 一行红字说明：上传卡「只收了前 10 个」 */
+.note.danger {
+  color: var(--ac-danger-text);
+}
+
+/* 资产库卡：空状态下的说明、全屏搜索框（设计稿 v2） */
+.asset-empty-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.asset-search {
+  margin-top: 12px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--ac-border);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-search-icon svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.asset-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ac-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.asset-search:focus-within {
+  border-color: var(--ac-text-3);
+}
+
+/* 上传卡：文件多时收起的那一行「+ 9 more files」 */
+.upload-more-btn {
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  cursor: pointer;
+}
+
+.upload-more-btn:hover {
+  color: var(--ac-text-2);
 }

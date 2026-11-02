@@ -34,8 +34,8 @@ export interface QuoteInfo {
   account?: { name: string; email?: string; balance_usd?: number };
   /** 这一单要生成什么（提示词，截断过）。 */
   prompt?: string;
-  /** 这一单引用的素材：缩略图和名称。 */
-  inputs?: (CardMedia & { name: string })[];
+  /** 这一单引用的素材：缩略图、名称和来源（资产库 / 上传卡 / 对话附件，查不到就没有）。 */
+  inputs?: (CardMedia & { name: string; source?: "library" | "upload" | "chat" })[];
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
   valid_seconds?: number;
@@ -286,6 +286,11 @@ export function readableModelId(modelId: string): string {
   const rest = parts[0] === "atlascloud" ? parts.slice(parts[1] === "workflow" || parts[1] === "studio" ? 2 : 1) : parts.slice(1);
   const words = (rest.length > 0 ? rest : parts).join(" ").split(/[\s_-]+/).filter(Boolean);
   return words.map((word) => (/^v?\d/.test(word) ? word : word[0]!.toUpperCase() + word.slice(1))).join(" ") || modelId;
+}
+
+/** Marketing Studio 的模板（atlascloud/studio/*）：报价是整套模板的总价，进度卡写模板名。 */
+export function isTemplate(card: Pick<CardData, "model_id">): boolean {
+  return card.model_id?.startsWith("atlascloud/studio/") === true;
 }
 
 export function modelLabel(card: Pick<CardData, "model_name" | "model_id">): string {

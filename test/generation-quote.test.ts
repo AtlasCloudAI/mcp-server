@@ -659,4 +659,7 @@ test("卡片前端：确认时素材被删（素材失效）、Atlas 登录失�
   assert.equal(isSignedOut("Upstream provider returned 401 Unauthorized"), false);
   assert.deepEqual(failureState("Upstream provider returned 401 Unauthorized"), { phase: "error", message: "Upstream provider returned 401 Unauthorized" });
   assert.equal(isSignedOut("MCP error 401: Unauthorized", true), true);
+  // ChatGPT 弹出连接、用户取消之后，卡片收到的原话（11-02 test 实测）。
+  assert.deepEqual(failureState("Connector authorization required"), { phase: "signed_out" });
+  assert.deepEqual(thrownFailureState(new Error("Connector authorization required")), { phase: "signed_out" });
 });

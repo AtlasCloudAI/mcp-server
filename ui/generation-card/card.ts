@@ -270,14 +270,20 @@ export function isModelUnavailable(text: string | undefined): boolean {
 }
 
 /**
- * Atlas 登录失效（设计稿 v2「需要重新连接」）：服务端 HTTP 层回 401 invalid_token（交换不到凭据、
- * 用户在控制台断开了），或上游说凭据失效（handleError 那句 "credential … invalid or expired"）。
- * 工具的报错只认我们自己的说法：上游模型报错里也会出现 401、Unauthorized，那不是用户掉线。
- * fromHost：宿主自己挡下的调用（请求没到工具），它转给卡片的说法不统一，再加几种常见写法。
+ * Atlas 登录失效（设计稿 v2「需要重新连接」）。11-02 test 实测断开 ChatGPT 的连接之后：
+ * - 第一次调用：交换来的令牌被后端拒了，工具报 handleError 那句 "credential … invalid or expired"；
+ * - 之后的调用在服务端 HTTP 层就回 401，ChatGPT 自己弹「连接 Atlas Cloud Test」；用户取消时
+ *   卡片收到的报错是 "Connector authorization required"。
+ * 工具的报错只认这几种说法：上游模型报错里也会出现 401、Unauthorized，那不是用户掉线。
+ * fromHost：宿主自己挡下的调用（请求没到工具），别的宿主说法未知，再加几种常见写法。
  */
 export function isSignedOut(text: string | undefined, fromHost = false): boolean {
   if (!text) return false;
-  if (/invalid_token|reauthenticate|re-?authori[sz]e to link|not linked to an atlas cloud credential|atlas cloud credential[^.]*(?:invalid|expired)/i.test(text)) {
+  if (
+    /connector authorization required|invalid_token|reauthenticate|re-?authori[sz]e to link|not linked to an atlas cloud credential|atlas cloud credential[^.]*(?:invalid|expired)/i.test(
+      text
+    )
+  ) {
     return true;
   }
   return fromHost && /\b401\b|unauthori[sz]ed|authentication required|login required|sign[- ]?in (?:has )?expired/i.test(text);

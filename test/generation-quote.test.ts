@@ -594,3 +594,36 @@ test("报价卡带任务内容和素材缩略图；提交后的进度卡带实�
   assert.equal(submitted?.state, "running");
   assert.deepEqual(submitted?.settings, ["720p", "5 s", "16:9"]);
 });
+
+test("报价卡的输入素材按上传时的原文件名显示，查不到就用地址里的名字", async () => {
+  const { rememberMediaName, rememberAssetNames, rememberAssetUrls } = await import("../src/services/media-names.js");
+  const uploaded = "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/u/4a02f8b3-7784-4f8a-a1b2-c3d4e5f60789.jpg";
+  const fromLibrary = "https://atlas-asset.oss-us-west-1.aliyuncs.com/a/9f8e7d6c.png?Expires=1&Signature=x";
+  const other = "https://cdn.example.com/kept-name.webp";
+  await rememberMediaName(uploaded, "tea-tin.jpg");
+  // 资产库：搜索时按编号记名字，取用时转记到临时地址上。
+  await rememberAssetNames([{ asset_id: "as_1", name: "Spring banner" }]);
+  await rememberAssetUrls([{ asset_id: "as_1", url: fromLibrary }]);
+
+  const args = {
+    idempotency_key: "8e1c3f60-1e9d-4b54-8d66-7a2a3e7b1c22",
+    model: "bytedance/seedance-2.5/reference-to-video",
+    params: { prompt: "a paper boat", reference_images: [uploaded, fromLibrary, other] },
+  };
+  const handler = async () => ({
+    ...QUOTE_RESULT,
+    structuredContent: { ...QUOTE_RESULT.structuredContent, params: args.params },
+    content: [...QUOTE_RESULT.content],
+  });
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  try {
+    const result = await withGenerationCard(fakeServer(true), "atlas_generate_video", handler)(args, {});
+    const card = result._meta?.["atlascloud/card"] as { quote?: { inputs?: Array<{ url: string; name: string }> } };
+    assert.deepEqual(
+      card.quote?.inputs?.map((input) => input.name),
+      ["tea-tin.jpg", "Spring banner", "kept-name.webp"]
+    );
+  } finally {
+    restore();
+  }
+});

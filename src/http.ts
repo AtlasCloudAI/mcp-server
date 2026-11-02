@@ -35,6 +35,7 @@ import {
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
 import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
+import { MEDIA_NAME_REDIS_PREFIX } from "./services/media-names.js";
 import {
   challengeUnauthenticated,
   createPreAuthRateLimiter,
@@ -67,6 +68,7 @@ export interface HttpAppDependencies {
   /** 短上传地址的票据存储。省略时用进程内存储（单副本、测试）。 */
   uploadTicketStore?: UploadTicketStore;
   quoteStore?: UploadTicketStore;
+  mediaNameStore?: UploadTicketStore;
 }
 
 /**
@@ -125,6 +127,7 @@ export function createHttpApp(
 ): Express {
   const uploadTicketStore = dependencies.uploadTicketStore ?? new InMemoryUploadTicketStore();
   const quoteStore = dependencies.quoteStore ?? new InMemoryUploadTicketStore();
+  const mediaNameStore = dependencies.mediaNameStore ?? new InMemoryUploadTicketStore();
   const resourceMetadataUrl = new URL(
     "/.well-known/oauth-protected-resource",
     config.publicMcpUrl
@@ -255,6 +258,7 @@ export function createHttpApp(
             uploadMaxBytes: config.uploadMaxBytes,
             uploadTicketStore,
             quoteStore,
+            mediaNameStore,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -293,7 +297,7 @@ export function createHttpApp(
     uploadCors(),
     createPreAuthRateLimiter(config),
     createUploadRateLimiter(config),
-    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore })
+    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore, mediaNameStore })
   );
 
   app.use((_req, res) => {
@@ -367,6 +371,11 @@ export async function startHttpServer(
     config.idempotencyBackend === "redis"
       ? await createRedisUploadTicketStore(config.redisUrl!, QUOTE_REDIS_PREFIX)
       : new InMemoryUploadTicketStore();
+  // 素材原文件名：上传和报价也可能落在不同 pod。
+  const mediaNameStore: UploadTicketStore =
+    config.idempotencyBackend === "redis"
+      ? await createRedisUploadTicketStore(config.redisUrl!, MEDIA_NAME_REDIS_PREFIX)
+      : new InMemoryUploadTicketStore();
   let credentialResolver: AtlasCredentialResolver | undefined;
   let server: NodeHttpServer;
   try {
@@ -378,6 +387,7 @@ export async function startHttpServer(
       credentialResolver,
       uploadTicketStore,
       quoteStore,
+      mediaNameStore,
     };
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
@@ -391,6 +401,7 @@ export async function startHttpServer(
       idempotencyStore.close(),
       uploadTicketStore.close(),
       quoteStore.close(),
+      mediaNameStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
     ]);
     throw error;
@@ -407,6 +418,7 @@ export async function startHttpServer(
     await idempotencyStore.close();
     await uploadTicketStore.close();
     await quoteStore.close();
+    await mediaNameStore.close();
     await credentialResolver?.close?.();
   };
   return { server, close };

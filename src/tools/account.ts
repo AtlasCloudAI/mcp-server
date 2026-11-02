@@ -305,7 +305,7 @@ Examples:
     "atlas_get_model_costs",
     {
       title: "Get Model Costs",
-      description: `Get daily model cost buckets (spend amount) for the authenticated API key over a UTC date range.
+      description: `Get daily model cost buckets (spend amount) for the authenticated API key over a UTC date range. This is money already spent, not a price for a new job: a generation tool called without confirmed: true returns that price for free.
 
 Omitting group_by returns total daily buckets. Use group_by to break costs down by model_type and/or model. API-key identifiers are not exposed by this plugin.
 

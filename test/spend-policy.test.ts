@@ -195,6 +195,8 @@ test("工具总说明不再说低于限额直接提交、不要自己加确认",
   assert.match(instructions, /do not judge expiry from a clock/);
   assert.doesNotMatch(instructions, /Do not add a confirmation step of your own/);
   assert.doesNotMatch(instructions, /submits it straight away and reports the amount/);
+  // 「别自己用 curl 调 REST、没有 API key」从工具描述挪到了这里。
+  assert.match(instructions, /do not call the Atlas REST API directly/);
 });
 
 test("报价里写出本次的幂等键，要求确认时原样传回", () => {

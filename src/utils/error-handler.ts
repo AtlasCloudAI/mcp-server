@@ -19,6 +19,11 @@ export function handleError(error: unknown): string {
       return `Error: Insufficient balance. Please top up your account at: ${BILLING_URL}`;
     }
 
+    // 后端白名单还没放行这条接口时，401 的原文是 "does not accept scoped access tokens"。
+    // 这不是凭据过期：让用户重新授权解决不了，只会让人反复登录（10-22 ChatGPT 实测）。
+    if (code === 401 && /does not accept scoped access tokens/i.test(error.message)) {
+      return "Error: This Atlas Cloud feature does not accept plugin sign-in yet. Your sign-in is fine and other tools keep working; signing in again will not change this. The same information is available on the Atlas Cloud website.";
+    }
     if (code === 401) {
       return "Error: The Atlas Cloud credential for this authenticated account is invalid or expired. Reauthenticate or contact the plugin administrator.";
     }

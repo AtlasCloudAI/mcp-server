@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import {
   prepareGeneration,
@@ -45,7 +46,7 @@ This covers both TTS/voice models and music/song models. The live catalog determ
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. A job that ends in status "failed" is not billed. A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -55,7 +56,7 @@ NOTE: For speech-to-text (transcription / ASR), use atlas_transcribe_audio inste
 
 You should also use atlas_get_model_info to see the full parameter list and schema for your chosen audio model before calling this tool. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model (string, required): The exact audio model ID. Use atlas_list_models with type="Audio" to find valid IDs.
@@ -99,12 +100,15 @@ Returns:
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_generate_audio",
             idempotency_key,
             confirmedRequest,
             prepared.model.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
@@ -118,6 +122,7 @@ Returns:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
@@ -205,9 +210,9 @@ Parameters are validated against the model's schema BEFORE the request is submit
 
 IMPORTANT: The "model" parameter requires an exact current speech-to-text model ID. Speech-to-text models are Audio-type models — use atlas_list_models with type="Audio" to find them. Do NOT guess model IDs.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. A job that ends in status "failed" is not billed. A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model (string, required): The exact speech-to-text model ID.
@@ -251,12 +256,15 @@ Returns:
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_transcribe_audio",
             idempotency_key,
             confirmedRequest,
             prepared.model.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
@@ -270,6 +278,7 @@ Returns:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +

@@ -17,14 +17,14 @@ export const generationConfirmationTokenSchema = z
   .max(4096)
   .optional()
   .describe(
-    "Opaque token returned by this tool's quote-only first call. Supply it only after the user explicitly confirms the exact model, validated parameters, and current pricing. Reuse the same idempotency_key and unchanged arguments."
+    "Quote reference returned by this tool's quote-only first call. Sent together with confirmed: true, the same idempotency_key and unchanged arguments, it starts exactly the quoted job: the same model, parameters and price."
   );
 
 export const generationConfirmedSchema = z
   .boolean()
   .optional()
   .describe(
-    "Set to true on the call after the user has explicitly confirmed the quote. Send the confirmation_token too if you have it; if it was lost or mistyped, the server finds the quote from the unchanged arguments."
+    "true starts the quoted job; it belongs on the call after the user has agreed to the quoted price. The confirmation_token goes with it when available; if it was lost or mistyped, the server finds the quote from the unchanged arguments."
   );
 
 export const predictionIdSchema = z

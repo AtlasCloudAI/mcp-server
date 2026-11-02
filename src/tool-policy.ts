@@ -8,6 +8,7 @@ export type AtlasToolName =
   | "atlas_generate_video"
   | "atlas_upload_media"
   | "atlas_get_upload_url"
+  | "atlas_import_chat_files"
   | "atlas_generate_audio"
   | "atlas_transcribe_audio"
   | "atlas_chat"
@@ -108,6 +109,19 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotations: firstPartyRead,
     annotationJustification:
       "Issues a short-lived, subject-bound upload URL; nothing is uploaded or billed until the client posts bytes to it.",
+  },
+  atlas_import_chat_files: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    annotationJustification:
+      "Downloads files the user attached in the chat from the host's temporary links and stores them as Atlas generation inputs.",
   },
   atlas_generate_audio: {
     scope: "tasks:write",

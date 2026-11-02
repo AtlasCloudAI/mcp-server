@@ -30,6 +30,11 @@ function getProxyDispatcher(): Dispatcher | undefined {
 
 const proxyDispatcher = getProxyDispatcher();
 
+/** 出站代理（HTTPS_PROXY 等），给本文件以外同样要请求外部地址的服务共用。 */
+export function externalProxyDispatcher(): Dispatcher | undefined {
+  return proxyDispatcher;
+}
+
 function sanitizeUpstreamMessage(value: unknown, fallback: string): string {
   if (typeof value !== "string" || value.trim() === "") return fallback;
   return value
@@ -103,7 +108,7 @@ export interface ApiRequestOptions {
   fetcher?: typeof fetch;
 }
 
-function getApiKey(): string {
+export function getApiKey(): string {
   const key =
     getRequestContext()?.atlasApiKey ?? process.env.ATLASCLOUD_API_KEY;
   if (!key) {

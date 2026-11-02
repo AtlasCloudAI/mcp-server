@@ -54,25 +54,41 @@ export interface RememberedMedia {
   source?: MediaSource;
   /** 资产库素材的编号：确认生成前按它换新地址、查它还在不在。 */
   assetId?: string;
+  /** 资产库的临时地址不带扩展名，认不出是图还是视频：取用时按 MIME 记下，报价卡照它画缩略图。 */
+  kind?: MediaKind;
+}
+
+export type MediaKind = "image" | "video" | "audio";
+const KINDS = new Set<string>(["image", "video", "audio"]);
+
+function kindOfMime(mime: string | undefined): MediaKind | undefined {
+  const top = mime?.split("/")[0]?.toLowerCase();
+  return top && KINDS.has(top) ? (top as MediaKind) : undefined;
 }
 
 const SOURCES = new Set<string>(["library", "upload", "chat"]);
 
 // 带来源或编号时存成 {"name","source","asset_id"}；只有名字时照旧存原文，老记录也照旧读。
 function encode(name: string, extra: Omit<RememberedMedia, "name">): string {
-  if (!extra.source && !extra.assetId) return name;
-  return JSON.stringify({ name, ...(extra.source ? { source: extra.source } : {}), ...(extra.assetId ? { asset_id: extra.assetId } : {}) });
+  if (!extra.source && !extra.assetId && !extra.kind) return name;
+  return JSON.stringify({
+    name,
+    ...(extra.source ? { source: extra.source } : {}),
+    ...(extra.assetId ? { asset_id: extra.assetId } : {}),
+    ...(extra.kind ? { kind: extra.kind } : {}),
+  });
 }
 
 function decode(value: string): RememberedMedia {
   if (value.startsWith("{")) {
     try {
-      const parsed = JSON.parse(value) as { name?: unknown; source?: unknown; asset_id?: unknown };
+      const parsed = JSON.parse(value) as { name?: unknown; source?: unknown; asset_id?: unknown; kind?: unknown };
       if (typeof parsed.name === "string" && parsed.name) {
         return {
           name: parsed.name,
           ...(typeof parsed.source === "string" && SOURCES.has(parsed.source) ? { source: parsed.source as MediaSource } : {}),
           ...(typeof parsed.asset_id === "string" && parsed.asset_id ? { assetId: parsed.asset_id } : {}),
+          ...(typeof parsed.kind === "string" && KINDS.has(parsed.kind) ? { kind: parsed.kind as MediaKind } : {}),
         };
       }
     } catch {
@@ -127,12 +143,13 @@ export async function rememberAssetNames(assets: Array<{ asset_id: string; name:
   await Promise.all(assets.map((asset) => rememberMediaName(assetKey(asset.asset_id), asset.name)));
 }
 
-export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: string }>): Promise<void> {
+export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: string; mime_type?: string }>): Promise<void> {
   const names = await rememberedMediaNames(assets.map((asset) => assetKey(asset.asset_id)));
   await Promise.all(
     assets.map(async (asset) => {
       const name = names.get(assetKey(asset.asset_id));
-      if (name) await rememberMediaName(asset.url, name, undefined, { source: "library", assetId: asset.asset_id });
+      const kind = kindOfMime(asset.mime_type);
+      if (name) await rememberMediaName(asset.url, name, undefined, { source: "library", assetId: asset.asset_id, ...(kind ? { kind } : {}) });
     })
   );
 }

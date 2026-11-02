@@ -599,7 +599,8 @@ test("报价卡带任务内容和素材缩略图；提交后的进度卡带实�
 test("报价卡的输入素材按上传时的原文件名显示、标出来源，查不到就用地址里的名字", async () => {
   const { rememberMediaName, rememberAssetNames, rememberAssetUrls } = await import("../src/services/media-names.js");
   const uploaded = "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/u/4a02f8b3-7784-4f8a-a1b2-c3d4e5f60789.jpg";
-  const fromLibrary = "https://atlas-asset.oss-us-west-1.aliyuncs.com/a/9f8e7d6c.png?Expires=1&Signature=x";
+  // 资产库的临时地址不带扩展名：类型按取用时的 MIME 记。
+  const fromLibrary = "https://atlas-asset.oss-us-west-1.aliyuncs.com/a/9f8e7d6c?Expires=1&Signature=x";
   const other = "https://cdn.example.com/kept-name.webp";
   // 只记了名字、没记来源（老记录）：照样显示名字，不写来源。
   const legacy = "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/u/0b9c8d7e.png";
@@ -607,7 +608,7 @@ test("报价卡的输入素材按上传时的原文件名显示、标出来源�
   await rememberMediaName(legacy, "receipt.png");
   // 资产库：搜索时按编号记名字，取用时转记到临时地址上。
   await rememberAssetNames([{ asset_id: "as_1", name: "Spring banner" }]);
-  await rememberAssetUrls([{ asset_id: "as_1", url: fromLibrary }]);
+  await rememberAssetUrls([{ asset_id: "as_1", url: fromLibrary, mime_type: "image/png" }]);
 
   const args = {
     idempotency_key: "8e1c3f60-1e9d-4b54-8d66-7a2a3e7b1c22",
@@ -622,7 +623,8 @@ test("报价卡的输入素材按上传时的原文件名显示、标出来源�
   const restore = withEnv({ MCP_UI_CARDS: "1" });
   try {
     const result = await withGenerationCard(fakeServer(true), "atlas_generate_video", handler)(args, {});
-    const card = result._meta?.["atlascloud/card"] as { quote?: { inputs?: Array<{ url: string; name: string; source?: string }> } };
+    const card = result._meta?.["atlascloud/card"] as { quote?: { inputs?: Array<{ url: string; name: string; kind: string; source?: string }> } };
+    assert.equal(card.quote?.inputs?.[1]?.kind, "image");
     assert.deepEqual(
       card.quote?.inputs?.map((input) => [input.name, input.source]),
       [

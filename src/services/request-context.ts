@@ -24,6 +24,8 @@ export interface AtlasRequestContext {
   uploadTicketStore?: UploadTicketStore;
   /** 报价记录：确认时按参数找回报价，不靠模型抄回令牌（generation-confirmation.ts）。 */
   quoteStore?: UploadTicketStore;
+  /** 素材地址 → 原文件名，报价卡按原名显示输入素材（media-names.ts）。 */
+  mediaNameStore?: UploadTicketStore;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

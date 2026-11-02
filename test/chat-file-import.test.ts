@@ -407,3 +407,15 @@ test("工具：成功后用同一个 key 重试，宿主换了下载链接也不
   assert.equal(retried.isError, undefined);
   assert.equal(upload.received.length, 2);
 });
+
+test("转存后记下聊天里的原文件名，报价卡按它显示，不显示地址里的随机编号", async () => {
+  const { rememberedMediaNames } = await import("../src/services/media-names.js");
+  const download = fakeDownload({ [ATTACHMENT]: png });
+  const upload = fakeUpload();
+  const result = await importChatFiles(
+    [{ download_url: ATTACHMENT, file_id: "file_9", file_name: "tea-tin.png", mime_type: "image/png" }],
+    options({ downloadFetcher: download, uploadFetcher: upload })
+  );
+  const names = await rememberedMediaNames([result.imported[0]!.url]);
+  assert.equal(names.get(result.imported[0]!.url), "tea-tin.png");
+});

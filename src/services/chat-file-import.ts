@@ -17,6 +17,7 @@ import {
   uploadMediaBuffer,
   type UploadBufferOptions,
 } from "./api-client.js";
+import { rememberMediaName } from "./media-names.js";
 
 /** 下载附件用的 fetch：默认走 undici + 出站代理，测试里换成假的。 */
 export type DownloadFetcher = (
@@ -398,6 +399,8 @@ export async function importChatFiles(
       const result = await uploadMediaBuffer(bytes, fileName, options.apiKey, {
         ...(options.uploadFetcher ? { fetcher: options.uploadFetcher } : {}),
       });
+      // 存进 Atlas 的地址里是随机编号；记下聊天里的原文件名，报价卡按它显示（media-names.ts）。
+      await rememberMediaName(result.data.download_url, safeBaseName(file.file_name) ?? fileName);
       imported.push({
         file_id: file.file_id,
         file_name: fileName,

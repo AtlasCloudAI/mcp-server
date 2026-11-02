@@ -46,31 +46,74 @@ function withTimeout<T>(operation: Promise<T>): Promise<T> {
   });
 }
 
-/** 记下一个素材地址的原文件名。记不下来不影响上传本身。 */
-export async function rememberMediaName(url: string, name: string, store?: UploadTicketStore): Promise<void> {
+/** 素材从哪儿来的：资产库、上传卡、对话附件。报价卡在名字下面写一行（设计稿 v2）。 */
+export type MediaSource = "library" | "upload" | "chat";
+
+export interface RememberedMedia {
+  name: string;
+  source?: MediaSource;
+}
+
+const SOURCES = new Set<string>(["library", "upload", "chat"]);
+
+// 带来源时存成 {"name","source"}；只有名字时照旧存原文，老记录也照旧读。
+function encode(name: string, source: MediaSource | undefined): string {
+  return source ? JSON.stringify({ name, source }) : name;
+}
+
+function decode(value: string): RememberedMedia {
+  if (value.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as { name?: unknown; source?: unknown };
+      if (typeof parsed.name === "string" && parsed.name) {
+        return {
+          name: parsed.name,
+          ...(typeof parsed.source === "string" && SOURCES.has(parsed.source) ? { source: parsed.source as MediaSource } : {}),
+        };
+      }
+    } catch {
+      // 不是我们存的 JSON：当成名字
+    }
+  }
+  return { name: value };
+}
+
+/** 记下一个素材地址的原文件名（和来源）。记不下来不影响上传本身。 */
+export async function rememberMediaName(
+  url: string,
+  name: string,
+  store?: UploadTicketStore,
+  source?: MediaSource
+): Promise<void> {
   const cleaned = name.trim().slice(0, MAX_NAME_LENGTH);
   if (!url || !cleaned) return;
   try {
-    await withTimeout(storeFor(store).put(keyOf(url), cleaned, TTL_SECONDS));
+    await withTimeout(storeFor(store).put(keyOf(url), encode(cleaned, source), TTL_SECONDS));
   } catch {
     // 只是显示名
   }
 }
 
-/** 按地址查原文件名；查不到的不在结果里。 */
-export async function rememberedMediaNames(urls: string[], store?: UploadTicketStore): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+/** 按地址查原文件名和来源；查不到的不在结果里。 */
+export async function rememberedMedia(urls: string[], store?: UploadTicketStore): Promise<Map<string, RememberedMedia>> {
+  const out = new Map<string, RememberedMedia>();
   await Promise.all(
     [...new Set(urls)].map(async (url) => {
       try {
-        const name = await withTimeout(storeFor(store).get(keyOf(url)));
-        if (name) out.set(url, name);
+        const value = await withTimeout(storeFor(store).get(keyOf(url)));
+        if (value) out.set(url, decode(value));
       } catch {
         // 照旧用地址里的名字
       }
     })
   );
   return out;
+}
+
+/** 按地址查原文件名；查不到的不在结果里。 */
+export async function rememberedMediaNames(urls: string[], store?: UploadTicketStore): Promise<Map<string, string>> {
+  const found = await rememberedMedia(urls, store);
+  return new Map([...found].map(([url, media]) => [url, media.name]));
 }
 
 // 资产库：换出来的临时地址接口不带名字，名字在搜索结果里。搜索时按资产编号记下，取用时转记到地址上。
@@ -85,7 +128,7 @@ export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: s
   await Promise.all(
     assets.map(async (asset) => {
       const name = names.get(assetKey(asset.asset_id));
-      if (name) await rememberMediaName(asset.url, name);
+      if (name) await rememberMediaName(asset.url, name, undefined, "library");
     })
   );
 }

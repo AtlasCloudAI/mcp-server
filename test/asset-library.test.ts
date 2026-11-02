@@ -17,6 +17,8 @@ let lastListQuery = "";
 const sourceUrlBodies: string[][] = [];
 /** 打开后列表接口回旧版 kubedl 的 401（白名单还没放开资产库）。 */
 let rejectScoped = false;
+/** 打开后列表、取地址接口回 AssetD 的 403 asset_library_not_activated（资产库二期：充值后才能用）。 */
+let notActivated = false;
 
 const IMAGE = {
   asset_id: "asset_a61d817802ff0ffcaae91e6bde2673c5",
@@ -53,12 +55,25 @@ const UPLOAD = {
   thumbnail_url: "/api/assets/asset_upload0000000000000000000000001/thumbnail",
   created_at: "2026-10-24T08:00:00Z",
 };
-const KNOWN = new Set([IMAGE.asset_id, VIDEO.asset_id, UPLOAD.asset_id]);
+const MODEL_3D = {
+  asset_id: "asset_3d00000000000000000000000000001",
+  title: "sneaker-model.glb",
+  media_type: "3d",
+  status: "ready",
+  source_origin: "user_upload",
+  created_at: "2026-10-23T08:00:00Z",
+};
+const KNOWN = new Set([IMAGE.asset_id, VIDEO.asset_id, UPLOAD.asset_id, MODEL_3D.asset_id]);
 
 before(async () => {
   fake = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     res.setHeader("content-type", "application/json");
+    if (notActivated && url.pathname.startsWith("/api/v1/assetd/api/assets")) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({ code: 403, msg: "asset_library_not_activated", error: { code: "asset_library_not_activated", retryable: false } }));
+      return;
+    }
     if (url.pathname === "/api/v1/assetd/api/assets" && req.method === "GET") {
       if (rejectScoped) {
         res.statusCode = 401;
@@ -67,7 +82,8 @@ before(async () => {
       }
       lastListQuery = url.search;
       const type = url.searchParams.get("media_type");
-      const items = [IMAGE, VIDEO, UPLOAD].filter((item) => !type || item.media_type === type);
+      // 3D 只在按 3D 筛时出现，不改动其余用例看到的列表。
+      const items = type === "3d" ? [MODEL_3D] : [IMAGE, VIDEO, UPLOAD].filter((item) => !type || item.media_type === type);
       res.end(JSON.stringify({ code: 200, msg: "succeed", data: { items, pagination: { limit: 12, count: items.length, next_cursor: type ? undefined : "cursor-2" } } }));
       return;
     }
@@ -217,6 +233,39 @@ test("后端还没给插件令牌放开资产库：说清楚，让模型改用�
   } finally {
     rejectScoped = false;
   }
+});
+
+test("资产库没开通：搜索照常打开卡片显示「充值后能用」，取地址说清楚并让模型改用上传", async () => {
+  notActivated = true;
+  try {
+    const { result } = await callTool(true, "atlas_search_assets", {});
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.structuredContent, { count: 0, assets: [], activated: false });
+    const card = (result._meta as Record<string, { locked?: boolean; items: unknown[] }>)["atlascloud/assets"];
+    assert.equal(card?.locked, true);
+    assert.deepEqual(card?.items, []);
+    assert.match(text(result), /isn't activated yet/);
+    assert.match(text(result), /atlas_get_upload_url/);
+
+    // 卡片关着：照旧算出错，模型照文字办。
+    const { result: plain } = await callTool(false, "atlas_search_assets", {});
+    assert.equal(plain.isError, true);
+    assert.match(text(plain), /isn't activated yet/);
+
+    const { result: use } = await callTool(false, "atlas_use_assets", { asset_ids: [IMAGE.asset_id] });
+    assert.equal(use.isError, true);
+    assert.match(text(use), /isn't activated yet/);
+  } finally {
+    notActivated = false;
+  }
+});
+
+test("搜索：能按 3D 筛（资产库二期），卡片里的类型也是 3d", async () => {
+  const { result } = await callTool(true, "atlas_search_assets", { media_type: "3d" });
+  assert.match(lastListQuery, /media_type=3d/);
+  const card = (result._meta as Record<string, { media_type?: string; items: Array<{ kind: string; label: string }> }>)["atlascloud/assets"];
+  assert.equal(card?.media_type, "3d");
+  assert.deepEqual(card?.items.map((item) => [item.kind, item.label]), [["3d", "sneaker-model.glb"]]);
 });
 
 test("编号格式不对的在参数校验就拦下", async () => {

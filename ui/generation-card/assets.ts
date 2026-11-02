@@ -18,8 +18,10 @@ function inlineTiles(): number {
   return window.matchMedia?.("(max-width: 420px)").matches ? 6 : 8;
 }
 
-export type AssetKind = "image" | "video" | "audio" | "other";
-export type AssetFilter = "image" | "video";
+export type AssetKind = "image" | "video" | "audio" | "3d" | "other";
+// 设计稿 v2 的筛选按资产库二期：图片、视频、音频、3D、角色、模板。角色和模板不是单个文件
+// （没有能直接交给模型的地址），选中后怎么用还没定，先不放。
+export type AssetFilter = "image" | "video" | "audio" | "3d";
 
 export interface AssetCardItem {
   asset_id: string;
@@ -35,10 +37,12 @@ export interface AssetCardItem {
 export interface AssetCardData {
   view: "assets";
   query?: string;
-  media_type?: "image" | "video" | "audio";
+  media_type?: AssetFilter;
   items: AssetCardItem[];
   next_cursor?: string;
   max_pick: number;
+  /** 资产库没开通（充值后才能用）。 */
+  locked?: boolean;
   sample?: boolean;
 }
 
@@ -58,8 +62,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function kindOf(value: unknown): AssetKind {
-  return value === "image" || value === "video" || value === "audio" ? value : "other";
+  return value === "image" || value === "video" || value === "audio" || value === "3d" ? value : "other";
 }
+
+const FILTER_VALUES = new Set<unknown>(["image", "video", "audio", "3d"]);
 
 /** 工具结果 → 资产库卡数据。优先读 _meta，宿主没转过来就从 structuredContent 推。 */
 export function assetsFromToolResult(result: unknown): AssetCardData | undefined {
@@ -70,6 +76,7 @@ export function assetsFromToolResult(result: unknown): AssetCardData | undefined
   const s = record(r.structuredContent);
   // atlas_use_assets 的结果也有 assets，但没有 count：靠 count 区分。
   if (!s || typeof s.count !== "number" || !Array.isArray(s.assets)) return undefined;
+  if (s.activated === false) return { view: "assets", items: [], max_pick: 10, locked: true };
   const items = s.assets.flatMap((entry): AssetCardItem[] => {
     const a = record(entry);
     if (!a || typeof a.asset_id !== "string") return [];
@@ -105,7 +112,7 @@ function resultErrorText(result: { content?: Array<{ type: string; text?: unknow
   return (text && typeof text.text === "string" ? text.text : "").replace(/^Error:\s*/, "").slice(0, 240);
 }
 
-const KIND_WORD: Record<AssetKind, string> = { image: "image", video: "video", audio: "audio", other: "file" };
+const KIND_WORD: Record<AssetKind, string> = { image: "image", video: "video", audio: "audio", "3d": "3D model", other: "file" };
 
 /** 交给模型的文字：名字、类型、编号、地址。地址是临时的，过期了模型用编号再换。 */
 export function assetsForModel(picked: Pick<PickedAsset, "asset_id" | "label" | "kind" | "url">[]): string {
@@ -124,8 +131,10 @@ export interface LibraryDeps {
   noticeText(): string | undefined;
   /** 宿主支持全屏时展开。 */
   expand(): void;
-  /** 资产库为空或没找到时的「Upload from device」。 */
+  /** 资产库为空或没找到时的「Upload a file」。 */
   uploadInstead(): void;
+  /** 资产库没开通时的「Top up」。 */
+  topUp(): void;
   /** 从上传卡打开：选好的素材交回上传卡（由它交给模型）。没有它就自己交给模型。 */
   onPicked?(picked: PickedAsset[]): void;
   /** 从上传卡打开：「Cancel」回到上传卡。 */
@@ -150,12 +159,22 @@ const FILTERS: Array<{ label: string; value: AssetFilter | undefined }> = [
   { label: "All", value: undefined },
   { label: "Images", value: "image" },
   { label: "Videos", value: "video" },
+  { label: "Audio", value: "audio" },
+  { label: "3D", value: "3d" },
 ];
+
+const FILTER_WORD: Record<AssetFilter, string> = { image: "images", video: "videos", audio: "audio", "3d": "3D models" };
+
+/** 资产库没开通（AssetD 回 asset_library_not_activated，服务端换成这句话）。 */
+function lockedError(text: string): boolean {
+  return /asset_library_not_activated|asset library isn't activated/i.test(text);
+}
 
 /** initial 为空时（从上传卡打开）先显示加载中，自己去取第一页。 */
 export function createLibrary(initial: AssetCardData | undefined, deps: LibraryDeps): Library {
   let data: AssetCardData = initial ?? { view: "assets", items: [], max_pick: 10 };
-  let filter: AssetFilter | undefined = data.media_type === "image" || data.media_type === "video" ? data.media_type : undefined;
+  let filter: AssetFilter | undefined = FILTER_VALUES.has(data.media_type) ? data.media_type : undefined;
+  let locked = data.locked === true;
   let loading = false;
   let using = false;
   let error: string | undefined;
@@ -175,10 +194,18 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   };
   const selectionKey = () => [...selected.keys()].join(",");
 
-  async function query(next: { filter: AssetFilter | undefined; append: boolean; clearQuery?: boolean }): Promise<void> {
+  /** text：全屏搜索框里搜的词（空串等于不搜）；不给就沿用手上的。 */
+  async function query(next: { filter: AssetFilter | undefined; append: boolean; clearQuery?: boolean; text?: string }): Promise<void> {
+    const keepQuery = next.clearQuery ? undefined : next.text !== undefined ? next.text.trim() || undefined : data.query;
     if (sample) {
       filter = next.filter;
-      data = { ...data, items: sampleItems.filter((item) => !filter || item.kind === filter) };
+      const words = keepQuery?.toLowerCase();
+      data = {
+        ...data,
+        items: sampleItems.filter((item) => (!filter || item.kind === filter) && (!words || item.label.toLowerCase().includes(words))),
+        ...(keepQuery ? { query: keepQuery } : {}),
+      };
+      if (!keepQuery) delete data.query;
       changed();
       return;
     }
@@ -186,7 +213,6 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       deps.notice("This app doesn't let the card load assets. Ask in the chat instead.");
       return;
     }
-    const keepQuery = next.clearQuery ? undefined : data.query;
     loading = true;
     error = undefined;
     filter = next.filter;
@@ -204,11 +230,17 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       if (result.isError) throw new Error(resultErrorText(result) || "Atlas Cloud returned an error");
       const page = assetsFromToolResult(result);
       if (!page) throw new Error("Atlas Cloud sent back something this card can't read");
+      if (page.locked) {
+        locked = true;
+        return;
+      }
       const items = next.append ? [...data.items, ...page.items] : page.items;
       data = { ...page, items, ...(keepQuery ? { query: keepQuery } : {}), max_pick: data.max_pick };
       if (!keepQuery) delete data.query;
     } catch (e) {
-      error = thrownErrorText(e) || "Couldn't load your assets. Try again in a moment.";
+      const text = thrownErrorText(e);
+      if (lockedError(text)) locked = true;
+      else error = text || "Couldn't load your assets. Try again in a moment.";
     } finally {
       loading = false;
       changed();
@@ -345,19 +377,57 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     );
   }
 
-  function empty(): HTMLElement {
-    const narrowed = data.query !== undefined || filter !== undefined;
+  /** 空状态：设计稿 v2「资产库为空」「没有搜索结果」「资产库未开通」三种。 */
+  function emptyState(icon: string, title: string, desc: string, actions: HTMLElement[]): HTMLElement {
     return h(
       "div",
       { class: "asset-empty" },
-      h("span", { class: "asset-empty-icon", html: ICONS.image }),
-      h("p", { class: "asset-empty-title" }, narrowed ? (data.query ? `No assets match “${data.query}”.` : "Nothing here yet.") : "Your Asset Library is empty."),
-      h(
-        "div",
-        { class: "actions" },
-        narrowed ? button("Show all", "secondary", () => void query({ filter: undefined, append: false, clearQuery: true }), { small: true }) : null,
-        button("Upload from device", "secondary", deps.uploadInstead, { small: true })
-      )
+      h("span", { class: "asset-empty-icon", html: icon }),
+      h("p", { class: "asset-empty-title" }, title),
+      h("p", { class: "asset-empty-desc" }, desc),
+      h("div", { class: "actions" }, ...actions)
+    );
+  }
+
+  function empty(): HTMLElement {
+    const showAll = () => button("Show all", "secondary", () => void query({ filter: undefined, append: false, clearQuery: true }), { small: true });
+    const upload = (variant: "primary" | "secondary") => button("Upload a file", variant, deps.uploadInstead, { small: true });
+    if (data.query) {
+      return emptyState(ICONS.image, `No matches for “${data.query}”`, "Try different words, or upload a new file.", [upload("primary"), showAll()]);
+    }
+    if (filter) return emptyState(ICONS[filter], `No ${FILTER_WORD[filter]} yet`, "Files you upload or generate will appear here.", [showAll(), upload("secondary")]);
+    return emptyState(ICONS.image, "Your Asset Library is empty", "Files you upload or generate will appear here.", [upload("primary")]);
+  }
+
+  function lockedState(): HTMLElement {
+    return emptyState(ICON_LOCK, "Top up to use your Asset Library", "The Asset Library is available after you add balance to your account.", [
+      button("Top up", "primary", deps.topUp, { small: true }),
+      button("Upload from device", "secondary", deps.uploadInstead, { small: true }),
+    ]);
+  }
+
+  /** 全屏里才有搜索框（设计稿 v2：对话里找素材靠用户描述，模型去搜）。 */
+  function searchBox(): HTMLElement {
+    const input = h("input", {
+      type: "search",
+      class: "asset-search-input",
+      placeholder: "Search your files",
+      "aria-label": "Search your files",
+      value: data.query ?? "",
+      disabled: loading,
+    });
+    return h(
+      "form",
+      {
+        class: "asset-search",
+        role: "search",
+        onsubmit: (event: Event) => {
+          event.preventDefault();
+          void query({ filter, append: false, text: input.value });
+        },
+      },
+      h("span", { class: "asset-search-icon", html: ICON_SEARCH }),
+      input
     );
   }
 
@@ -382,6 +452,10 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     if (handedOff !== "" && handedOff !== selectionKey()) handedOff = "";
     const shown = opts.fullscreen || !opts.canExpand ? data.items : data.items.slice(0, inlineTiles());
     const notice = deps.noticeText();
+    const title = h("div", { class: "head" }, h("p", { class: opts.fullscreen ? "title-lg" : "title" }, "Asset Library"));
+    if (locked) {
+      return h("section", { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` }, title, lockedState(), notice ? h("p", { class: "note", role: "status" }, notice) : null);
+    }
     const body =
       data.items.length > 0
         ? h("ul", { class: "asset-grid" }, ...shown.map(tile))
@@ -393,8 +467,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     return h(
       "section",
       { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
-      h("div", { class: "head" }, h("p", { class: opts.fullscreen ? "title-lg" : "title" }, "Asset Library")),
-      data.query
+      title,
+      opts.fullscreen ? searchBox() : null,
+      data.query && !opts.fullscreen
         ? h(
             "p",
             { class: "desc asset-query" },
@@ -421,10 +496,13 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   };
 }
 
+const ICON_LOCK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 10V7.5a4.5 4.5 0 0 1 9 0V10h.5c.8 0 1.5.7 1.5 1.5v7c0 .8-.7 1.5-1.5 1.5H7c-.8 0-1.5-.7-1.5-1.5v-7c0-.8.7-1.5 1.5-1.5h.5zm1.8 0h5.4V7.5a2.7 2.7 0 0 0-5.4 0V10z" fill="currentColor"/></svg>';
+const ICON_SEARCH = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.5" fill="currentColor"/><path d="m4.8 8.2 2.1 2.1 4.3-4.4" fill="none" style="stroke:var(--ac-primary-text,#fff)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICONS: Record<AssetKind, string> = {
   image: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>',
   video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
   audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  "3d": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 3.8 7.4v9.2l8.2 4.6 8.2-4.6V7.4L12 2.8zm0 2.3 5.9 3.3L12 11.7 6.1 8.4 12 5.1zM5.8 10.1l5.2 2.9v5.8l-5.2-2.9v-5.8zm7.2 8.7V13l5.2-2.9v5.8L13 18.8z" fill="currentColor"/></svg>',
   other: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>',
 };

@@ -12,6 +12,7 @@ import {
   formatUsd,
   isModelUnavailable,
   isRateLimited,
+  isTemplate,
   modelLabel,
   newIdempotencyKey,
   typeLabel,
@@ -26,7 +27,7 @@ const CHECK_BUDGET_MS = 120_000;
 
 // quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
 // verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
-// canceled：用户在卡里取消了，什么都没提交。
+// 卡上不放取消（设计稿 v2，Jade、Lucas 10-29）：不做了就在对话里说，模型不提交就是了。
 // price_changed：确认时价格已经变了，卡片重新报了价，等用户按新价再确认。
 // settings_changed：确认令牌和这次请求对不上、重新报价也没成，只能再要一份报价。
 // rate_limited / model_unavailable：提交被拒，原因是限流 / 模型暂时用不了。
@@ -42,7 +43,6 @@ export type QuotePhase =
   | "rate_limited"
   | "model_unavailable"
   | "uncertain"
-  | "canceled"
   | "error";
 
 export interface QuoteState {
@@ -82,8 +82,6 @@ export interface QuoteActions {
   editSettings(): void;
   /** 模型用不了：请模型换一个。 */
   switchModel(): void;
-  /** 不生成了：卡片收起，告诉模型这一单作废。 */
-  cancel(): void;
   /** 再核实一次刚才那一单开没开始。 */
   checkAgain(): void;
   topUp(): void;
@@ -330,7 +328,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         return;
       }
       deps.app
-        .sendMessage({ role: "user", content: [{ type: "text", text: "Before generating, I'd like to change the settings." }] })
+        .sendMessage({ role: "user", content: [{ type: "text", text: "Before generating, I'd like to change the request." }] })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
     switchModel() {
@@ -344,11 +342,6 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
           content: [{ type: "text", text: `${modelLabel(deps.card() ?? {})} is unavailable right now. Please suggest a different model for the same request.` }],
         })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
-    },
-    cancel() {
-      const before = deps.card();
-      deps.setState({ phase: "canceled" });
-      if (!sample()) tellModelCanceled(deps.app, before);
     },
     checkAgain: () => void verify(),
     topUp: () => deps.openUrl(BILLING_URL),
@@ -368,17 +361,6 @@ function tellModel(app: App, quoteCard: CardData | undefined, submitted: CardDat
     (price ? ` (${modelLabel(submitted)}, about ${price})` : ` (${modelLabel(submitted)})`) +
     `. The card submitted it as prediction ${submitted.prediction_id} and is tracking it, so do not ` +
     `submit it again. Call atlas_get_prediction with this ID if the user asks about the result.`;
-  void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
-}
-
-/** 用户在卡里取消了：模型不知道，告诉它别再替用户提交这一单。 */
-function tellModelCanceled(app: App, quoteCard: CardData | undefined): void {
-  if (!quoteCard || app.getHostCapabilities()?.updateModelContext === undefined) return;
-  const price = priceLabel(quoteCard.quote);
-  const text =
-    `The user canceled the Atlas Cloud quote in the card` +
-    (price ? ` (${modelLabel(quoteCard)}, about ${price})` : ` (${modelLabel(quoteCard)})`) +
-    `. Nothing was submitted or charged. Do not submit this generation unless the user asks for it again.`;
   void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
 }
 
@@ -413,6 +395,13 @@ function task(quote: QuoteInfo | undefined): HTMLElement[] {
 
 const MAX_INPUTS_SHOWN = 4;
 
+/** 素材名字下面那行：从哪儿来的（设计稿 v2「sneaker-front.jpg / Asset Library」）。 */
+const SOURCE_LABEL: Record<NonNullable<NonNullable<QuoteInfo["inputs"]>[number]["source"]>, string> = {
+  library: "Asset Library",
+  upload: "Uploaded",
+  chat: "From chat",
+};
+
 function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number]): HTMLElement {
   const thumb = h("span", { class: "quote-input-thumb" });
   const fallback = () => thumb.replaceChildren(h("span", { html: input.kind === "image" ? ICON_IMAGE : ICON_FILE }));
@@ -427,7 +416,17 @@ function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number]): HTMLElement
   } else {
     fallback();
   }
-  return h("span", { class: "quote-input", title: input.name }, thumb, h("span", { class: "quote-input-name" }, input.name));
+  return h(
+    "span",
+    { class: "quote-input", title: input.name },
+    thumb,
+    h(
+      "span",
+      { class: "quote-input-text" },
+      h("span", { class: "quote-input-name" }, input.name),
+      input.source ? h("span", { class: "quote-input-source" }, SOURCE_LABEL[input.source]) : null
+    )
+  );
 }
 
 /** 「报价 10 分钟内有效」里的时长。 */
@@ -457,7 +456,12 @@ export function renderQuoteCard(
 ): HTMLElement {
   const quote = card.quote;
   const price = priceLabel(quote);
-  const subtitle = h("p", { class: "desc", style: "margin-top:2px" }, `${modelLabel(card)} · ${typeLabel(card)}`);
+  const template = isTemplate(card);
+  const subtitle = h(
+    "p",
+    { class: "desc", style: "margin-top:2px" },
+    `${modelLabel(card)} · ${template ? "Marketing Studio template" : typeLabel(card)}`
+  );
 
   if (state.phase === "expired") {
     const duration = validFor(quote?.valid_seconds);
@@ -478,25 +482,20 @@ export function renderQuoteCard(
   if (state.phase === "low_balance") {
     // 报错里带回的余额最新；没有时用报价时查到的。
     const balance = state.balanceUsd ?? quote?.account?.balance_usd;
-    const rows = [
-      price ? row("Estimated cost", price) : null,
-      balance !== undefined ? row("Balance", signedUsd(balance)) : null,
-      quote?.account ? billedToRow(quote.account) : null,
-    ].filter((el): el is HTMLElement => el !== null);
     return h(
       "section",
       { class: "card" },
       head("Not enough balance", badge("Low balance", { danger: true })),
       subtitle,
-      rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
-      h("p", { class: "desc" }, "Top up your Atlas Cloud balance or choose cheaper settings. Nothing was charged."),
+      price ? h("div", { class: "rows" }, row("Estimated cost", price)) : null,
+      billingLine(quote?.account, balance, true),
+      h("p", { class: "note" }, "After you top up, refresh to check your balance and the quote again. Nothing was charged."),
       h(
         "div",
         { class: "actions" },
         button("Top up", "primary", actions.topUp),
-        opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null,
-        // 充值回来接着生成：只报价、不扣费，用户还要再确认一次。
-        quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
+        // 设计稿 v2「Refresh balance」：充值回来重新报一次价（同时查余额），不扣费，用户还要再确认。
+        quote ? button("Refresh balance", "secondary", actions.requoteFresh) : null
       ),
       notice(opts)
     );
@@ -517,12 +516,12 @@ export function renderQuoteCard(
         was ? h("span", { class: "arrow", "aria-hidden": "true" }, "→") : null,
         price ?? "Cost unavailable"
       ),
-      h("p", { class: "desc" }, "The price changed after you approved. Nothing was charged yet."),
+      h("p", { class: "desc" }, "The price changed after you confirmed. Nothing was charged yet."),
       h(
         "div",
         { class: "actions" },
-        button(price ? `Generate · ${price}` : "Generate anyway", "primary", actions.confirm),
-        button("Cancel", "secondary", actions.cancel)
+        button(price ? "Confirm and generate" : "Confirm anyway", "primary", actions.confirm),
+        opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
       ),
       notice(opts)
     );
@@ -610,15 +609,6 @@ export function renderQuoteCard(
     );
   }
 
-  if (state.phase === "canceled") {
-    return h(
-      "section",
-      { class: "card" },
-      head("Generation canceled", badge("Canceled")),
-      h("p", { class: "desc" }, `${modelLabel(card)} · Nothing was submitted or charged.`)
-    );
-  }
-
   if (state.phase === "error") {
     return h(
       "section",
@@ -639,7 +629,7 @@ export function renderQuoteCard(
       ? badge("No estimate", { warn: true })
       : quote?.partial
         ? badge("Estimate only", { warn: true })
-        : badge("Needs approval");
+        : badge("Needs confirmation");
 
   // 设计稿：价格下面一行「Estimated · valid for 9:42」；提交中只写 Estimated。
   const timer = busy ? null : countdown(quote);
@@ -652,18 +642,8 @@ export function renderQuoteCard(
         ]
       : [
           h("p", { class: "quote-price" }, quote?.partial ? `≈ ${price}` : price),
-          h("p", { class: "note quote-note" }, estimateNote(quote), ...validity),
+          h("p", { class: "note quote-note" }, estimateNote(quote, template), ...validity),
         ];
-  // 需求文档 6.1：报价写明从哪个账户扣、余额多少。
-  const account = quote?.account;
-  const billing = account
-    ? h(
-        "div",
-        { class: "rows" },
-        billedToRow(account),
-        account.balance_usd !== undefined ? row("Balance", signedUsd(account.balance_usd)) : null
-      )
-    : null;
 
   // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
   const canConfirm = quote !== undefined && quote.tool !== "";
@@ -672,26 +652,27 @@ export function renderQuoteCard(
       ? "Submitting…"
       : "Getting quote…"
     : price === null
-      ? "Generate anyway"
-      : `Generate · ${quote?.partial ? "≈ " : ""}${price}`;
+      ? "Confirm anyway"
+      : "Confirm and generate";
   return h(
     "section",
     { class: "card" },
-    head("Approve this generation", status),
+    head("Confirm this generation", status),
     subtitle,
     ...task(quote),
     chips(quote?.settings ?? []),
     ...amount,
-    billing,
+    // 需求文档 6.1：报价写明从哪个账户扣、余额多少（设计稿 v2 收成底部一行）。
+    billingLine(quote?.account, quote?.account?.balance_usd),
+    // 设计稿 v2：按钮只留确认和修改，不放取消。
     canConfirm
       ? h(
           "div",
           { class: "actions" },
           button(generateLabel, "primary", actions.confirm, { disabled: busy }),
-          !busy && opts.canMessage ? button("Edit settings", "secondary", actions.editSettings) : null,
-          !busy ? button("Cancel", "secondary", actions.cancel) : null
+          !busy && opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
         )
-      : h("p", { class: "note" }, "Reply in the chat to approve or change this."),
+      : h("p", { class: "note" }, "Reply in the chat to confirm or change this."),
     notice(opts)
   );
 }
@@ -701,17 +682,30 @@ function notice(opts: ViewOptions): HTMLElement | null {
 }
 
 /** 价格下面那行：为什么是预估。 */
-function estimateNote(quote: QuoteInfo | undefined): string {
+function estimateNote(quote: QuoteInfo | undefined, template = false): string {
   if (quote?.partial) {
     const missing = quote.estimate_missing?.join(", ");
     return missing
       ? `Doesn't include ${missing} yet. The final cost may be higher`
       : "Some settings can't be priced exactly. The final cost may differ";
   }
+  if (template) return "Estimated total for the whole template";
   return quote?.settles_on_usage ? "Estimated · settles on actual use" : "Estimated";
 }
 
-function billedToRow(account: NonNullable<QuoteInfo["account"]>): HTMLElement {
-  const label = account.email ? `${account.name} · ${account.email}` : account.name;
-  return row("Billed to", label, { title: label });
+/**
+ * 底部一行「Billed to Ada Lovelace · ada@example.com      Balance $24.60」。
+ * short：余额不够这一单时余额标红（余额不足卡）。没有账户、也没有余额就不画。
+ */
+function billingLine(account: QuoteInfo["account"], balance: number | undefined, short = false): HTMLElement | null {
+  if (!account && balance === undefined) return null;
+  const label = account ? (account.email ? `${account.name} · ${account.email}` : account.name) : null;
+  return h(
+    "div",
+    { class: "billing" },
+    label ? h("span", { class: "billing-to", title: label }, "Billed to ", h("strong", {}, label)) : h("span"),
+    balance !== undefined
+      ? h("span", { class: "billing-balance" }, "Balance ", h("strong", { class: short ? "danger" : "" }, signedUsd(balance)))
+      : null
+  );
 }

@@ -11,6 +11,7 @@ import { z } from "zod";
 import { generationApi, headStillServes } from "../services/api-client.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
+import type { MediaSource } from "../services/media-names.js";
 import { settingsChips } from "./card-params.js";
 import {
   completedAtOf,
@@ -235,7 +236,7 @@ export interface QuoteInfo {
   /** 这一单要生成什么：提示词（截断过）。 */
   prompt?: string;
   /** 这一单引用的素材，报价卡上显示缩略图和名称。 */
-  inputs?: (CardMedia & { name: string })[];
+  inputs?: (CardMedia & { name: string; source?: MediaSource })[];
   /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
   settings: string[];
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */

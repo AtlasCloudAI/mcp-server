@@ -5,7 +5,7 @@ import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spe
 import { inputsOf, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount } from "../services/billing-account.js";
-import { rememberedMediaNames } from "../services/media-names.js";
+import { rememberedMedia } from "../services/media-names.js";
 import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
@@ -245,8 +245,12 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
     if (!card) return result;
     if (card.quote?.inputs?.length) {
       // 存进 Atlas 的素材地址里是随机编号，换回上传时的原文件名（media-names.ts）。
-      const names = await rememberedMediaNames(card.quote.inputs.map((input) => input.url));
-      card.quote.inputs = card.quote.inputs.map((input) => ({ ...input, name: names.get(input.url) ?? input.name }));
+      // 来源（资产库 / 上传卡 / 对话附件）一起记着，报价卡写在名字下面。
+      const found = await rememberedMedia(card.quote.inputs.map((input) => input.url));
+      card.quote.inputs = card.quote.inputs.map((input) => {
+        const media = found.get(input.url);
+        return { ...input, name: media?.name ?? input.name, ...(media?.source ? { source: media.source } : {}) };
+      });
     }
     const note =
       card.state === "quote" && clientRendersCards(server)

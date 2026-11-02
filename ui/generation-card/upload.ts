@@ -33,6 +33,7 @@ export interface UploadCardData {
     error?: string;
   }>;
   sample_expired?: boolean;
+  sample_overflow?: { picked: number; added: number };
 }
 
 export interface UploadItem {
@@ -183,6 +184,9 @@ export interface Uploader {
 }
 
 const CONCURRENCY = 2;
+// 超过这么多个文件时列表收起，只露前几个。
+const COLLAPSE_OVER = 4;
+const COLLAPSE_SHOWN = 3;
 // 地址还剩这么点时间就先换新的，免得传到一半过期。
 const RENEW_MARGIN_MS = 15_000;
 const XHR_TIMEOUT_MS = 5 * 60_000;
@@ -236,6 +240,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   let renewError: string | undefined;
   /** 交给模型之后的那组文件；列表一变就清掉，按钮恢复。 */
   let handedOff = "";
+  /** 文件多时列表收起，点「+N more files」展开。 */
+  let expanded = false;
+  /** 上一次选了多少个、超出上限没收进来的有几个（设计稿 v2「超出数量上限」）。 */
+  let overflow: { picked: number; added: number } | undefined = initial.sample_overflow;
   const inflight = new Map<string, XMLHttpRequest>();
   const sample = initial.sample === true;
 
@@ -271,12 +279,12 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       deps.notice("This is a sample card, so nothing is uploaded.");
       return;
     }
-    let room = data.max_files - items.filter((i) => i.status !== "invalid").length;
-    for (const file of files) {
+    // 一次选多了：先收前面的，提示多出来的没加（设计稿 v2「超出数量上限」），不再逐个标成不能上传。
+    const room = Math.max(0, data.max_files - items.filter((i) => i.status !== "invalid").length);
+    overflow = files.length > room ? { picked: files.length, added: room } : undefined;
+    for (const file of files.slice(0, room)) {
       const kind = fileKind(file.name, file.type);
-      let error = validateFile(file, data.max_bytes);
-      if (!error && room <= 0) error = `Up to ${data.max_files} files per upload`;
-      if (!error) room -= 1;
+      const error = validateFile(file, data.max_bytes);
       const item: UploadItem = {
         id: `f${nextId++}`,
         name: file.name,
@@ -491,7 +499,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         id: `a${nextId++}`,
         name: asset.label,
         size: 0,
-        kind: asset.kind,
+        kind: asset.kind === "3d" ? "other" : asset.kind,
         status: "done",
         progress: 1,
         url: asset.url,
@@ -504,6 +512,18 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
   function chooseAgain(): void {
     items = items.filter((i) => i.status !== "invalid");
+    overflow = undefined;
+    changed();
+    pick();
+  }
+
+  /** 「Change files」：清掉这次选的，重新选。 */
+  function changeFiles(): void {
+    for (const xhr of inflight.values()) xhr.abort();
+    inflight.clear();
+    items = [];
+    overflow = undefined;
+    expanded = false;
     changed();
     pick();
   }
@@ -594,10 +614,16 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   function list(): HTMLElement {
+    // 设计稿 v2「超出数量上限」：一次选很多时只露前几个，其余收成一行。出问题的文件总是露出来。
+    const collapse = !expanded && items.length > COLLAPSE_OVER;
+    const shown = collapse
+      ? items.filter((item, i) => i < COLLAPSE_SHOWN || item.status === "invalid" || item.status === "failed")
+      : items;
+    const hidden = items.length - shown.length;
     return h(
       "ul",
       { class: "upload-list" },
-      ...items.map((item) =>
+      ...shown.map((item) =>
         h(
           "li",
           { class: `upload-row${item.status === "invalid" || item.status === "failed" ? " bad" : ""}` },
@@ -610,21 +636,45 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
           ),
           mark(item)
         )
-      )
+      ),
+      hidden > 0
+        ? h(
+            "li",
+            { class: "upload-more" },
+            h(
+              "button",
+              {
+                type: "button",
+                class: "upload-more-btn",
+                onclick: () => {
+                  expanded = true;
+                  changed();
+                },
+              },
+              `+ ${hidden} more file${hidden === 1 ? "" : "s"}`
+            )
+          )
+        : null
     );
   }
 
-  function dropZone(): HTMLElement {
+  // 设计稿 v2：不做拖拽（拖进卡片会被宿主当成聊天附件），点开选文件；只写大小上限，格式传完再查。
+  function chooser(): HTMLElement {
     return h(
       "button",
       { type: "button", class: "upload-drop", onclick: pick },
       h("span", { class: "upload-drop-icon", html: ICON_UPLOAD }),
-      h("span", { class: "upload-drop-title" }, "Drop files here or ", h("span", { class: "upload-link" }, "browse")),
-      h(
-        "span",
-        { class: "upload-drop-hint" },
-        `Images, video or audio · up to ${limitLabel(data.max_bytes)} each · up to ${data.max_files} files`
-      )
+      h("span", { class: "upload-drop-title" }, "Choose images or videos from your device"),
+      h("span", { class: "upload-drop-hint" }, `Up to ${limitLabel(data.max_bytes)} per file · ${data.max_files} files at a time`)
+    );
+  }
+
+  function overflowNote(): HTMLElement | null {
+    if (!overflow) return null;
+    return h(
+      "p",
+      { class: "note danger" },
+      `You picked ${overflow.picked} files. Only the first ${overflow.added} were added — you can add up to ${data.max_files} at a time.`
     );
   }
 
@@ -654,10 +704,14 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     } else if (phase === "empty") {
       body = [
         head("Add reference media", null),
-        dropZone(),
-        deps.openLibrary
-          ? h("div", { class: "actions" }, button("Choose from Asset Library", "secondary", deps.openLibrary))
-          : null,
+        chooser(),
+        h("p", { class: "note" }, "Have a link? Paste it in the chat."),
+        h(
+          "div",
+          { class: "actions" },
+          button("Choose files", "primary", pick),
+          deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null
+        ),
       ];
     } else {
       const status =
@@ -672,28 +726,19 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         phase === "uploading"
           ? [button("Cancel", "secondary", cancel)]
           : phase === "done"
-            ? [useButton("primary"), button("Add more", "secondary", pick)]
+            ? [useButton("primary"), overflow ? button("Change files", "secondary", changeFiles) : button("Add more", "secondary", pick)]
             : phase === "failed"
-              ? [button("Retry", "primary", retry), done.length > 0 ? useButton("secondary") : null]
+              ? // 设计稿 v2「网络失败」：重传，或者改从资产库选。
+                [
+                  button("Retry", "primary", retry),
+                  done.length > 0 ? useButton("secondary") : null,
+                  deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null,
+                ]
               : [done.length > 0 ? useButton("primary") : null, button("Choose again", "secondary", chooseAgain)];
-      body = [head("Add reference media", status), list(), h("div", { class: "actions" }, ...actions)];
+      body = [head("Add reference media", status), list(), overflowNote(), h("div", { class: "actions" }, ...actions)];
     }
 
-    const section = h("section", { class: "card upload" }, ...body, noticeEl());
-    // 整张卡都能接拖进来的文件；拖动时只切高亮，不重画。
-    section.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      section.classList.add("dragging");
-    });
-    section.addEventListener("dragleave", (event) => {
-      if (!section.contains(event.relatedTarget as Node | null)) section.classList.remove("dragging");
-    });
-    section.addEventListener("drop", (event) => {
-      event.preventDefault();
-      section.classList.remove("dragging");
-      addFiles([...(event.dataTransfer?.files ?? [])]);
-    });
-    return section;
+    return h("section", { class: "card upload" }, ...body, noticeEl());
   }
 
   return {

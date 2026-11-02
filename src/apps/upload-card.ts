@@ -35,6 +35,8 @@ export interface UploadCardData {
   sample_files?: UploadSampleFile[];
   /** 测试卡片：直接显示「上传链接过期」。 */
   sample_expired?: boolean;
+  /** 测试卡片：一次选多了（设计稿 v2「超出数量上限」）。 */
+  sample_overflow?: { picked: number; added: number };
 }
 
 export function uploadCardData(issued: { uploadUrl: string; expiresAt: number; maxBytes: number }): UploadCardData {

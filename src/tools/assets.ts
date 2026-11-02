@@ -75,7 +75,7 @@ type AssetItem = z.infer<typeof assetItemSchema>;
 // 官网生成历史归档进来的素材，标题和文件名都是占位的 upload / upload.bin。
 const PLACEHOLDER_NAMES = new Set(["upload", "upload.bin", "image", "video", "audio", "file", "blob"]);
 
-const KIND_LABEL: Record<AssetCardKind, string> = { image: "Image", video: "Video", audio: "Audio", other: "File" };
+const KIND_LABEL: Record<AssetCardKind, string> = { image: "Image", video: "Video", audio: "Audio", "3d": "3D model", other: "File" };
 const ORIGIN_LABEL: Record<AssetOrigin, string> = { upload: "upload", generated: "result", input: "input" };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -86,7 +86,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function kindOf(item: AssetItem): AssetCardKind {
   const kind = item.media_type?.toLowerCase();
-  return kind === "image" || kind === "video" || kind === "audio" ? kind : "other";
+  return kind === "image" || kind === "video" || kind === "audio" || kind === "3d" ? kind : "other";
 }
 
 function originOf(item: AssetItem): AssetOrigin {
@@ -210,6 +210,13 @@ export async function resolveAssets(ids: string[]): Promise<{ resolved: Resolved
   return { resolved, missing };
 }
 
+const BILLING_URL = "https://www.atlascloud.ai/console/billing";
+
+/** 资产库要充值后才能用（资产库二期）：AssetD 回 403 asset_library_not_activated。 */
+function assetLibraryLocked(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.statusCode === 403 && /asset_library_not_activated/i.test(error.message);
+}
+
 /** 资产库接口特有的几种失败；其余交给通用的 handleError。 */
 export function assetErrorText(error: unknown): string {
   if (error instanceof ApiRequestError) {
@@ -218,6 +225,12 @@ export function assetErrorText(error: unknown): string {
       return (
         "Error: The Asset Library isn't available to this Atlas Cloud connection yet. " +
         "Ask the user to upload the file with atlas_get_upload_url or share a public link instead."
+      );
+    }
+    if (assetLibraryLocked(error)) {
+      return (
+        "Error: The user's Asset Library isn't activated yet. It turns on after they add balance at " +
+        `${BILLING_URL}. Until then, ask them to upload the file from their device with atlas_get_upload_url.`
       );
     }
     if (error.statusCode === 403 && /scope/i.test(error.message)) {
@@ -257,7 +270,7 @@ Use this when the user wants to reuse something they already have ("use my produ
 
 Args:
   - query (string, optional): words to match against asset names and descriptions
-  - media_type (string, optional): "image" | "video" | "audio"
+  - media_type (string, optional): "image" | "video" | "audio" | "3d"
   - limit (integer, optional, default 12, max 50): assets per page
   - cursor (string, optional): next_cursor from a previous page
 
@@ -267,13 +280,15 @@ Returns:
 To use assets as generation inputs, call atlas_use_assets with their asset_id values; it returns temporary file URLs for the generation tools. In chat apps that show Atlas cards (ChatGPT, Claude), the results open in an Asset Library card where the user can pick assets themselves.`,
       inputSchema: {
         query: z.string().trim().min(1).max(200).optional().describe("Words to match against asset names and descriptions"),
-        media_type: z.enum(["image", "video", "audio"]).optional().describe("Only this media type"),
+        media_type: z.enum(["image", "video", "audio", "3d"]).optional().describe("Only this media type"),
         limit: z.number().int().min(1).max(50).default(12).describe("Assets per page (max 50)"),
         cursor: z.string().min(1).max(1000).optional().describe("next_cursor from a previous page"),
       },
       outputSchema: {
         count: z.number().int().nonnegative(),
         next_cursor: z.string().optional(),
+        /** 资产库没开通时为 false（充值后才能用）。 */
+        activated: z.boolean().optional(),
         assets: z.array(
           z.object({
             asset_id: z.string(),
@@ -345,6 +360,15 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
           content: [{ type: "text", text: lines.join("\n") }],
         };
       } catch (error) {
+        // 没开通不算出错：卡片照常打开，显示「充值后能用，或者先从设备上传」（设计稿 v2「资产库未开通」）。
+        if (assetLibraryLocked(error) && generationCardEnabled()) {
+          const card: AssetCardData = { view: "assets", items: [], max_pick: ASSETS_MAX_PICK, locked: true };
+          return {
+            _meta: { [ASSETS_META_KEY]: card },
+            structuredContent: { count: 0, assets: [], activated: false },
+            content: [{ type: "text", text: assetErrorText(error).replace(/^Error: /, "") }],
+          };
+        }
         return { isError: true, content: [{ type: "text", text: assetErrorText(error) }] };
       }
     }

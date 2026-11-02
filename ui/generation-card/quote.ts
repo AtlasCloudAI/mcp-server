@@ -170,6 +170,11 @@ export function thrownFailureState(error: unknown): QuoteState {
   return failureState(thrownErrorText(error));
 }
 
+/** 服务端的幂等锁说这个键之前被拒过、什么都没提交，要换新键（src/services/idempotency.ts）。 */
+export function keyBurned(text: string | undefined): boolean {
+  return !!text && /rejected by Atlas Cloud before it started|use a new idempotency key/i.test(text);
+}
+
 /** 报价已过期：先看卡片自己的计时，没有计时就等服务端说。 */
 export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): boolean {
   if (!quote?.expires_at) return false;
@@ -219,6 +224,8 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   let checking = false;
   /** 令牌对不上后重新报来的那份报价：再对不上就不再自动重报，交给用户。 */
   let repricedQuote: QuoteInfo | undefined;
+  /** 已经因为「这个键之前被拒过」自动换键重报过的那份报价：只换一次。 */
+  let rekeyedQuote: QuoteInfo | undefined;
 
   /** 服务端核实接口说开始了：接着显示进度。 */
   function startedFrom(result: unknown, quote: QuoteInfo): boolean {
@@ -276,6 +283,15 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
     // 确认令牌对不上：这一单没提交。按同一个幂等键重新报价（不扣费），价格变了就请用户按新价再确认。
     if (confirmed && state.phase === "settings_changed" && quote !== repricedQuote) {
       void call({ approvedUsd: quote.estimated_usd, repricing: true });
+      return;
+    }
+    // 这个幂等键之前提交被拒过（比如掉线时点过确认，11-02 实测重连后就是这样）：什么都没扣，
+    // 防重复扣费的锁不让再用这个键。换新键重新报一次价（不扣费），用户再确认。
+    if (confirmed && state.phase === "error" && keyBurned(state.message) && quote !== rekeyedQuote) {
+      rekeyedQuote = quote;
+      void call({ freshKey: true }).then(() => {
+        if (deps.card()?.quote !== quote) deps.notice("The last try didn't go through, so here's a fresh quote. Nothing was charged.");
+      });
       return;
     }
     if (state.phase === "verifying") void verify();

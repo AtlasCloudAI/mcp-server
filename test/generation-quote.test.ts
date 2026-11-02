@@ -25,6 +25,7 @@ import {
 import {
   failureState,
   initialQuoteState,
+  keyBurned,
   priceChanged,
   quoteExpired,
   thrownErrorText,
@@ -659,6 +660,12 @@ test("卡片前端：确认时素材被删（素材失效）、Atlas 登录失�
   assert.equal(isSignedOut("Upstream provider returned 401 Unauthorized"), false);
   assert.deepEqual(failureState("Upstream provider returned 401 Unauthorized"), { phase: "error", message: "Upstream provider returned 401 Unauthorized" });
   assert.equal(isSignedOut("MCP error 401: Unauthorized", true), true);
+  // 重连之后再点确认：掉线时那次确认已经占了这个键，服务端说换新键（卡片自动换键重报价）。
+  assert.equal(
+    keyBurned("A previous request with this idempotency key was rejected by Atlas Cloud before it started, so nothing was charged; use a new idempotency key to try again"),
+    true
+  );
+  assert.equal(keyBurned("Upstream timeout"), false);
   // ChatGPT 弹出连接、用户取消之后，卡片收到的原话（11-02 test 实测）。
   assert.deepEqual(failureState("Connector authorization required"), { phase: "signed_out" });
   assert.deepEqual(thrownFailureState(new Error("Connector authorization required")), { phase: "signed_out" });

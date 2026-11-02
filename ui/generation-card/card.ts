@@ -44,9 +44,18 @@ export interface QuoteInfo {
   /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
   sample_balance_usd?: number;
   sample_previous_usd?: number;
+  /** 只在测试卡片上用：「素材失效」里被删掉的文件名。 */
+  sample_missing?: string[];
 }
 
-export type QuoteProblem = "insufficient_balance" | "price_changed" | "settings_changed" | "rate_limited" | "model_unavailable";
+export type QuoteProblem =
+  | "insufficient_balance"
+  | "price_changed"
+  | "settings_changed"
+  | "rate_limited"
+  | "model_unavailable"
+  | "input_missing"
+  | "signed_out";
 
 export interface CardData {
   state: CardState;
@@ -66,6 +75,8 @@ export interface CardData {
   completed_at?: string;
   media_expired?: boolean;
   sample?: boolean;
+  /** 只在测试卡片上用：直接显示「需要重新连接」。 */
+  sample_signed_out?: boolean;
   quote?: QuoteInfo;
   retry?: { tool: string; arguments: Record<string, unknown> };
 }
@@ -256,6 +267,20 @@ export function isModelUnavailable(text: string | undefined): boolean {
       text
     )
   );
+}
+
+/**
+ * Atlas 登录失效（设计稿 v2「需要重新连接」）：服务端 HTTP 层回 401 invalid_token（交换不到凭据、
+ * 用户在控制台断开了），或上游说凭据失效（handleError 那句 "credential … invalid or expired"）。
+ * 工具的报错只认我们自己的说法：上游模型报错里也会出现 401、Unauthorized，那不是用户掉线。
+ * fromHost：宿主自己挡下的调用（请求没到工具），它转给卡片的说法不统一，再加几种常见写法。
+ */
+export function isSignedOut(text: string | undefined, fromHost = false): boolean {
+  if (!text) return false;
+  if (/invalid_token|reauthenticate|re-?authori[sz]e to link|not linked to an atlas cloud credential|atlas cloud credential[^.]*(?:invalid|expired)/i.test(text)) {
+    return true;
+  }
+  return fromHost && /\b401\b|unauthori[sz]ed|authentication required|login required|sign[- ]?in (?:has )?expired/i.test(text);
 }
 
 export function isActive(state: CardState): boolean {

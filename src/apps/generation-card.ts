@@ -242,10 +242,19 @@ export interface QuoteInfo {
   /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
   valid_seconds?: number;
   /** 只在测试卡片上用：直接显示某个问题状态。 */
-  problem?: "insufficient_balance" | "price_changed" | "settings_changed" | "rate_limited" | "model_unavailable";
+  problem?:
+    | "insufficient_balance"
+    | "price_changed"
+    | "settings_changed"
+    | "rate_limited"
+    | "model_unavailable"
+    | "input_missing"
+    | "signed_out";
   /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
   sample_balance_usd?: number;
   sample_previous_usd?: number;
+  /** 只在测试卡片上用：「素材失效」里被删掉的文件名。 */
+  sample_missing?: string[];
 }
 
 export interface GenerationCardData {
@@ -274,6 +283,8 @@ export interface GenerationCardData {
   media_expired?: boolean;
   /** 测试卡片的示例数据：卡片不去刷新，也不往对话里发消息。 */
   sample?: boolean;
+  /** 只在测试卡片上用：直接显示「需要重新连接」。 */
+  sample_signed_out?: boolean;
   /** 只在 state = "quote" 时有。 */
   quote?: QuoteInfo;
   /** 由生成工具提交的任务：失败后卡片用它重新报价（Try again），不必替用户发消息。 */

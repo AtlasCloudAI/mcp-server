@@ -160,6 +160,15 @@ const VARIANTS = {
     price: "0.3",
     outputs: [`${STATIC}/selftest/sneaker-model.glb`],
   },
+  // 刷新时 Atlas 登录失效了：卡片请用户重新连接（设计稿 v2「需要重新连接」）。
+  signed_out: {
+    status: "processing",
+    model: "bytedance/seedance-2.5/text-to-video",
+    name: "Dreamina Seedance 2.5",
+    type: "Video",
+    price: "1.34",
+    outputs: [],
+  },
   // Marketing Studio 模板跑着：进度卡标题写模板名（设计稿 v2「模板执行中」）。
   template_running: {
     status: "processing",
@@ -223,6 +232,10 @@ const QUOTE_VARIANTS = {
   quote_model_unavailable: { estimated: 1.34, partial: false, expired: false, problem: "model_unavailable", balance: undefined, previous: undefined },
   // Marketing Studio 模板的报价：整套模板一个总价（设计稿 v2「模板方案」）。
   quote_template: { estimated: 0.24, partial: false, expired: false, problem: undefined, balance: undefined, previous: undefined },
+  // 确认时发现第二张参考图已从资产库删掉（设计稿 v2「素材失效」）。
+  quote_input_missing: { estimated: 1.34, partial: false, expired: false, problem: "input_missing", balance: undefined, previous: undefined },
+  // 确认时 Atlas 登录失效了（设计稿 v2「需要重新连接」）。
+  quote_signed_out: { estimated: 1.34, partial: false, expired: false, problem: "signed_out", balance: undefined, previous: undefined },
 } as const;
 
 // 模板报价样例：Image ads 出 4 张，素材是上传卡传的耳机图。
@@ -354,7 +367,12 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
   const validMs = sample.expired ? -60_000 : 10 * 60_000;
   const template = variant === "quote_template";
-  const base = template ? TEMPLATE_SAMPLE : QUOTE_SAMPLE;
+  const missing = variant === "quote_input_missing";
+  const base = template
+    ? TEMPLATE_SAMPLE
+    : missing
+      ? { ...QUOTE_SAMPLE, params: { ...QUOTE_SAMPLE.params, reference_images: [QUOTE_SAMPLE.params.image, `${STATIC}/model/example/material/product-shot-02.jpg`] } }
+      : QUOTE_SAMPLE;
   // 素材来源：普通样例是从资产库选的，模板样例是上传卡传的。
   const source = template ? ("upload" as const) : ("library" as const);
   return {
@@ -387,6 +405,7 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       ...(sample.problem ? { problem: sample.problem } : {}),
       ...(sample.balance !== undefined ? { sample_balance_usd: sample.balance } : {}),
       ...(sample.previous !== undefined ? { sample_previous_usd: sample.previous } : {}),
+      ...(missing ? { sample_missing: ["product-shot-02.jpg"] } : {}),
     },
   };
 }
@@ -459,7 +478,7 @@ export function registerCardSelftestTool(server: McpServer): void {
         mediaExpired: variant === "expired",
       });
       return {
-        _meta: { [CARD_META_KEY]: { ...card, sample: true } },
+        _meta: { [CARD_META_KEY]: { ...card, sample: true, ...(variant === "signed_out" ? { sample_signed_out: true } : {}) } },
         structuredContent: { prediction_id: predictionId, status: sample.status, outputs: [...sample.outputs] },
         content: [
           {

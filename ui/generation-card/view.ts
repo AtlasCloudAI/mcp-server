@@ -35,6 +35,8 @@ export interface CardActions {
   /** 失败后「Edit and re-quote」：按原参数重新报价，用户在报价卡上改或确认。 */
   tryAgain(): void;
   switchModel(): void;
+  /** 「Reconnect」：请模型再调一次工具，宿主见到 401 会弹出重新连接。 */
+  reconnect(): void;
 }
 
 export interface ViewOptions {
@@ -44,6 +46,8 @@ export interface ViewOptions {
   canMessage: boolean;
   /** 卡片自己等了很久还没结果：显示「Still generating」。 */
   stalled: boolean;
+  /** 刷新时发现 Atlas 登录失效了：显示「Reconnect Atlas Cloud」，停止自己刷新。 */
+  signedOut: boolean;
   /** 正在刷新：刷新按钮置灰。 */
   refreshing: boolean;
   /** 刷新出错时的一行说明。 */
@@ -279,6 +283,32 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
       : null,
     h("div", { class: "rows" }, ...rows),
     h("div", { class: "actions" }, refresh, viewInAtlas),
+    notice(opts)
+  );
+}
+
+/**
+ * 设计稿 v2「需要重新连接」：刷新时 Atlas 登录失效了。已经提交的任务照常在跑，重新连接后接着查
+ * 这一条。卡片没法自己发起授权：「Reconnect」请模型再调一次工具，宿主见到 401 会弹出连接。
+ */
+function signedOutCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
+  return h(
+    "section",
+    { class: "card" },
+    head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+    h(
+      "p",
+      { class: "desc" },
+      `Your Atlas Cloud sign-in expired. ${progressTitle(card)} keeps running, and nothing was lost. Reconnect to keep checking it.`
+    ),
+    h("div", { class: "rows" }, row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })),
+    h(
+      "div",
+      { class: "actions" },
+      opts.canMessage ? button("Reconnect", "primary", actions.reconnect) : null,
+      opts.canRefresh ? button("Check again", opts.canMessage ? "secondary" : "primary", actions.refresh, { disabled: opts.refreshing }) : null
+    ),
+    opts.canMessage ? null : h("p", { class: "note" }, "Reconnect Atlas Cloud in this app's connector settings, then check again."),
     notice(opts)
   );
 }
@@ -780,7 +810,7 @@ export function renderCard(card: CardData, opts: ViewOptions, actions: CardActio
     case "queued":
     case "running":
     case "transfer_pending":
-      view = progressCard(card, opts, actions);
+      view = opts.signedOut ? signedOutCard(card, opts, actions) : progressCard(card, opts, actions);
       break;
     case "failed":
       view = failedCard(card, opts, actions);

@@ -38,6 +38,7 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
+import { refreshLibraryInputs, replaceUrls } from "./assets.js";
 
 export function registerAudioTools(server: McpServer): void {
   server.registerTool(
@@ -85,7 +86,15 @@ Returns:
     },
     withGenerationCard(server, "atlas_generate_audio", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        const preparation = await prepareGeneration(model, params, {
+        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
+        const inputs =
+          confirmation_token || confirmed
+            ? await refreshLibraryInputs(params)
+            : { ok: true as const, params, original: new Map<string, string>() };
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+        const preparation = await prepareGeneration(model, inputs.params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "audio",
@@ -96,7 +105,8 @@ Returns:
         const { prepared } = preparation;
         const confirmedRequest = {
           resolved_model: prepared.model.model,
-          request_body: prepared.body,
+          // 确认令牌按报价时的请求核对：换过的新地址先换回报价时的。
+          request_body: replaceUrls(prepared.body, inputs.original),
         };
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
@@ -243,7 +253,15 @@ Returns:
     },
     async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        const preparation = await prepareGeneration(model, params, {
+        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
+        const inputs =
+          confirmation_token || confirmed
+            ? await refreshLibraryInputs(params)
+            : { ok: true as const, params, original: new Map<string, string>() };
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+        const preparation = await prepareGeneration(model, inputs.params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "transcription",
@@ -254,7 +272,8 @@ Returns:
         const { prepared } = preparation;
         const confirmedRequest = {
           resolved_model: prepared.model.model,
-          request_body: prepared.body,
+          // 确认令牌按报价时的请求核对：换过的新地址先换回报价时的。
+          request_body: replaceUrls(prepared.body, inputs.original),
         };
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。

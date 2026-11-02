@@ -20,6 +20,7 @@ import {
   formatUsd,
   isModelUnavailable,
   isRateLimited,
+  isSignedOut,
 } from "../ui/generation-card/card.js";
 import {
   failureState,
@@ -602,7 +603,7 @@ test("报价卡的输入素材按上传时的原文件名显示、标出来源�
   const other = "https://cdn.example.com/kept-name.webp";
   // 只记了名字、没记来源（老记录）：照样显示名字，不写来源。
   const legacy = "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/u/0b9c8d7e.png";
-  await rememberMediaName(uploaded, "tea-tin.jpg", undefined, "upload");
+  await rememberMediaName(uploaded, "tea-tin.jpg", undefined, { source: "upload" });
   await rememberMediaName(legacy, "receipt.png");
   // 资产库：搜索时按编号记名字，取用时转记到临时地址上。
   await rememberAssetNames([{ asset_id: "as_1", name: "Spring banner" }]);
@@ -634,4 +635,26 @@ test("报价卡的输入素材按上传时的原文件名显示、标出来源�
   } finally {
     restore();
   }
+});
+
+test("卡片前端：确认时素材被删（素材失效）、Atlas 登录失效（需要重新连接）各有自己的状态", () => {
+  const gone =
+    "Error: Input files are no longer available: sneaker-side.jpg, banner.png (deleted from the Asset Library). " +
+    "Nothing was submitted or charged. Ask the user to choose another file, then quote again.";
+  assert.deepEqual(failureState(gone), { phase: "input_missing", missing: ["sneaker-side.jpg", "banner.png"] });
+
+  // 上游说凭据失效（handleError 的原话）、宿主转来的 401：都请用户重新连接。
+  const expired =
+    "Error: The Atlas Cloud credential for this authenticated account is invalid or expired. Reauthenticate or contact the plugin administrator.";
+  assert.deepEqual(failureState(expired), { phase: "signed_out" });
+  assert.deepEqual(thrownFailureState(new Error("MCP error 401: Unauthorized")), { phase: "signed_out" });
+  // 没有原话、也不是 401：请求可能已经到了服务端，照旧先核实。
+  assert.deepEqual(thrownFailureState(new Error("Request timed out")), { phase: "verifying" });
+
+  assert.equal(isSignedOut('Bearer error="invalid_token", error_description="account is not linked to an Atlas Cloud credential"'), true);
+  assert.equal(isSignedOut("Rate limit exceeded. Please wait and try again later."), false);
+  // 上游模型自己的 401 不是用户掉线：工具报错里只认我们的说法，宿主挡下的才认 401。
+  assert.equal(isSignedOut("Upstream provider returned 401 Unauthorized"), false);
+  assert.deepEqual(failureState("Upstream provider returned 401 Unauthorized"), { phase: "error", message: "Upstream provider returned 401 Unauthorized" });
+  assert.equal(isSignedOut("MCP error 401: Unauthorized", true), true);
 });

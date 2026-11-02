@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ApiRequestError, api } from "../services/api-client.js";
-import { rememberAssetNames, rememberAssetUrls } from "../services/media-names.js";
+import { rememberAssetNames, rememberAssetUrls, rememberedMedia } from "../services/media-names.js";
 import { handleError } from "../utils/error-handler.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { clientRendersCards, generationCardEnabled } from "../apps/generation-card.js";
@@ -208,6 +208,88 @@ export async function resolveAssets(ids: string[]): Promise<{ resolved: Resolved
     }
   }
   return { resolved, missing };
+}
+
+/** 参数里所有链接（多层对象、数组里的也算）。 */
+function urlsIn(value: unknown, out = new Set<string>()): Set<string> {
+  if (typeof value === "string") {
+    if (/^https?:\/\//i.test(value)) out.add(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) urlsIn(item, out);
+  } else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) urlsIn(item, out);
+  }
+  return out;
+}
+
+/** 按对照表换掉参数里的链接（只换整串相等的值），结构原样。 */
+export function replaceUrls<T>(value: T, swap: ReadonlyMap<string, string>): T {
+  if (swap.size === 0) return value;
+  if (typeof value === "string") return (swap.get(value) ?? value) as T;
+  if (Array.isArray(value)) return value.map((item) => replaceUrls(item, swap)) as T;
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceUrls(item, swap)])) as T;
+  }
+  return value;
+}
+
+export type LibraryInputRefresh =
+  | {
+      ok: true;
+      params: Record<string, unknown>;
+      /** 新地址 → 报价时的地址。确认令牌按报价时的请求核对，核对前要换回去。 */
+      original: Map<string, string>;
+    }
+  | { ok: false; message: string };
+
+/**
+ * 确认生成前，把参数里从资产库取来的素材换成新的临时地址：资产库给的地址 15 分钟就过期，报价却能
+ * 等一个小时，过了 15 分钟再确认，网关就拉不到图。顺便查出这期间被删掉的素材（设计稿 v2「素材失效」），
+ * 这时什么都不提交。认得出资产编号的才换（取用时记在 media-names 里）；资产库本身出错时照原地址提交，
+ * 不因为换不了地址拦下这一单。
+ */
+export async function refreshLibraryInputs(params: Record<string, unknown>): Promise<LibraryInputRefresh> {
+  const unchanged: LibraryInputRefresh = { ok: true, params, original: new Map() };
+  const urls = [...urlsIn(params)];
+  if (urls.length === 0) return unchanged;
+  const remembered = await rememberedMedia(urls);
+  const fromLibrary = urls.flatMap((url) => {
+    const media = remembered.get(url);
+    return media?.assetId ? [{ url, assetId: media.assetId, name: media.name }] : [];
+  });
+  if (fromLibrary.length === 0) return unchanged;
+
+  let resolved: ResolvedAsset[];
+  let missing: string[];
+  try {
+    ({ resolved, missing } = await resolveAssets([...new Set(fromLibrary.map((input) => input.assetId))]));
+  } catch (error) {
+    console.error(`[assets] couldn't refresh library inputs before submit: ${error instanceof Error ? error.message : String(error)}`);
+    return unchanged;
+  }
+  if (missing.length > 0) {
+    const names = fromLibrary.filter((input) => missing.includes(input.assetId)).map((input) => input.name);
+    const one = names.length === 1;
+    return {
+      ok: false,
+      message:
+        `Error: ${one ? "An input file is" : "Input files are"} no longer available: ${names.join(", ")} ` +
+        `(deleted from the Asset Library). Nothing was submitted or charged. Ask the user to choose another file, then quote again.`,
+    };
+  }
+
+  const fresh = new Map(resolved.map((asset) => [asset.asset_id, asset.url]));
+  const swap = new Map<string, string>();
+  const original = new Map<string, string>();
+  for (const input of fromLibrary) {
+    const url = fresh.get(input.assetId);
+    if (!url || url === input.url) continue;
+    swap.set(input.url, url);
+    original.set(url, input.url);
+  }
+  // 新地址也记上名字和编号：进度卡、再次确认时照样认得。
+  await rememberAssetUrls(resolved);
+  return { ok: true, params: replaceUrls(params, swap), original };
 }
 
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";

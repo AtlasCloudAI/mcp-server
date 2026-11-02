@@ -12,6 +12,7 @@ import {
   formatUsd,
   isModelUnavailable,
   isRateLimited,
+  isSignedOut,
   isTemplate,
   modelLabel,
   newIdempotencyKey,
@@ -31,6 +32,8 @@ const CHECK_BUDGET_MS = 120_000;
 // price_changed：确认时价格已经变了，卡片重新报了价，等用户按新价再确认。
 // settings_changed：确认令牌和这次请求对不上、重新报价也没成，只能再要一份报价。
 // rate_limited / model_unavailable：提交被拒，原因是限流 / 模型暂时用不了。
+// input_missing：确认时发现引用的资产库素材被删了（设计稿 v2「素材失效」），什么都没提交。
+// signed_out：Atlas 登录失效了（设计稿 v2「需要重新连接」），什么都没提交。
 export type QuotePhase =
   | "ready"
   | "quoting"
@@ -43,6 +46,8 @@ export type QuotePhase =
   | "rate_limited"
   | "model_unavailable"
   | "uncertain"
+  | "input_missing"
+  | "signed_out"
   | "error";
 
 export interface QuoteState {
@@ -55,6 +60,8 @@ export interface QuoteState {
   previousUsd?: number;
   /** rate_limited：到这个时刻（毫秒）才放开 Retry。 */
   retryAt?: number;
+  /** input_missing：被删掉的素材的名字（服务端报错里写的）。 */
+  missing?: string[];
 }
 
 export interface QuoteDeps {
@@ -65,6 +72,10 @@ export interface QuoteDeps {
   accept(result: unknown, carry?: Partial<CardData>): boolean;
   /** 已提交后开始自己刷新。 */
   startPolling(): void;
+  /** 「Choose another file」：在卡里打开资产库重新选，选好交给模型重新报价。宿主不让卡片调工具时没有它。 */
+  chooseReplacement?(missing: string[]): void;
+  /** 「Reconnect」：请模型再调一次工具，宿主见到 401 会弹出重新连接。 */
+  reconnect(): void;
   notice(text: string): void;
   openUrl(url: string): void;
 }
@@ -82,6 +93,9 @@ export interface QuoteActions {
   editSettings(): void;
   /** 模型用不了：请模型换一个。 */
   switchModel(): void;
+  /** 素材被删了：重新选一个。 */
+  chooseAnother(missing: string[]): void;
+  reconnect(): void;
   /** 再核实一次刚才那一单开没开始。 */
   checkAgain(): void;
   topUp(): void;
@@ -118,8 +132,16 @@ function balanceIn(text: string): number | undefined {
   return Number.isFinite(value) ? (match[1] ? -value : value) : undefined;
 }
 
+/** 服务端「素材失效」那句话里的文件名：…no longer available: a.jpg, b.png (deleted from the Asset Library)。 */
+function missingNames(text: string): string[] {
+  const match = text.match(/no longer available:\s*(.+?)\s*\(deleted from the Asset Library\)/i);
+  return match ? match[1]!.split(/,\s*/).filter(Boolean) : [];
+}
+
 /** 按报错原文决定卡片显示哪种状态。 */
 export function failureState(text: string, now = Date.now()): QuoteState {
+  if (/no longer available/i.test(text) && /asset library/i.test(text)) return { phase: "input_missing", missing: missingNames(text) };
+  if (isSignedOut(text)) return { phase: "signed_out" };
   if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
   if (/insufficient balance|top up/i.test(text)) {
     const balance = balanceIn(text);
@@ -145,6 +167,8 @@ export function failureState(text: string, now = Date.now()): QuoteState {
  */
 export function thrownFailureState(error: unknown): QuoteState {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  // 宿主自己挡下的 401（请求没到工具）：没提交，直接请用户重新连接。
+  if (!/text=(['"])/.test(message) && isSignedOut(message, true)) return { phase: "signed_out" };
   if (!/text=(['"])/.test(message)) return { phase: "verifying" };
   return failureState(thrownErrorText(error));
 }
@@ -174,6 +198,10 @@ export function initialQuoteState(card: CardData, now = Date.now()): QuoteState 
       return { phase: "rate_limited", retryAt: now + RATE_LIMIT_WAIT_MS };
     case "model_unavailable":
       return { phase: "model_unavailable" };
+    case "input_missing":
+      return { phase: "input_missing", missing: quote.sample_missing ?? [] };
+    case "signed_out":
+      return { phase: "signed_out" };
   }
   return { phase: quoteExpired(quote) ? "expired" : "ready" };
 }
@@ -344,6 +372,26 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
     checkAgain: () => void verify(),
+    chooseAnother(missing) {
+      // 打开资产库重选（测试卡片打开样例资产库，选好也不发送）。
+      if (deps.chooseReplacement) {
+        deps.chooseReplacement(missing);
+        return;
+      }
+      if (sample()) {
+        deps.notice("This is a sample card, so nothing was sent.");
+        return;
+      }
+      // 宿主不让卡片调工具：请模型打开资产库。
+      const what = missing.length > 0 ? missing.join(", ") : "One of my files";
+      deps.app
+        .sendMessage({
+          role: "user",
+          content: [{ type: "text", text: `${what} is no longer in my Asset Library. Show me my Asset Library so I can choose another file.` }],
+        })
+        .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
+    },
+    reconnect: () => deps.reconnect(),
     topUp: () => deps.openUrl(BILLING_URL),
     openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
   };
@@ -385,7 +433,7 @@ function task(quote: QuoteInfo | undefined): HTMLElement[] {
       h(
         "div",
         { class: "quote-inputs", "aria-label": `${inputs.length} input file${inputs.length === 1 ? "" : "s"}` },
-        ...shown.map(inputItem),
+        ...shown.map((input) => inputItem(input)),
         inputs.length > shown.length ? h("span", { class: "quote-input-more" }, `+${inputs.length - shown.length}`) : null
       )
     );
@@ -402,7 +450,8 @@ const SOURCE_LABEL: Record<NonNullable<NonNullable<QuoteInfo["inputs"]>[number][
   chat: "From chat",
 };
 
-function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number]): HTMLElement {
+/** gone：确认时发现已从资产库删掉（设计稿 v2「素材失效」：红框 + Deleted from Asset Library）。 */
+function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number], gone = false): HTMLElement {
   const thumb = h("span", { class: "quote-input-thumb" });
   const fallback = () => thumb.replaceChildren(h("span", { html: input.kind === "image" ? ICON_IMAGE : ICON_FILE }));
   if (input.kind === "image") {
@@ -418,13 +467,17 @@ function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number]): HTMLElement
   }
   return h(
     "span",
-    { class: "quote-input", title: input.name },
+    { class: `quote-input${gone ? " gone" : ""}`, title: input.name },
     thumb,
     h(
       "span",
       { class: "quote-input-text" },
       h("span", { class: "quote-input-name" }, input.name),
-      input.source ? h("span", { class: "quote-input-source" }, SOURCE_LABEL[input.source]) : null
+      gone
+        ? h("span", { class: "quote-input-source" }, "Deleted from Asset Library")
+        : input.source
+          ? h("span", { class: "quote-input-source" }, SOURCE_LABEL[input.source])
+          : null
     )
   );
 }
@@ -605,6 +658,48 @@ export function renderQuoteCard(
         button("Open in Atlas", quote ? "secondary" : "primary", actions.openInAtlas),
         quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
       ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "input_missing") {
+    // 报错里的名字对不上卡上的素材时（比如名字被截过），至少说清楚有文件没了。
+    const missing = new Set(state.missing ?? []);
+    const inputs = quote?.inputs ?? [];
+    const count = Math.max(1, missing.size);
+    return h(
+      "section",
+      { class: "card" },
+      head(count === 1 ? "One file is no longer available" : `${count} files are no longer available`, badge("Replace file", { danger: true })),
+      quote?.prompt ? h("p", { class: "quote-prompt", title: quote.prompt }, quote.prompt) : subtitle,
+      inputs.length > 0
+        ? h("div", { class: "quote-inputs" }, ...inputs.map((input) => inputItem(input, missing.has(input.name))))
+        : null,
+      h("p", { class: "desc" }, "Choose another file to continue. Nothing was charged."),
+      h(
+        "div",
+        { class: "actions" },
+        button("Choose another file", "primary", () => actions.chooseAnother([...missing])),
+        opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "signed_out") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect, then get a new quote."),
+      h(
+        "div",
+        { class: "actions" },
+        opts.canMessage ? button("Reconnect", "primary", actions.reconnect) : null,
+        quote ? button("Get a new quote", opts.canMessage ? "secondary" : "primary", actions.requoteFresh) : null
+      ),
+      opts.canMessage ? null : h("p", { class: "note" }, "Reconnect Atlas Cloud in this app's connector settings, then get a new quote."),
       notice(opts)
     );
   }

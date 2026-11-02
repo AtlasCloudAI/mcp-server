@@ -249,7 +249,13 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
       const found = await rememberedMedia(card.quote.inputs.map((input) => input.url));
       card.quote.inputs = card.quote.inputs.map((input) => {
         const media = found.get(input.url);
-        return { ...input, name: media?.name ?? input.name, ...(media?.source ? { source: media.source } : {}) };
+        return {
+          ...input,
+          name: media?.name ?? input.name,
+          // 地址认不出类型（资产库的临时地址没有扩展名）时用取用时记下的，缩略图才画得出来。
+          ...(input.kind === "other" && media?.kind ? { kind: media.kind } : {}),
+          ...(media?.source ? { source: media.source } : {}),
+        };
       });
     }
     const note =

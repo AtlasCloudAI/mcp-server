@@ -74,8 +74,6 @@ export interface QuoteDeps {
   startPolling(): void;
   /** 「Choose another file」：在卡里打开资产库重新选，选好交给模型重新报价。宿主不让卡片调工具时没有它。 */
   chooseReplacement?(missing: string[]): void;
-  /** 「Reconnect」：请模型再调一次工具，宿主见到 401 会弹出重新连接。 */
-  reconnect(): void;
   notice(text: string): void;
   openUrl(url: string): void;
 }
@@ -95,7 +93,6 @@ export interface QuoteActions {
   switchModel(): void;
   /** 素材被删了：重新选一个。 */
   chooseAnother(missing: string[]): void;
-  reconnect(): void;
   /** 再核实一次刚才那一单开没开始。 */
   checkAgain(): void;
   topUp(): void;
@@ -391,7 +388,6 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
-    reconnect: () => deps.reconnect(),
     topUp: () => deps.openUrl(BILLING_URL),
     openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
   };
@@ -687,19 +683,16 @@ export function renderQuoteCard(
   }
 
   if (state.phase === "signed_out") {
+    // 「Reconnect」重新报一次价（不扣费，换新幂等键：上一次提交可能已经占了旧键）。ChatGPT 见到这次
+    // 调用被 401 挡下会自己弹出连接；连上之后拿到新报价，用户再确认。
     return h(
       "section",
       { class: "card" },
       head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
       subtitle,
-      h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect, then get a new quote."),
-      h(
-        "div",
-        { class: "actions" },
-        opts.canMessage ? button("Reconnect", "primary", actions.reconnect) : null,
-        quote ? button("Get a new quote", opts.canMessage ? "secondary" : "primary", actions.requoteFresh) : null
-      ),
-      opts.canMessage ? null : h("p", { class: "note" }, "Reconnect Atlas Cloud in this app's connector settings, then get a new quote."),
+      h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect to get the quote again."),
+      quote ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.requoteFresh)) : null,
+      h("p", { class: "note" }, "If no sign-in window opens, reconnect Atlas Cloud in this app's settings, then press Reconnect."),
       notice(opts)
     );
   }

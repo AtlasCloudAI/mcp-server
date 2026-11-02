@@ -5,6 +5,7 @@
 
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
+import { isSignedOut } from "./card.js";
 import { thrownErrorText } from "./quote.js";
 import { button, h } from "./view.js";
 
@@ -165,6 +166,9 @@ const FILTERS: Array<{ label: string; value: AssetFilter | undefined }> = [
 
 const FILTER_WORD: Record<AssetFilter, string> = { image: "images", video: "videos", audio: "audio", "3d": "3D models" };
 
+/** Atlas 登录失效时给人看的那句：再点一次，ChatGPT 会弹出连接（11-02 实测）。 */
+const SIGNED_OUT_TEXT = "Your Atlas Cloud sign-in expired. Try again to reconnect.";
+
 /** 资产库没开通（AssetD 回 asset_library_not_activated，服务端换成这句话）。 */
 function lockedError(text: string): boolean {
   return /asset_library_not_activated|asset library isn't activated/i.test(text);
@@ -240,6 +244,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     } catch (e) {
       const text = thrownErrorText(e);
       if (lockedError(text)) locked = true;
+      else if (isSignedOut(text, true)) error = SIGNED_OUT_TEXT;
       else error = text || "Couldn't load your assets. Try again in a moment.";
     } finally {
       loading = false;
@@ -307,7 +312,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
       if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat to use them.");
     } catch (e) {
-      deps.notice(thrownErrorText(e) || "Couldn't use these files. Try again in a moment.");
+      const text = thrownErrorText(e);
+      deps.notice(isSignedOut(text, true) ? SIGNED_OUT_TEXT : text || "Couldn't use these files. Try again in a moment.");
     } finally {
       using = false;
       changed();

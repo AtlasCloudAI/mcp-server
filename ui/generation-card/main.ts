@@ -31,7 +31,7 @@ let card: CardData | undefined;
 let pendingId: string | undefined;
 let loadError: string | undefined;
 let stalled = false;
-// 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户重新连接后点 Check again。
+// 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户点 Reconnect 再查。
 let signedOut = false;
 let refreshing = false;
 let polling = false;
@@ -409,10 +409,6 @@ const actions: CardActions = {
   switchModel() {
     sendUserMessage("That generation failed. Please suggest a different model for the same request.");
   },
-  reconnect() {
-    // 模型一调工具，宿主见到 401 就会请用户重新连接；连上后模型接着查这一条。
-    sendUserMessage(card?.prediction_id ? `Reconnect Atlas Cloud, then check generation ${card.prediction_id} again.` : "Reconnect Atlas Cloud, then check my generation again.");
-  },
 };
 
 const quoteActions = createQuoteActions({
@@ -426,7 +422,6 @@ const quoteActions = createQuoteActions({
   startPolling: () => void pollLoop(),
   notice: (text) => setNotice(text),
   openUrl: (url) => void openUrl(url),
-  reconnect: () => sendUserMessage("Reconnect Atlas Cloud, then quote this again."),
   chooseReplacement: (missing) => void chooseReplacement(missing),
 });
 

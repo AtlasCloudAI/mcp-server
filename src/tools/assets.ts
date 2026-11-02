@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ApiRequestError, api } from "../services/api-client.js";
+import { rememberAssetNames, rememberAssetUrls } from "../services/media-names.js";
 import { handleError } from "../utils/error-handler.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { clientRendersCards, generationCardEnabled } from "../apps/generation-card.js";
@@ -307,6 +308,8 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
           };
         });
 
+        await rememberAssetNames(assets);
+
         const lines = [`# Asset Library (${assets.length}${query ? ` matching "${query}"` : ""})`, ""];
         if (clientRendersCards(server)) lines.push(ASSETS_CARD_NOTE, "");
         if (items.length === 0) {
@@ -391,6 +394,7 @@ Rules:
       const ids = [...new Set(asset_ids)];
       try {
         const { resolved, missing } = await resolveAssets(ids);
+        await rememberAssetUrls(resolved);
         const lines = ["# Asset URLs", ""];
         for (const asset of resolved) {
           lines.push(`- \`${asset.asset_id}\`${asset.mime_type ? ` (${asset.mime_type})` : ""}: ${asset.url}`);

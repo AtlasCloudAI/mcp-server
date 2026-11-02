@@ -5,9 +5,9 @@
 
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
-import { isSignedOut } from "./card.js";
+import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { thrownErrorText } from "./quote.js";
-import { button, h } from "./view.js";
+import { badge, button, h, head } from "./view.js";
 
 export const ASSETS_META_KEY = "atlascloud/assets";
 const SEARCH_TOOL = "atlas_search_assets";
@@ -45,6 +45,8 @@ export interface AssetCardData {
   /** 资产库没开通（充值后才能用）。 */
   locked?: boolean;
   sample?: boolean;
+  /** 测试卡片：显示「需要重新连接」。 */
+  sample_signed_out?: boolean;
 }
 
 /** 换好地址、可以交给模型的素材。 */
@@ -166,9 +168,6 @@ const FILTERS: Array<{ label: string; value: AssetFilter | undefined }> = [
 
 const FILTER_WORD: Record<AssetFilter, string> = { image: "images", video: "videos", audio: "audio", "3d": "3D models" };
 
-/** Atlas 登录失效时给人看的那句：再点一次，ChatGPT 会弹出连接（11-02 实测）。 */
-const SIGNED_OUT_TEXT = "Your Atlas Cloud sign-in expired. Try again to reconnect.";
-
 /** 资产库没开通（AssetD 回 asset_library_not_activated，服务端换成这句话）。 */
 function lockedError(text: string): boolean {
   return /asset_library_not_activated|asset library isn't activated/i.test(text);
@@ -182,6 +181,11 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   let loading = false;
   let using = false;
   let error: string | undefined;
+  /**
+   * Atlas 登录失效了（设计稿 v2「需要重新连接」）：「Reconnect」重做失败的那一步（翻页或换地址），
+   * ChatGPT 见到这次调用被 401 挡下会自己弹出连接（11-02 实测）。选中的素材留着。
+   */
+  let reconnect: (() => void) | undefined;
   /** 选中的素材，按点选顺序。 */
   const selected = new Map<string, AssetCardItem>();
   /** 交给模型的那组编号；选择一变就清掉，按钮恢复。 */
@@ -190,6 +194,12 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   const sample = data.sample === true;
   // 测试卡片不调接口：筛选在手上的样例里做。
   const sampleItems = sample ? data.items : [];
+  if (data.sample_signed_out) {
+    reconnect = () => {
+      reconnect = undefined;
+      changed();
+    };
+  }
 
   const caps = () => deps.app.getHostCapabilities() ?? {};
   const changed = () => {
@@ -219,6 +229,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     }
     loading = true;
     error = undefined;
+    reconnect = undefined;
     filter = next.filter;
     changed();
     try {
@@ -244,7 +255,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     } catch (e) {
       const text = thrownErrorText(e);
       if (lockedError(text)) locked = true;
-      else if (isSignedOut(text, true)) error = SIGNED_OUT_TEXT;
+      else if (isSignedOut(text, true)) reconnect = () => void query(next);
       else error = text || "Couldn't load your assets. Try again in a moment.";
     } finally {
       loading = false;
@@ -281,6 +292,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       return;
     }
     using = true;
+    reconnect = undefined;
     changed();
     try {
       const result = await deps.app.callServerTool({ name: USE_TOOL, arguments: { asset_ids: picks.map((p) => p.asset_id) } });
@@ -313,7 +325,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat to use them.");
     } catch (e) {
       const text = thrownErrorText(e);
-      deps.notice(isSignedOut(text, true) ? SIGNED_OUT_TEXT : text || "Couldn't use these files. Try again in a moment.");
+      if (isSignedOut(text, true)) reconnect = () => void use();
+      else deps.notice(text || "Couldn't use these files. Try again in a moment.");
     } finally {
       using = false;
       changed();
@@ -462,6 +475,18 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     if (locked) {
       return h("section", { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` }, title, lockedState(), notice ? h("p", { class: "note", role: "status" }, notice) : null);
     }
+    if (reconnect) {
+      const actions = [button("Reconnect", "primary", reconnect, { small: true })];
+      if (deps.onCancel) actions.push(button("Cancel", "secondary", deps.onCancel, { small: true }));
+      return h(
+        "section",
+        { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
+        head("Asset Library", badge("Signed out", { warn: true }), opts.fullscreen),
+        emptyState(ICON_LINK, "Reconnect Atlas Cloud", "Your Atlas Cloud sign-in expired. Reconnect to keep using your Asset Library.", actions),
+        h("p", { class: "note" }, RECONNECT_NOTE),
+        notice ? h("p", { class: "note", role: "status" }, notice) : null
+      );
+    }
     const body =
       data.items.length > 0
         ? h("ul", { class: "asset-grid" }, ...shown.map(tile))
@@ -503,7 +528,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
 }
 
 const ICON_LOCK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 10V7.5a4.5 4.5 0 0 1 9 0V10h.5c.8 0 1.5.7 1.5 1.5v7c0 .8-.7 1.5-1.5 1.5H7c-.8 0-1.5-.7-1.5-1.5v-7c0-.8.7-1.5 1.5-1.5h.5zm1.8 0h5.4V7.5a2.7 2.7 0 0 0-5.4 0V10z" fill="currentColor"/></svg>';
-const ICON_SEARCH = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+const ICON_LINK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.2 13.8a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.1 1.1m-1.9 4a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.1-1.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_SEARCH ='<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.5" fill="currentColor"/><path d="m4.8 8.2 2.1 2.1 4.3-4.4" fill="none" style="stroke:var(--ac-primary-text,#fff)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICONS: Record<AssetKind, string> = {
   image: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>',

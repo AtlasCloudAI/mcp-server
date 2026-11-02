@@ -8,6 +8,7 @@ import {
   type CardData,
   type QuoteInfo,
   RATE_LIMIT_WAIT_MS,
+  RECONNECT_NOTE,
   formatClock,
   formatUsd,
   isModelUnavailable,
@@ -708,7 +709,7 @@ export function renderQuoteCard(
       subtitle,
       h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect to get the quote again."),
       quote ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.requoteFresh)) : null,
-      h("p", { class: "note" }, "If no sign-in window opens, reconnect Atlas Cloud in this app's settings, then press Reconnect."),
+      h("p", { class: "note" }, RECONNECT_NOTE),
       notice(opts)
     );
   }

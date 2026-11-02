@@ -15,6 +15,8 @@ import { filesForModel } from "../ui/generation-card/upload.js";
 let fake: Server;
 let lastListQuery = "";
 const sourceUrlBodies: string[][] = [];
+/** 每次换地址都给新的签名参数，像真的 AssetD 一样：同一素材两次换到的地址不同。 */
+let signature = 0;
 /** 打开后列表接口回旧版 kubedl 的 401（白名单还没放开资产库）。 */
 let rejectScoped = false;
 /** 打开后列表、取地址接口回 AssetD 的 403 asset_library_not_activated（资产库二期：充值后才能用）。 */
@@ -105,7 +107,7 @@ before(async () => {
             data: {
               items: ids.map((id) => ({
                 asset_id: id,
-                source_url: `https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/${id}?Expires=1`,
+                source_url: `https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/${id}?Expires=${++signature}`,
                 expires_at: "2026-10-28T09:18:42Z",
                 mime_type: id === VIDEO.asset_id ? "video/mp4" : "image/jpeg",
               })),
@@ -266,6 +268,47 @@ test("搜索：能按 3D 筛（资产库二期），卡片里的类型也是 3d"
   const card = (result._meta as Record<string, { media_type?: string; items: Array<{ kind: string; label: string }> }>)["atlascloud/assets"];
   assert.equal(card?.media_type, "3d");
   assert.deepEqual(card?.items.map((item) => [item.kind, item.label]), [["3d", "sneaker-model.glb"]]);
+});
+
+test("确认生成前：资产库素材换新地址（令牌按旧地址核对）；被删掉的报素材失效，其余链接不动", async () => {
+  const { refreshLibraryInputs, replaceUrls } = await import("../src/tools/assets.js");
+  const { rememberAssetNames, rememberAssetUrls } = await import("../src/services/media-names.js");
+  const deleted = "asset_deleted000000000000000000000002";
+  await rememberAssetNames([
+    { asset_id: IMAGE.asset_id, name: "sneaker-front.jpg" },
+    { asset_id: deleted, name: "sneaker-side.jpg" },
+  ]);
+  // 报价时用的地址：15 分钟前换的，已经过期。
+  const stale = "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/front?Expires=0";
+  const staleDeleted = "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/side?Expires=0";
+  await rememberAssetUrls([
+    { asset_id: IMAGE.asset_id, url: stale },
+    { asset_id: deleted, url: staleDeleted },
+  ]);
+  const publicLink = "https://cdn.example.com/kept.jpg";
+
+  const params = { prompt: "a sneaker", image: stale, reference_images: [stale, publicLink] };
+  const refreshed = await refreshLibraryInputs(params);
+  assert.equal(refreshed.ok, true);
+  if (!refreshed.ok) return;
+  const fresh = refreshed.params.image as string;
+  assert.match(fresh, new RegExp(`/${IMAGE.asset_id}\\?Expires=\\d+$`));
+  assert.deepEqual(refreshed.params.reference_images, [fresh, publicLink]);
+  assert.equal(refreshed.params.prompt, "a sneaker");
+  // 换回去就是报价时的请求：确认令牌照样对得上。
+  assert.deepEqual(replaceUrls(refreshed.params, refreshed.original), params);
+
+  const gone = await refreshLibraryInputs({ reference_images: [stale, staleDeleted] });
+  assert.equal(gone.ok, false);
+  if (gone.ok) return;
+  assert.match(gone.message, /An input file is no longer available: sneaker-side\.jpg \(deleted from the Asset Library\)/);
+  assert.match(gone.message, /Nothing was submitted or charged/);
+
+  // 不是资产库来的链接：原样提交，也不去问资产库。
+  sourceUrlBodies.length = 0;
+  const plain = await refreshLibraryInputs({ image: publicLink });
+  assert.deepEqual(plain, { ok: true, params: { image: publicLink }, original: new Map() });
+  assert.deepEqual(sourceUrlBodies, []);
 });
 
 test("编号格式不对的在参数校验就拦下", async () => {

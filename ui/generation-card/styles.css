@@ -1357,3 +1357,13 @@ button.history-row:focus-visible {
 .upload-more-btn:hover {
   color: var(--ac-text-2);
 }
+
+/* 报价卡「素材失效」：被删掉的那个素材红框、红字 */
+.quote-input.gone {
+  box-shadow: inset 0 0 0 1px var(--ac-danger-text);
+  background: var(--ac-danger-bg);
+}
+
+.quote-input.gone .quote-input-source {
+  color: var(--ac-danger-text);
+}

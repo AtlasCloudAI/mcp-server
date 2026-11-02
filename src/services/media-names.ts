@@ -52,23 +52,27 @@ export type MediaSource = "library" | "upload" | "chat";
 export interface RememberedMedia {
   name: string;
   source?: MediaSource;
+  /** 资产库素材的编号：确认生成前按它换新地址、查它还在不在。 */
+  assetId?: string;
 }
 
 const SOURCES = new Set<string>(["library", "upload", "chat"]);
 
-// 带来源时存成 {"name","source"}；只有名字时照旧存原文，老记录也照旧读。
-function encode(name: string, source: MediaSource | undefined): string {
-  return source ? JSON.stringify({ name, source }) : name;
+// 带来源或编号时存成 {"name","source","asset_id"}；只有名字时照旧存原文，老记录也照旧读。
+function encode(name: string, extra: Omit<RememberedMedia, "name">): string {
+  if (!extra.source && !extra.assetId) return name;
+  return JSON.stringify({ name, ...(extra.source ? { source: extra.source } : {}), ...(extra.assetId ? { asset_id: extra.assetId } : {}) });
 }
 
 function decode(value: string): RememberedMedia {
   if (value.startsWith("{")) {
     try {
-      const parsed = JSON.parse(value) as { name?: unknown; source?: unknown };
+      const parsed = JSON.parse(value) as { name?: unknown; source?: unknown; asset_id?: unknown };
       if (typeof parsed.name === "string" && parsed.name) {
         return {
           name: parsed.name,
           ...(typeof parsed.source === "string" && SOURCES.has(parsed.source) ? { source: parsed.source as MediaSource } : {}),
+          ...(typeof parsed.asset_id === "string" && parsed.asset_id ? { assetId: parsed.asset_id } : {}),
         };
       }
     } catch {
@@ -78,17 +82,17 @@ function decode(value: string): RememberedMedia {
   return { name: value };
 }
 
-/** 记下一个素材地址的原文件名（和来源）。记不下来不影响上传本身。 */
+/** 记下一个素材地址的原文件名（和来源、资产编号）。记不下来不影响上传本身。 */
 export async function rememberMediaName(
   url: string,
   name: string,
   store?: UploadTicketStore,
-  source?: MediaSource
+  extra: Omit<RememberedMedia, "name"> = {}
 ): Promise<void> {
   const cleaned = name.trim().slice(0, MAX_NAME_LENGTH);
   if (!url || !cleaned) return;
   try {
-    await withTimeout(storeFor(store).put(keyOf(url), encode(cleaned, source), TTL_SECONDS));
+    await withTimeout(storeFor(store).put(keyOf(url), encode(cleaned, extra), TTL_SECONDS));
   } catch {
     // 只是显示名
   }
@@ -128,7 +132,7 @@ export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: s
   await Promise.all(
     assets.map(async (asset) => {
       const name = names.get(assetKey(asset.asset_id));
-      if (name) await rememberMediaName(asset.url, name, undefined, "library");
+      if (name) await rememberMediaName(asset.url, name, undefined, { source: "library", assetId: asset.asset_id });
     })
   );
 }

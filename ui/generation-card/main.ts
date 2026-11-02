@@ -8,12 +8,13 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
-import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, newIdempotencyKey } from "./card.js";
+import { handOff } from "./handoff.js";
+import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
-import { type AssetCardData, type Library, type LibraryDeps, assetsFromToolResult, createLibrary } from "./assets.js";
+import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -30,6 +31,8 @@ let card: CardData | undefined;
 let pendingId: string | undefined;
 let loadError: string | undefined;
 let stalled = false;
+// 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户重新连接后点 Check again。
+let signedOut = false;
 let refreshing = false;
 let polling = false;
 let pollStartedAt = Date.now();
@@ -60,6 +63,7 @@ function viewOptions(): ViewOptions {
     canRefresh: sample || caps.serverTools !== undefined,
     canMessage: sample || caps.message !== undefined,
     stalled,
+    signedOut: signedOut || card?.sample_signed_out === true,
     refreshing,
     notice,
   };
@@ -203,8 +207,9 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   // 显示「待结算」（需求文档 6.3）。老网关没有 charge_status，照旧沿用。
   else if (parsed.charge_status !== undefined && !UNSETTLED_STATES.has(parsed.state)) delete next.price_usd;
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
-  card = card?.sample ? { ...next, sample: true } : next;
+  card = card?.sample ? { ...next, sample: true, ...(card.sample_signed_out ? { sample_signed_out: true } : {}) } : next;
   loadError = undefined;
+  signedOut = false;
   if (card.state === "quote") watchQuote(card);
   render();
   return true;
@@ -236,13 +241,15 @@ async function refreshOnce(): Promise<void> {
   try {
     const result = await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: card.prediction_id } });
     if (result.isError) {
-      const text = result.content?.find((c) => c.type === "text");
-      setNotice(text && "text" in text ? String(text.text).slice(0, 160) : "Couldn't refresh. Try again in a moment.");
+      const text = errorTextOf(result);
+      if (isSignedOut(text)) signedOut = true;
+      else setNotice(text ? text.slice(0, 160) : "Couldn't refresh. Try again in a moment.");
     } else {
       accept(result);
     }
-  } catch {
-    setNotice("Couldn't refresh. Try again in a moment.");
+  } catch (error) {
+    if (isSignedOut(error instanceof Error ? error.message : String(error), true)) signedOut = true;
+    else setNotice("Couldn't refresh. Try again in a moment.");
   } finally {
     refreshing = false;
     render();
@@ -270,9 +277,15 @@ async function pollLoop(): Promise<void> {
           arguments: { prediction_id: card.prediction_id },
         });
         failed = result.isError === true || !accept(result);
-      } catch {
-        // 网络抖一下不算失败，歇一会儿下一轮再试
+        if (result.isError && isSignedOut(errorTextOf(result))) signedOut = true;
+      } catch (error) {
+        // 网络抖一下不算失败，歇一会儿下一轮再试；登录失效了就停下，等用户重新连接。
         failed = true;
+        if (isSignedOut(error instanceof Error ? error.message : String(error), true)) signedOut = true;
+      }
+      if (signedOut) {
+        render();
+        return;
       }
       // 服务端本身会等一会儿再回答，正常情况只补足最小间隔；出错时多歇几秒。
       const gap = MIN_POLL_GAP_MS - (Date.now() - started);
@@ -281,6 +294,12 @@ async function pollLoop(): Promise<void> {
   } finally {
     polling = false;
   }
+}
+
+/** 工具错误结果里的那句话。 */
+function errorTextOf(result: { content?: Array<{ type: string; text?: unknown }> }): string {
+  const text = result.content?.find((c) => c.type === "text");
+  return text && typeof text.text === "string" ? text.text : "";
 }
 
 async function openUrl(url: string): Promise<void> {
@@ -363,6 +382,7 @@ const actions: CardActions = {
     requestMode("inline");
   },
   refresh() {
+    signedOut = false;
     void refreshOnce().then(() => pollLoop());
   },
   keepWaiting() {
@@ -389,6 +409,10 @@ const actions: CardActions = {
   switchModel() {
     sendUserMessage("That generation failed. Please suggest a different model for the same request.");
   },
+  reconnect() {
+    // 模型一调工具，宿主见到 401 就会请用户重新连接；连上后模型接着查这一条。
+    sendUserMessage(card?.prediction_id ? `Reconnect Atlas Cloud, then check generation ${card.prediction_id} again.` : "Reconnect Atlas Cloud, then check my generation again.");
+  },
 };
 
 const quoteActions = createQuoteActions({
@@ -402,7 +426,65 @@ const quoteActions = createQuoteActions({
   startPolling: () => void pollLoop(),
   notice: (text) => setNotice(text),
   openUrl: (url) => void openUrl(url),
+  reconnect: () => sendUserMessage("Reconnect Atlas Cloud, then quote this again."),
+  chooseReplacement: (missing) => void chooseReplacement(missing),
 });
+
+/**
+ * 报价卡「素材失效」里的「Choose another file」：全屏打开资产库重选。选好的交给模型，请它换掉
+ * 被删的那个、重新报价（旧报价什么都没提交）。宿主不让卡片调工具时退回请模型打开资产库。
+ */
+async function chooseReplacement(missing: string[]): Promise<void> {
+  const sample = card?.sample === true;
+  if (!sample && hostCaps().serverTools === undefined) {
+    sendUserMessage(`${missing.join(", ") || "One of my files"} is no longer in my Asset Library. Show me my Asset Library so I can choose another file.`);
+    return;
+  }
+  let initial: AssetCardData | undefined;
+  if (sample) {
+    try {
+      initial = assetsFromToolResult(await app.callServerTool({ name: "atlas_card_selftest", arguments: { variant: "assets" } }));
+    } catch {
+      initial = undefined;
+    }
+    if (!initial) {
+      setNotice("This is a sample card, so there is no Asset Library to open.");
+      return;
+    }
+  }
+  const gone = missing.length > 0 ? missing.join(", ") : "the deleted file";
+  library = createLibrary(
+    initial,
+    libraryDeps({
+      onCancel: closeLibrary,
+      onPicked(picked) {
+        closeLibrary();
+        if (sample) {
+          setNotice("This is a sample card, so nothing was sent.");
+          return;
+        }
+        const labels = picked.map((a) => a.label).join(", ");
+        const forModel =
+          `${gone} was deleted from the user's Asset Library, so the last quote was not submitted and nothing was charged. ` +
+          `Use the file${picked.length === 1 ? "" : "s"} below in its place and quote again before generating.\n` +
+          assetsForModel(picked);
+        void handOff(app, forModel, {
+          short: `I picked ${labels} to replace ${gone}. Please quote again with ${picked.length === 1 ? "it" : "them"}.`,
+          ask: "Please quote again with the new file.",
+        }).then((outcome) => {
+          if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
+          if (outcome === "failed" || outcome === "unsupported") setNotice("Couldn't pass the file on. Tell the chat which file to use instead.");
+        });
+      },
+      uploadInstead() {
+        closeLibrary();
+        void switchToUpload();
+      },
+    })
+  );
+  requestMode("fullscreen");
+  render(true);
+}
 
 // ---- 历史列表卡 ----
 

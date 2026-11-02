@@ -43,6 +43,7 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
+import { refreshLibraryInputs } from "./assets.js";
 
 type GenType = "Image" | "Video" | "Audio";
 
@@ -346,6 +347,16 @@ Returns:
           resolved_model: foundModel.model,
           request_body: requestBody,
         };
+        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。令牌照旧按报价时的
+        // requestBody 核对，提交的是换好地址的这一份。
+        let submitBody = requestBody;
+        if (confirmation_token || confirmed) {
+          const inputs = await refreshLibraryInputs(requestBody);
+          if (!inputs.ok) {
+            return { isError: true, content: [{ type: "text", text: inputs.message }] };
+          }
+          submitBody = inputs.params as typeof requestBody;
+        }
 
         // Step 4: Quote without submitting, or verify the prior quote.
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
@@ -406,7 +417,7 @@ Returns:
           () =>
             generationApi<PredictionResponse>(endpoint, {
               method: "POST",
-              body: requestBody,
+              body: submitBody,
               responseSchema: predictionResponseSchema,
               ...idempotencyHeaders(submitKey),
             })

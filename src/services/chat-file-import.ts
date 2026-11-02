@@ -399,8 +399,11 @@ export async function importChatFiles(
       const result = await uploadMediaBuffer(bytes, fileName, options.apiKey, {
         ...(options.uploadFetcher ? { fetcher: options.uploadFetcher } : {}),
       });
-      // 存进 Atlas 的地址里是随机编号；记下聊天里的原文件名，报价卡按它显示（media-names.ts）。
-      await rememberMediaName(result.data.download_url, safeBaseName(file.file_name) ?? fileName);
+      // 存进 Atlas 的地址里是随机编号；记下聊天里的原文件名，报价卡按它显示，并标上「From chat」（media-names.ts）。
+      await rememberMediaName(result.data.download_url, safeBaseName(file.file_name) ?? fileName, undefined, {
+        source: "chat",
+        kind: mediaType,
+      });
       imported.push({
         file_id: file.file_id,
         file_name: fileName,

@@ -289,7 +289,10 @@ function historySample(): HistoryCardData {
 const MB = 1_048_576;
 const FRONT = { name: "sneaker-front.jpg", size_bytes: Math.round(2.4 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-01.jpg` } as const;
 const SIDE = { name: "sneaker-side.jpg", size_bytes: Math.round(1.8 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-02.jpg` } as const;
-const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boolean; overflow?: { picked: number; added: number } }> = {
+const UPLOAD_VARIANTS: Record<
+  string,
+  { files: UploadSampleFile[]; expired?: boolean; signedOut?: boolean; overflow?: { picked: number; added: number } }
+> = {
   upload: { files: [] },
   upload_uploading: {
     files: [
@@ -306,6 +309,8 @@ const UPLOAD_VARIANTS: Record<string, { files: UploadSampleFile[]; expired?: boo
   },
   upload_failed: { files: [{ ...FRONT, status: "failed", error: "Upload failed" }] },
   upload_expired: { files: [{ ...FRONT, status: "uploading", progress: 0 }], expired: true },
+  // 传到一半 Atlas 登录失效了：换地址被拒，等用户重新连接（设计稿 v2「需要重新连接」）。
+  upload_signed_out: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "uploading", progress: 0 }], signedOut: true },
   // 一次选了 12 个：只收前 10 个（设计稿 v2「超出数量上限」）。
   upload_too_many: {
     files: Array.from({ length: 10 }, (_, i) => ({ ...(i % 2 ? SIDE : FRONT), name: `product-${i + 1}.jpg`, status: "done" as const })),
@@ -324,17 +329,20 @@ function uploadSample(variant: string): UploadCardData {
     sample: true,
     sample_files: sample.files,
     ...(sample.expired ? { sample_expired: true } : {}),
+    ...(sample.signedOut ? { sample_signed_out: true } : {}),
     ...(sample.overflow ? { sample_overflow: sample.overflow } : {}),
   };
 }
 
 // 资产库卡：设计稿「全屏视图」里的「从资产库选取」和「资产库为空」。示例素材是公开的产品图。
-// assets_no_match：搜「red sneaker」没找到；assets_locked：资产库没开通（充值后才能用）。
-const ASSET_VARIANTS = ["assets", "assets_empty", "assets_no_match", "assets_locked"] as const;
+// assets_no_match：搜「red sneaker」没找到；assets_locked：资产库没开通（充值后才能用）；
+// assets_signed_out：Atlas 登录失效了，点 Reconnect 后显示样例素材。
+const ASSET_VARIANTS = ["assets", "assets_empty", "assets_no_match", "assets_locked", "assets_signed_out"] as const;
 
 function assetsSample(variant: string): AssetCardData {
   const day = 86_400_000;
   if (variant === "assets_locked") return { view: "assets", items: [], max_pick: ASSETS_MAX_PICK, locked: true, sample: true };
+  if (variant === "assets_signed_out") return { ...assetsSample("assets"), sample_signed_out: true };
   if (variant === "assets_no_match") return { view: "assets", query: "red sneaker", items: [], max_pick: ASSETS_MAX_PICK, sample: true };
   const items: AssetCardItem[] =
     variant === "assets_empty"

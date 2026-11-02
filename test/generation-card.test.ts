@@ -333,6 +333,25 @@ test("测试卡片：两个开关都开才注册，不调接口，结果标成�
   }
 });
 
+test("测试卡片：上传卡和资产库卡都有「需要重新连接」的样例", async () => {
+  const restore = withEnv({ MCP_UI_CARDS: "1", MCP_UI_SELFTEST: "1" });
+  const { client, close } = await connect({ rendersCards: true });
+  const metaOf = (result: unknown, key: string) =>
+    ((result as { _meta?: Record<string, unknown> })._meta?.[key] ?? {}) as Record<string, unknown>;
+  try {
+    const upload = metaOf(await client.callTool({ name: "atlas_card_selftest", arguments: { variant: "upload_signed_out" } }), "atlascloud/upload");
+    assert.equal(upload.sample_signed_out, true);
+    assert.equal((upload.sample_files as unknown[]).length, 2);
+
+    const assets = metaOf(await client.callTool({ name: "atlas_card_selftest", arguments: { variant: "assets_signed_out" } }), "atlascloud/assets");
+    assert.equal(assets.sample_signed_out, true);
+    assert.ok((assets.items as unknown[]).length > 0, "点 Reconnect 后要有样例素材可看");
+  } finally {
+    await close();
+    restore();
+  }
+});
+
 test("卡片媒体来源：默认生产来源（含资产库的桶），可用 MCP_UI_MEDIA_DOMAINS 追加（test 的 dev 桶）", async () => {
   const { cardMediaDomains } = await import("../src/apps/generation-card.js");
   assert.deepEqual(cardMediaDomains({}), [

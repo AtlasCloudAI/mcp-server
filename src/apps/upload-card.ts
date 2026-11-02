@@ -37,6 +37,8 @@ export interface UploadCardData {
   sample_expired?: boolean;
   /** 测试卡片：一次选多了（设计稿 v2「超出数量上限」）。 */
   sample_overflow?: { picked: number; added: number };
+  /** 测试卡片：换地址时 Atlas 登录已失效（设计稿 v2「需要重新连接」）。 */
+  sample_signed_out?: boolean;
 }
 
 export function uploadCardData(issued: { uploadUrl: string; expiresAt: number; maxBytes: number }): UploadCardData {

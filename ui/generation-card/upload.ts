@@ -6,6 +6,7 @@
 
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { PickedAsset } from "./assets.js";
+import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
@@ -34,6 +35,8 @@ export interface UploadCardData {
   }>;
   sample_expired?: boolean;
   sample_overflow?: { picked: number; added: number };
+  /** 测试卡片：换地址时 Atlas 登录已失效（「需要重新连接」）。 */
+  sample_signed_out?: boolean;
 }
 
 export interface UploadItem {
@@ -231,8 +234,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }));
   // linkExpired：手上的地址不能用了，要换；gaveUp：自动换了几次都没换到，显示「过期」等用户点。
   // 分开是为了自动重试那一两秒里卡片照常显示上传中，不闪一下「过期」。
-  let linkExpired = initial.sample_expired === true;
-  let gaveUp = initial.sample_expired === true;
+  let linkExpired = initial.sample_expired === true || initial.sample_signed_out === true;
+  let gaveUp = linkExpired;
+  /**
+   * 换地址时 Atlas 登录失效了（设计稿 v2「需要重新连接」）。中转回 401 时卡片去换地址，换地址的
+   * 工具也被拒，就是用户掉线了；「Reconnect」再换一次，ChatGPT 会自己弹出连接（11-02 实测）。
+   */
+  let signedOut = initial.sample_signed_out === true;
   let renewing: Promise<boolean> | undefined;
   let renewals = 0;
   let lastRenewAt = 0;
@@ -327,6 +335,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         if (result.isError) {
           const text = (result.content ?? []).find((block) => block.type === "text");
           renewError = (text && "text" in text ? String(text.text) : "").replace(/^Error:\s*/, "").slice(0, 200) || "Atlas Cloud returned an error";
+          signedOut = isSignedOut(renewError);
           return false;
         }
         const next = uploadFromToolResult(result);
@@ -337,12 +346,14 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         data = { ...next, max_files: data.max_files };
         linkExpired = false;
         gaveUp = false;
+        signedOut = false;
         renewError = undefined;
         lastRenewAt = Date.now();
         return true;
       })
       .catch((error: unknown) => {
         renewError = thrownErrorText(error) || "Couldn't reach Atlas Cloud";
+        signedOut = isSignedOut(renewError, true);
         return false;
       })
       .finally(() => {
@@ -351,9 +362,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     return renewing;
   }
 
-  /** 换地址，失败了隔一会儿再试一次。 */
+  /** 换地址，失败了隔一会儿再试一次。掉线了不再试：再调一次 ChatGPT 会再弹一次连接框。 */
   async function renew(): Promise<boolean> {
     if (await renewOnce()) return true;
+    if (signedOut) return false;
     console.warn(`[atlas upload card] couldn't get a new upload link: ${renewError ?? "unknown"}; retrying`);
     await new Promise((resolve) => setTimeout(resolve, RENEW_RETRY_DELAY_MS));
     return renewOnce();
@@ -485,7 +497,8 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     void renew().then((ok) => {
       changed();
       if (!ok) {
-        deps.notice("Couldn't get a new upload link. Try again, or ask in the chat to upload again.");
+        // 掉线时卡片本身就是「Reconnect」，不用再提示一句。
+        if (!signedOut) deps.notice("Couldn't get a new upload link. Try again, or ask in the chat to upload again.");
         return;
       }
       void pump();
@@ -563,7 +576,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   function subText(item: UploadItem): string {
     if (item.asset_id) return "From Asset Library";
     const size = formatBytes(item.size);
-    if (linkExpired && (item.status === "queued" || item.status === "uploading")) return `${size} · Waiting for a new link`;
+    if (linkExpired && (item.status === "queued" || item.status === "uploading")) {
+      return `${size} · ${signedOut ? "Waiting to reconnect" : "Waiting for a new link"}`;
+    }
     switch (item.status) {
       case "queued":
         return `${size} · Waiting`;
@@ -692,7 +707,16 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       handed ? button("Added to chat", variant, () => undefined, { disabled: true }) : button(useLabel, variant, () => void useFiles());
 
     let body: (HTMLElement | null)[];
-    if (phase === "expired") {
+    if (phase === "expired" && signedOut) {
+      // 选过的文件留在卡上，重新连上后接着传。
+      body = [
+        head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+        h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so these files haven't finished uploading. Reconnect and they'll upload again."),
+        items.length > 0 ? list() : null,
+        h("div", { class: "actions" }, button("Reconnect", "primary", uploadAgain)),
+        h("p", { class: "note" }, RECONNECT_NOTE),
+      ];
+    } else if (phase === "expired") {
       // 选过的文件留在卡上：用户要看得出是哪几个文件在等，点「Upload again」会接着传它们。
       body = [
         head("Upload link expired", badge("Expired")),

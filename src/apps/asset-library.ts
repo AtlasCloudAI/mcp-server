@@ -41,6 +41,8 @@ export interface AssetCardData {
   locked?: boolean;
   /** 测试卡片：只显示，不真的换地址。 */
   sample?: boolean;
+  /** 测试卡片：显示「需要重新连接」。 */
+  sample_signed_out?: boolean;
 }
 
 /** 模型在卡片打开时看到的说明：让用户在卡里挑，挑好的地址会自己回来。 */

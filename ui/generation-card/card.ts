@@ -289,6 +289,9 @@ export function isSignedOut(text: string | undefined, fromHost = false): boolean
   return fromHost && /\b401\b|unauthori[sz]ed|authentication required|login required|sign[- ]?in (?:has )?expired/i.test(text);
 }
 
+/** 「需要重新连接」各张卡底下那句：不是每个宿主都会自己弹出连接。 */
+export const RECONNECT_NOTE = "If no sign-in window opens, reconnect Atlas Cloud in this app's settings, then press Reconnect.";
+
 export function isActive(state: CardState): boolean {
   return state === "queued" || state === "running" || state === "transfer_pending";
 }

@@ -6,6 +6,7 @@ import {
   type CardMedia,
   KIND_LABEL,
   RATE_LIMIT_WAIT_MS,
+  RECONNECT_NOTE,
   fileNameOf,
   formatClock,
   formatElapsed,
@@ -302,7 +303,7 @@ function signedOutCard(card: CardData, opts: ViewOptions, actions: CardActions):
     ),
     h("div", { class: "rows" }, row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })),
     opts.canRefresh ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.refresh, { disabled: opts.refreshing })) : null,
-    h("p", { class: "note" }, "If no sign-in window opens, reconnect Atlas Cloud in this app's settings, then press Reconnect."),
+    h("p", { class: "note" }, RECONNECT_NOTE),
     notice(opts)
   );
 }

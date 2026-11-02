@@ -43,10 +43,12 @@ const VARIANTS = [
   "upload_failed",
   "upload_expired",
   "upload_too_many",
+  "upload_signed_out",
   "assets",
   "assets_empty",
   "assets_no_match",
   "assets_locked",
+  "assets_signed_out",
 ];
 
 // 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，
@@ -59,6 +61,9 @@ const UPLOAD_MOCKS = {
   // 卡片换地址时 ChatGPT 那样直接抛错：第一次抛、自动重试成功；或者一直抛。
   "upload-renew-retry": "renew-retry",
   "upload-renew-fails": "renew-fails",
+  // 传的时候 Atlas 登录失效：中转回 401，换地址时 ChatGPT 回「Connector authorization required」
+  // （用户没在连接框里点允许）；点 Reconnect 再换就换到了。
+  "upload-signed-out": "signed-out",
 };
 
 function mockUploadCaller(mode) {
@@ -73,6 +78,11 @@ function mockUploadCaller(mode) {
   let calls = 0;
   return async () => {
     const n = calls++;
+    if (mode === "signed-out") {
+      if (n === 0) return withUrl("rejected");
+      if (n === 1) throw chatgptStyleError("Connector authorization required");
+      return withUrl("ok");
+    }
     if (mode === "renew-retry" || mode === "renew-fails") {
       if (n === 0) return withUrl("expired");
       if (mode === "renew-fails" || n === 1) throw chatgptStyleError("Error: simulated failure while issuing an upload URL");
@@ -86,15 +96,20 @@ function mockUploadCaller(mode) {
 //   assets-pick          模型搜出来的资产库卡：选了点 Use，交给模型
 //   upload-from-library  上传卡里点「Choose from Asset Library」：全屏选，回到上传卡
 //   assets-empty-upload  资产库为空：「Upload from device」换成上传卡
+//   assets-signed-out    卡片自己第一次调工具（换筛选、点 Use）时 Atlas 登录失效，点 Reconnect 后正常
 const ASSET_MOCKS = {
   "assets-pick": { tool: "atlas_search_assets", empty: false },
   "upload-from-library": { tool: "atlas_get_upload_url", empty: false },
   "assets-empty-upload": { tool: "atlas_search_assets", empty: true },
+  "assets-signed-out": { tool: "atlas_search_assets", empty: false, signedOut: true },
 };
 
-function mockAssetsCaller(empty) {
+function mockAssetsCaller(empty, signedOut = false) {
   const upload = mockUploadCaller("ok");
+  let calls = 0;
   return async (name, args) => {
+    // 第一次是宿主把卡片打开那次调用；卡片自己的第一次调用被挡下。
+    if (signedOut && calls++ === 1) throw chatgptStyleError("Connector authorization required");
     if (name === "atlas_get_upload_url") return upload();
     if (name === "atlas_search_assets") {
       const result = await callTool("atlas_card_selftest", { variant: empty ? "assets_empty" : "assets" });
@@ -401,7 +416,7 @@ async function renderAll() {
     if (only && only !== label) continue;
     const pane = hostFrame(`mock · ${label}`);
     grid.append(pane);
-    jobs.push(mountCard(pane.querySelector(".slot"), mock.tool, {}, mockAssetsCaller(mock.empty)));
+    jobs.push(mountCard(pane.querySelector(".slot"), mock.tool, {}, mockAssetsCaller(mock.empty, mock.signedOut)));
   }
   for (const [label, mode] of Object.entries(UPLOAD_MOCKS)) {
     if (only && only !== label) continue;

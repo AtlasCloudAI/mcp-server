@@ -285,6 +285,7 @@ test("卡片前端：提交没拿到确定的回答时先核实，服务端明�
   const wrap = (text: string) =>
     new Error(`Error calling MCP tool: [TextContent(type='text', text="${text}", annotations=None, meta=None)]`);
   // 服务端给结果不明的提交加的那句话（src/utils/error-handler.ts）。
+  assert.deepEqual(failureState("A request with this idempotency key is still in progress"), { phase: "already_running" });
   const unconfirmed =
     "Error: Atlas Cloud didn't answer in time. The request ended without a confirmed response, so it may already have gone through. Check recent predictions or billing before sending it again.";
   assert.deepEqual(failureState(unconfirmed.replace(/^Error:\s*/, "")), { phase: "verifying" });

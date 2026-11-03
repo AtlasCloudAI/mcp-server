@@ -25,6 +25,8 @@ export interface CardActions {
   download(media: CardMedia): void;
   /** 多个结果一起下载（设计稿「Download all」）。 */
   downloadAll(media: CardMedia[]): void;
+  retryDownload(): void;
+  stopWaiting(): void;
   /** 「View in Atlas」「View request」：在 Atlas 打开这一单。 */
   openInAtlas(): void;
   /** 「View all N」：宿主支持时全屏看全部结果。 */
@@ -45,6 +47,8 @@ export interface ViewOptions {
   canMessage: boolean;
   /** 卡片自己等了很久还没结果：显示「Still generating」。 */
   stalled: boolean;
+  stopped: boolean;
+  downloadFailed: boolean;
   /** 刷新时发现 Atlas 登录失效了：显示「Reconnect Atlas Cloud」，停止自己刷新。 */
   signedOut: boolean;
   /** 正在刷新：刷新按钮置灰。 */
@@ -240,6 +244,12 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
   // 设计稿 v2：排队中、生成中加「View in Atlas」，可以去 Atlas 看这条记录。
   const viewInAtlas = button("View in Atlas", "secondary", actions.openInAtlas);
 
+  if (opts.stopped) {
+    return h("section", { class: "card" }, head(title, badge("Stopped waiting")),
+      h("p", { class: "desc" }, "You stopped waiting. The task may still be running."),
+      h("div", { class: "actions" }, button("Check again", "primary", actions.refresh)));
+  }
+
   if (opts.stalled) {
     return h(
       "section",
@@ -281,7 +291,7 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
       ? h("p", { class: "desc" }, "Your file is ready and is being saved to Atlas.")
       : null,
     h("div", { class: "rows" }, ...rows),
-    h("div", { class: "actions" }, refresh, viewInAtlas),
+    h("div", { class: "actions" }, refresh, viewInAtlas, opts.canRefresh ? button("Stop waiting", "secondary", actions.stopWaiting) : null),
     notice(opts)
   );
 }
@@ -814,7 +824,12 @@ export function renderCard(card: CardData, opts: ViewOptions, actions: CardActio
       view = canceledCard(card);
       break;
     default:
-      view = resultCard(card, actions, swap);
+      view = opts.downloadFailed
+        ? h("section", { class: "card" }, head("Atlas Cloud", null),
+            h("p", { class: "desc", role: "status" }, "Download didn’t finish. Your file is still saved."),
+            h("div", { class: "actions" }, button("Retry download", "primary", actions.retryDownload),
+              button("View request", "secondary", actions.openInAtlas)))
+        : resultCard(card, actions, swap);
   }
   holder.append(view);
   return holder;

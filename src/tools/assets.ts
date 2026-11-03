@@ -292,6 +292,22 @@ export async function refreshLibraryInputs(params: Record<string, unknown>): Pro
   return { ok: true, params: replaceUrls(params, swap), original };
 }
 
+/**
+ * 上传前查一下资产库能不能用（资产库二期要充值后才开通）：能用，atlas_get_upload_url 就签一张把字节
+ * 存进资产库的票；查不了（没开通、AssetD 出错）就照旧走 /model/uploadMedia，不因为这一步拦下上传。
+ */
+export async function assetLibraryAvailable(): Promise<boolean> {
+  try {
+    await searchAssets({ limit: 1 });
+    return true;
+  } catch (error) {
+    if (!assetLibraryLocked(error)) {
+      console.error(`[assets] couldn't check the Asset Library before an upload: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return false;
+  }
+}
+
 const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 
 /** 资产库要充值后才能用（资产库二期）：AssetD 回 403 asset_library_not_activated。 */

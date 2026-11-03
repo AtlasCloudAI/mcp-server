@@ -5,6 +5,7 @@ import {
   fileKind,
   filesForModel,
   formatBytes,
+  limitFor,
   outcomeOf,
   uploadFromToolResult,
   uploadPhase,
@@ -90,4 +91,39 @@ test("交给模型的文字带文件名、类型和地址，并说明已经传�
   assert.match(text, /- front\.jpg \(image\): https:\/\/atlas-img\/front\.jpg/);
   assert.match(text, /- voice\.mp3 \(audio\): https:\/\/atlas-img\/voice\.mp3/);
   assert.match(text, /do not upload them again/);
+});
+
+test("存进资产库（资产库二期）：视频按视频的上限，回应里的资产编号、配额满、格式不收都认得", () => {
+  const library = { max_bytes: 50 * MB, max_video_bytes: 100 * MB };
+  assert.equal(limitFor("video", library), 100 * MB);
+  assert.equal(limitFor("image", library), 50 * MB);
+  assert.equal(limitFor("audio", library), 50 * MB);
+  assert.equal(limitFor("video", { max_bytes: 32 * MB }), 32 * MB);
+  assert.equal(validateFile({ name: "clip.mp4", size: 80 * MB }, limitFor("video", library)), undefined);
+  assert.equal(validateFile({ name: "photo.jpg", size: 60 * MB }, limitFor("image", library)), "Over the 50 MB limit");
+
+  assert.deepEqual(outcomeOf(200, JSON.stringify({ url: "https://atlas-asset/a?Expires=1", asset_id: "asset_1" }), 50 * MB), {
+    kind: "done",
+    url: "https://atlas-asset/a?Expires=1",
+    asset_id: "asset_1",
+  });
+  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_quota_exceeded" }), 50 * MB), { kind: "invalid", message: "Your Asset Library is full" });
+  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_too_large" }), 100 * MB), { kind: "invalid", message: "Over the 100 MB limit" });
+  assert.equal(outcomeOf(415, "{}", 50 * MB).kind, "invalid");
+  // 签票后资产库不能用了：和票据失效一样，去换一张。
+  assert.deepEqual(outcomeOf(401, JSON.stringify({ error: "asset_library_not_activated" }), 50 * MB), { kind: "expired" });
+
+  const card = uploadFromToolResult({
+    structuredContent: { upload_url: "https://mcp/upload/t", max_bytes: 50 * MB, max_video_bytes: 100 * MB, saves_to_asset_library: true, curl_example: "curl" },
+  });
+  assert.equal(card?.max_video_bytes, 100 * MB);
+  assert.equal(card?.library, true);
+
+  // 传进资产库的和从资产库选来的，告诉模型时分开说。
+  const text = filesForModel([
+    { name: "front.jpg", kind: "image", url: "https://a/1", asset_id: "asset_1", saved: true },
+    { name: "side.jpg", kind: "image", url: "https://a/2", asset_id: "asset_2" },
+  ]);
+  assert.match(text, /front\.jpg \(image, saved to the Asset Library, asset_1\)/);
+  assert.match(text, /side\.jpg \(image, from the Asset Library, asset_2\)/);
 });

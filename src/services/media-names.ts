@@ -139,8 +139,8 @@ export async function rememberedMediaNames(urls: string[], store?: UploadTicketS
 // 资产库：换出来的临时地址接口不带名字，名字在搜索结果里。搜索时按资产编号记下，取用时转记到地址上。
 const assetKey = (assetId: string): string => `asset:${assetId}`;
 
-export async function rememberAssetNames(assets: Array<{ asset_id: string; name: string }>): Promise<void> {
-  await Promise.all(assets.map((asset) => rememberMediaName(assetKey(asset.asset_id), asset.name)));
+export async function rememberAssetNames(assets: Array<{ asset_id: string; name: string }>, store?: UploadTicketStore): Promise<void> {
+  await Promise.all(assets.map((asset) => rememberMediaName(assetKey(asset.asset_id), asset.name, store)));
 }
 
 export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: string; mime_type?: string }>): Promise<void> {

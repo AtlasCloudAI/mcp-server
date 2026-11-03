@@ -13,6 +13,8 @@ import {
   generationCardToolMeta,
 } from "../apps/generation-card.js";
 import { UPLOAD_CARD_NOTE, UPLOAD_META_KEY, uploadCardData } from "../apps/upload-card.js";
+import { getRequestContext } from "../services/request-context.js";
+import { assetLibraryAvailable } from "./assets.js";
 
 // 只用来填 curl 示例：去掉路径和会破坏 shell 引号的字符。
 function exampleFilename(hint: string | undefined): string {
@@ -64,22 +66,22 @@ Use this when the user has a local file (product photo, reference image, audio t
 Steps:
   1. Call this tool. It returns upload_url, expires_at and max_bytes.
   2. POST the raw file bytes to upload_url with the file name (keep the extension) in the ${UPLOAD_FILENAME_HEADER} header. The curl_example in the result is ready to run.
-  3. The response JSON has "url". Pass that URL to atlas_generate_image, atlas_generate_video, atlas_generate_audio, atlas_transcribe_audio or atlas_quick_generate.
+  3. The response JSON has "url" (and "asset_id" when the file was saved to the user's Asset Library). Pass that URL to atlas_generate_image, atlas_generate_video, atlas_generate_audio, atlas_transcribe_audio or atlas_quick_generate.
 
 In chat apps that show Atlas cards (ChatGPT, Claude), the result opens an upload card instead: the user picks their files in the card and the card uploads them and hands you the URLs. Call this tool when the task needs the user's own image, video or audio and you have no URL for it yet; then wait for the user to add the files in the card.
 
 Rules:
   - One URL serves several files until it expires (about 10 minutes); do not request a new one per file.
   - Uploads are free; nothing is billed until a generation is submitted with the returned URL.
-  - Files larger than max_bytes are rejected with 413. Ask the user to host those elsewhere and give you a public link.
+  - Files larger than max_bytes are rejected with 413; when max_video_bytes is present, it is the limit for videos and 3D files and max_bytes is the limit for images and audio. Ask the user to host larger files elsewhere and give you a public link.
   - Only report a file as uploaded when the response contained "url". If the command fails, say so and offer the public-link fallback.
-  - Uploaded files are temporary inputs for generation, not permanent hosting.
+  - When saves_to_asset_library is true, uploads are saved in the user's Asset Library and the returned url is temporary (about 15 minutes); if it has expired, call atlas_use_assets with the asset_id. Otherwise uploaded files are temporary inputs for generation, not permanent hosting.
 
 Args:
   - filename_hint (string, optional): the file name you intend to upload; only used to fill in curl_example.
 
 Returns:
-  upload_url, method, filename_header, expires_at, max_bytes, curl_example.`,
+  upload_url, method, filename_header, expires_at, max_bytes, max_video_bytes (when uploads go to the Asset Library), saves_to_asset_library, curl_example.`,
       inputSchema: {
         filename_hint: z
           .string()
@@ -96,6 +98,8 @@ Returns:
         filename_header: z.string(),
         expires_at: z.string(),
         max_bytes: z.number().int().positive(),
+        max_video_bytes: z.number().int().positive().optional(),
+        saves_to_asset_library: z.boolean(),
         curl_example: z.string(),
       },
       annotations: toolAnnotations("atlas_get_upload_url"),
@@ -103,7 +107,9 @@ Returns:
       ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ filename_hint }) => {
-      const issued = await issueUploadTicketFromContext();
+      // 开着「上传存进资产库」时先查资产库能不能用（要充值后才开通）；能用才签存进资产库的票。
+      const library = getRequestContext()?.libraryUpload ? await assetLibraryAvailable() : false;
+      const issued = await issueUploadTicketFromContext({ library });
       if (!issued) {
         return {
           isError: true,
@@ -126,6 +132,9 @@ Returns:
       ].join(" \\\n");
       const expiresAt = new Date(issued.expiresAt).toISOString();
       const megabytes = Math.floor(issued.maxBytes / 1_048_576);
+      const sizeLine = issued.maxVideoBytes
+        ? `images and audio up to ${megabytes} MB, videos and 3D models up to ${Math.floor(issued.maxVideoBytes / 1_048_576)} MB`
+        : `${megabytes} MB`;
       const cardMeta = generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: uploadCardData(issued) } } : {};
       const structuredContent = {
         upload_url: issued.uploadUrl,
@@ -133,6 +142,8 @@ Returns:
         filename_header: UPLOAD_FILENAME_HEADER,
         expires_at: expiresAt,
         max_bytes: issued.maxBytes,
+        ...(issued.maxVideoBytes ? { max_video_bytes: issued.maxVideoBytes } : {}),
+        saves_to_asset_library: issued.library,
         curl_example: curlExample,
       };
       // 客户端会渲染卡片：用户在卡片里传，模型不用（ChatGPT 里也没法）自己跑 curl。
@@ -140,14 +151,19 @@ Returns:
         return {
           ...cardMeta,
           structuredContent,
-          content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${megabytes} MB.` }],
+          content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${sizeLine}.` }],
         };
       }
       const text = [
         "# Upload URL",
         "",
         `- **Expires**: ${expiresAt}`,
-        `- **Max size**: ${issued.maxBytes} bytes (${megabytes} MB)`,
+        issued.maxVideoBytes
+          ? `- **Max size**: ${issued.maxBytes} bytes for images and audio, ${issued.maxVideoBytes} bytes for videos and 3D models (${sizeLine})`
+          : `- **Max size**: ${issued.maxBytes} bytes (${megabytes} MB)`,
+        ...(issued.library
+          ? ["- **Saved to**: the user's Asset Library. The returned `url` lasts about 15 minutes; if it expires, call atlas_use_assets with the returned `asset_id`."]
+          : []),
         `- **Method**: POST the raw bytes; file name in the \`${UPLOAD_FILENAME_HEADER}\` header`,
         "",
         "```bash",

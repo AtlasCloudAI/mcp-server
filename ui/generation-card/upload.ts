@@ -21,7 +21,12 @@ export interface UploadCardData {
   view: "upload";
   upload_url: string;
   expires_at: string;
+  /** 单个文件上限；存进资产库时是图片、音频的上限。 */
   max_bytes: number;
+  /** 存进资产库时视频的上限（资产库二期：图片、音频 50 MB，视频 100 MB）。 */
+  max_video_bytes?: number;
+  /** 传上去的文件存进用户的资产库。 */
+  library?: boolean;
   max_files: number;
   sample?: boolean;
   sample_files?: Array<{
@@ -53,8 +58,10 @@ export interface UploadItem {
   /** 缩略图：本地图片缩成的 data URL（卡片 CSP 不一定放行 blob:），或示例图地址。 */
   thumb?: string;
   file?: File;
-  /** 从资产库选来的：地址是临时的，过期了模型用这个编号再换。 */
+  /** 在资产库里的（选来的或传进去的）：地址是临时的，过期了模型用这个编号再换。 */
   asset_id?: string;
+  /** 这张卡传进资产库的（不是从资产库选来的）。 */
+  saved?: boolean;
 }
 
 export type UploadPhase = "empty" | "uploading" | "done" | "problem" | "failed" | "expired";
@@ -80,6 +87,8 @@ export function uploadFromToolResult(result: unknown): UploadCardData | undefine
     upload_url: s.upload_url,
     expires_at: typeof s.expires_at === "string" ? s.expires_at : new Date(Date.now() + 5 * 60_000).toISOString(),
     max_bytes: s.max_bytes,
+    ...(typeof s.max_video_bytes === "number" ? { max_video_bytes: s.max_video_bytes } : {}),
+    ...(s.saves_to_asset_library === true ? { library: true } : {}),
     max_files: 10,
   };
 }
@@ -107,6 +116,11 @@ function limitLabel(maxBytes: number): string {
   return `${Math.floor(maxBytes / 1_048_576)} MB`;
 }
 
+/** 这类文件的上限：存进资产库时视频另有上限，其余按 max_bytes。 */
+export function limitFor(kind: UploadKind, data: Pick<UploadCardData, "max_bytes" | "max_video_bytes">): number {
+  return kind === "video" && data.max_video_bytes ? data.max_video_bytes : data.max_bytes;
+}
+
 /** 选进来的文件能不能传；能传返回 undefined，不能传返回显示在文件名下面的原因。 */
 export function validateFile(file: { name: string; size: number; type?: string }, maxBytes: number): string | undefined {
   if (fileKind(file.name, file.type) === "other") return "Use an image, video or audio file";
@@ -125,7 +139,7 @@ export function uploadPhase(items: Pick<UploadItem, "status">[], linkExpired: bo
 }
 
 export type UploadOutcome =
-  | { kind: "done"; url: string }
+  | { kind: "done"; url: string; asset_id?: string }
   | { kind: "expired" }
   | { kind: "invalid"; message: string }
   | { kind: "failed"; message: string };
@@ -138,19 +152,27 @@ export function outcomeOf(status: number, body: string, maxBytes: number): Uploa
   } catch {
     json = undefined;
   }
-  if (status === 200 && typeof json?.url === "string") return { kind: "done", url: json.url };
-  // 410 票据过期；401 票据无效或里面的凭据被拒：都是换一张新地址再传。
+  if (status === 200 && typeof json?.url === "string") {
+    // 存进资产库的会带资产编号（资产库二期）。
+    return { kind: "done", url: json.url, ...(typeof json.asset_id === "string" ? { asset_id: json.asset_id } : {}) };
+  }
+  // 410 票据过期；401 票据无效、里面的凭据被拒或资产库用不了了：都是换一张新地址再传。
   if (status === 410 || status === 401) return { kind: "expired" };
+  if (status === 413 && json?.error === "upload_quota_exceeded") return { kind: "invalid", message: "Your Asset Library is full" };
   if (status === 413) return { kind: "invalid", message: `Over the ${limitLabel(maxBytes)} limit` };
+  // 资产库只收常见格式（AssetD 按内容认）。
+  if (status === 415) return { kind: "invalid", message: "Use JPG, PNG, WEBP, GIF, MP4, MOV, WEBM, MP3, WAV or M4A" };
   if (status === 429) return { kind: "failed", message: "Too many uploads at once. Retry in a minute" };
   if (status === 0) return { kind: "failed", message: "Couldn't reach Atlas Cloud" };
   return { kind: "failed", message: "Upload failed" };
 }
 
 /** 交给模型的文字：文件名、类型、地址。资产库选来的带上编号（临时地址过期了模型用它再换）。 */
-export function filesForModel(items: Pick<UploadItem, "name" | "kind" | "url" | "asset_id">[]): string {
+export function filesForModel(items: Array<Pick<UploadItem, "name" | "kind" | "url" | "asset_id" | "saved">>): string {
   const lines = items.map((item) =>
-    item.asset_id ? `- ${item.name} (${item.kind}, from the Asset Library, ${item.asset_id}): ${item.url}` : `- ${item.name} (${item.kind}): ${item.url}`
+    item.asset_id
+      ? `- ${item.name} (${item.kind}, ${item.saved ? "saved to" : "from"} the Asset Library, ${item.asset_id}): ${item.url}`
+      : `- ${item.name} (${item.kind}): ${item.url}`
   );
   const fromLibrary = items.some((item) => item.asset_id)
     ? " Links for Asset Library files are temporary (about 15 minutes); if one has expired, call atlas_use_assets with its asset ID."
@@ -193,6 +215,10 @@ const COLLAPSE_SHOWN = 3;
 // 地址还剩这么点时间就先换新的，免得传到一半过期。
 const RENEW_MARGIN_MS = 15_000;
 const XHR_TIMEOUT_MS = 5 * 60_000;
+// 大文件按最慢 64 KB/s 的上行放宽，最多 30 分钟（和服务端 requestTimeout 一致）：存进资产库的视频
+// 能到 100 MB，按 2026-10-19 实测的 250~300 KB/s 也要传 6 分钟左右。
+const XHR_MIN_BYTES_PER_SECOND = 64 * 1024;
+const XHR_MAX_TIMEOUT_MS = 30 * 60_000;
 // 连着换了这么多次地址还是被拒（一直 410/401），就停下来让用户点「Upload again」，不再自动重传。
 const MAX_AUTO_RENEWALS = 2;
 // 按时钟主动换地址，一分钟内最多一次：本机时钟比服务器快时，新地址看起来也「快过期」。
@@ -292,7 +318,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     overflow = files.length > room ? { picked: files.length, added: room } : undefined;
     for (const file of files.slice(0, room)) {
       const kind = fileKind(file.name, file.type);
-      const error = validateFile(file, data.max_bytes);
+      const error = validateFile(file, limitFor(kind, data));
       const item: UploadItem = {
         id: `f${nextId++}`,
         name: file.name,
@@ -415,7 +441,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const usedUrl = data.upload_url;
     const sep = usedUrl.includes("?") ? "&" : "?";
     xhr.open("POST", `${usedUrl}${sep}filename=${encodeURIComponent(item.name)}`);
-    xhr.timeout = XHR_TIMEOUT_MS;
+    xhr.timeout = Math.min(XHR_MAX_TIMEOUT_MS, Math.max(XHR_TIMEOUT_MS, (file.size / XHR_MIN_BYTES_PER_SECOND) * 1000));
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       item.progress = event.loaded / event.total;
@@ -434,6 +460,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       if (outcome.kind === "done") {
         item.status = "done";
         item.url = outcome.url;
+        if (outcome.asset_id) {
+          item.asset_id = outcome.asset_id;
+          item.saved = true;
+        }
         renewals = 0;
       } else if (outcome.kind === "expired") {
         // 地址过期：放回队列，换新地址后自动重传。别的文件已经换来新地址时直接用新的重传。
@@ -447,8 +477,8 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       changed();
       void pump();
     };
-    xhr.onload = () => finish(outcomeOf(xhr.status, xhr.responseText, data.max_bytes));
-    xhr.onerror = () => finish(outcomeOf(0, "", data.max_bytes));
+    xhr.onload = () => finish(outcomeOf(xhr.status, xhr.responseText, limitFor(item.kind, data)));
+    xhr.onerror = () => finish(outcomeOf(0, "", limitFor(item.kind, data)));
     xhr.ontimeout = () => finish({ kind: "failed", message: "Upload timed out" });
     xhr.send(file);
     changed();
@@ -574,8 +604,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   // ---- 视图 ----
 
   function subText(item: UploadItem): string {
-    if (item.asset_id) return "From Asset Library";
+    if (item.asset_id && !item.saved) return "From Asset Library";
     const size = formatBytes(item.size);
+    if (item.saved && item.status === "done") return `${size} · Saved to Asset Library`;
     if (linkExpired && (item.status === "queued" || item.status === "uploading")) {
       return `${size} · ${signedOut ? "Waiting to reconnect" : "Waiting for a new link"}`;
     }
@@ -680,7 +711,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       { type: "button", class: "upload-drop", onclick: pick },
       h("span", { class: "upload-drop-icon", html: ICON_UPLOAD }),
       h("span", { class: "upload-drop-title" }, "Choose images or videos from your device"),
-      h("span", { class: "upload-drop-hint" }, `Up to ${limitLabel(data.max_bytes)} per file · ${data.max_files} files at a time`)
+      h(
+        "span",
+        { class: "upload-drop-hint" },
+        data.max_video_bytes
+          ? `Images and audio up to ${limitLabel(data.max_bytes)}, videos up to ${limitLabel(data.max_video_bytes)} · ${data.max_files} files at a time`
+          : `Up to ${limitLabel(data.max_bytes)} per file · ${data.max_files} files at a time`
+      )
     );
   }
 

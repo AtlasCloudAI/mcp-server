@@ -303,7 +303,7 @@ const UPLOAD_VARIANTS: Record<
   upload_done: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "done" }] },
   upload_problem: {
     files: [
-      { name: "launch-video.mov", size_bytes: Math.round(48 * MB), kind: "video", status: "invalid", error: "Over the 32 MB limit" },
+      { name: "launch-video.mov", size_bytes: Math.round(148 * MB), kind: "video", status: "invalid", error: "Over the 100 MB limit" },
       { name: "brand-notes.pdf", size_bytes: Math.round(0.3 * MB), kind: "other", status: "invalid", error: "Use an image, video or audio file" },
     ],
   },
@@ -324,7 +324,10 @@ function uploadSample(variant: string): UploadCardData {
     view: "upload",
     upload_url: "https://example.invalid/upload/selftest",
     expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
-    max_bytes: 32 * MB,
+    // 资产库二期的上限：上传存进资产库，图片、音频 50 MB，视频 100 MB。
+    max_bytes: 50 * MB,
+    max_video_bytes: 100 * MB,
+    library: true,
     max_files: UPLOAD_MAX_FILES,
     sample: true,
     sample_files: sample.files,

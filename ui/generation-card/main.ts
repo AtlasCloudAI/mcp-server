@@ -9,8 +9,8 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
-import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
-import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
+import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, formatUsd, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
+import { type CardActions, type ViewOptions, h, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
@@ -33,6 +33,7 @@ let loadError: string | undefined;
 let stalled = false;
 // 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户点 Reconnect 再查。
 let signedOut = false;
+let receipt: { id: string; estimate?: number } | undefined;
 let stoppedId: string | undefined;
 let failedDownload: { id: string; media: CardMedia[] } | undefined;
 let refreshing = false;
@@ -174,6 +175,10 @@ function render(force = false): void {
   else view = loadingCard(pendingId);
   // 全屏时放宽到 720（设计稿全屏视图宽 720：历史列表、全部结果），其余照旧 560。
   root.classList.toggle("wide", app.getHostContext()?.displayMode === "fullscreen");
+  if (receipt && receipt.id === card?.prediction_id && card.state !== "quote") {
+    const estimate = receipt.estimate === undefined ? "" : `Est. ${formatUsd(receipt.estimate)} · `;
+    view = h2(h("p", { class: "note", role: "status" }, `Confirmed · ${estimate}Request submitted`), view);
+  }
   root.replaceChildren(view);
   if (card?.sample) root.append(diagnostics());
 }
@@ -432,7 +437,15 @@ const quoteActions = createQuoteActions({
     quoteState = state;
     render();
   },
-  accept,
+  accept(result, carry) {
+    const quote = card?.quote;
+    const accepted = accept(result, carry);
+    if (accepted && quote && card && card.state !== "quote") {
+      receipt = { id: card.prediction_id, estimate: quote.estimated_usd };
+      render(true);
+    }
+    return accepted;
+  },
   startPolling: () => void pollLoop(),
   notice: (text) => setNotice(text),
   openUrl: (url) => void openUrl(url),
@@ -711,6 +724,15 @@ app.ontoolinput = (params) => {
     render();
   }
 };
+
+app.addEventListener("toolcancelled", () => {
+  // A host cancellation can dismiss a quote before submission. Once a write has
+  // started, its outcome must still come from the server.
+  if (card?.state === "quote" && ["ready", "price_changed", "expired", "input_missing", "low_balance"].includes(quoteState.phase)) {
+    quoteState = { phase: "canceled" };
+    render();
+  }
+});
 
 app.ontoolresult = (params) => {
   const upload = params.isError ? undefined : uploadFromToolResult(params);

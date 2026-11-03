@@ -7,7 +7,6 @@ import {
   expectedKind,
   formatInputLinkProblems,
   inputLinks,
-  inspectReferenceLinks,
   isBlockedAddress,
 } from "../src/services/input-link-check.js";
 
@@ -121,13 +120,4 @@ test("links come from every non-text field, deduplicated, at most eight", () => 
   assert.equal(links.length, 8);
   assert.equal(links[0]!.field, "images");
   assert.ok(!links.some((l) => l.url.startsWith("https://x.example.com")));
-});
-
-test("pasted media URLs only become usable after a public media response", async () => {
-  const urls = [origin + "/no-head.png", origin + "/page", origin + "/private.jpg"];
-  const result = await inspectReferenceLinks(urls, local);
-  assert.equal(result[0]?.mime, "image/png");
-  assert.deepEqual(result.map(row => row.url), [urls[0], undefined, undefined]);
-  const blocked = await inspectReferenceLinks([urls[0]!, "http://[::ffff:7f00:1]/private.png"]);
-  assert.ok(blocked.every(row => row.url === undefined));
 });

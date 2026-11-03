@@ -14,7 +14,7 @@ import { badge, button, h, head } from "./view.js";
 export const UPLOAD_META_KEY = "atlascloud/upload";
 const UPLOAD_TOOL = "atlas_get_upload_url";
 
-export type UploadKind = "image" | "video" | "audio" | "3d" | "other";
+export type UploadKind = "image" | "video" | "audio" | "other";
 export type UploadStatus = "queued" | "uploading" | "saving" | "done" | "invalid" | "failed";
 
 export interface UploadCardData {
@@ -30,7 +30,6 @@ export interface UploadCardData {
   /** 传上去的文件存进用户的资产库。 */
   library?: boolean;
   max_files: number;
-  imported?: Array<{ name: string; host: string; mime: string; size_bytes?: number; url?: string }>;
   sample?: boolean;
   sample_files?: Array<{
     name: string;
@@ -66,7 +65,6 @@ export interface UploadItem {
   file?: File;
   /** 在资产库里的（选来的或传进去的）：地址是临时的，过期了模型用这个编号再换。 */
   asset_id?: string;
-  importedFrom?: string;
   /** 这张卡传进资产库的（不是从资产库选来的）。 */
   saved?: boolean;
   /** 超像素的图片：原因那行写「52 MP · over the 24 MP limit」，不写文件大小。 */
@@ -100,20 +98,17 @@ export function uploadFromToolResult(result: unknown): UploadCardData | undefine
     max_bytes: s.max_bytes,
     ...(typeof s.max_video_bytes === "number" ? { max_video_bytes: s.max_video_bytes } : {}),
     ...(s.saves_to_asset_library === true ? { library: true } : {}),
-    ...(Array.isArray(s.imported) ? { imported: s.imported as UploadCardData["imported"] } : {}),
     max_files: 10,
   };
 }
 
 const EXT_KIND: Record<string, UploadKind> = {
-  glb: "3d",
   png: "image", jpg: "image", jpeg: "image", webp: "image", gif: "image", avif: "image", bmp: "image", heic: "image",
   mp4: "video", mov: "video", webm: "video", m4v: "video",
   mp3: "audio", wav: "audio", m4a: "audio", aac: "audio", ogg: "audio", flac: "audio", opus: "audio",
 };
 
 export function fileKind(name: string, mime = ""): UploadKind {
-  if (mime === "model/gltf-binary") return "3d";
   const top = mime.split("/")[0];
   if (top === "image" || top === "video" || top === "audio") return top;
   return EXT_KIND[name.split(".").pop()?.toLowerCase() ?? ""] ?? "other";
@@ -144,7 +139,7 @@ export function pixelLimitMessage(maxPixels: number): string {
 
 /** 这类文件的上限：存进资产库时视频另有上限，其余按 max_bytes。 */
 export function limitFor(kind: UploadKind, data: Pick<UploadCardData, "max_bytes" | "max_video_bytes">): number {
-  return (kind === "video" || kind === "3d") && data.max_video_bytes ? data.max_video_bytes : data.max_bytes;
+  return kind === "video" && data.max_video_bytes ? data.max_video_bytes : data.max_bytes;
 }
 
 /** 选进来的文件能不能传；能传返回 undefined，不能传返回显示在文件名下面的原因。 */
@@ -310,18 +305,6 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     ...(f.error ? { error: f.error } : {}),
     ...(f.megapixels ? { megapixels: f.megapixels } : {}),
   }));
-  for (const ref of initial.imported ?? []) {
-    items.push({
-      id: `r${nextId++}`,
-      name: ref.name,
-      kind: fileKind(ref.name, ref.mime),
-      size: ref.size_bytes ?? 0,
-      status: ref.url ? "done" : "invalid",
-      progress: ref.url ? 1 : 0,
-      url: ref.url,
-      importedFrom: ref.host || ref.name,
-    });
-  }
   // linkExpired：手上的地址不能用了，要换；gaveUp：自动换了几次都没换到，显示「过期」等用户点。
   // 分开是为了自动重试那一两秒里卡片照常显示上传中，不闪一下「过期」。
   let linkExpired = initial.sample_expired === true || initial.sample_signed_out === true;
@@ -360,7 +343,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
-  input.accept = "image/*,video/*,audio/*,.glb,model/gltf-binary";
+  input.accept = "image/*,video/*,audio/*";
   input.hidden = true;
   input.addEventListener("change", () => {
     addFiles([...(input.files ?? [])]);
@@ -657,15 +640,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   function addPicked(picked: PickedAsset[]): void {
-    const selected = picked.filter(asset => !items.some(item => item.asset_id === asset.asset_id));
-    const room = Math.max(0, data.max_files - items.filter(item => item.status !== "invalid").length);
-    overflow = selected.length > room ? { picked: selected.length, added: room } : undefined;
-    for (const asset of selected.slice(0, room)) {
+    for (const asset of picked) {
+      if (items.some((i) => i.asset_id === asset.asset_id)) continue;
       items.push({
         id: `a${nextId++}`,
         name: asset.label,
         size: 0,
-        kind: asset.kind,
+        kind: asset.kind === "3d" ? "other" : asset.kind,
         status: "done",
         progress: 1,
         url: asset.url,
@@ -728,10 +709,6 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
   function subText(item: UploadItem): string {
     if (item.asset_id && !item.saved) return "From Asset Library";
-    if (item.importedFrom) {
-      if (item.status === "invalid") return "Can't open this link. Make sure it’s public, or paste another one.";
-      return `Imported from ${item.importedFrom}${item.size ? ` · ${formatBytes(item.size)}` : ""}`;
-    }
     const size = formatBytes(item.size);
     if (item.saved && item.status === "done") return `${size} · Saved to Asset Library`;
     if (linkExpired && (item.status === "queued" || item.status === "uploading")) {
@@ -906,7 +883,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       body = [
         head("Add reference media", null),
         chooser(),
-        h("p", { class: "note" }, data.library ? "Files are saved to your Asset Library. Have a link? Paste it in the chat." : "Have a link? Paste it in the chat."),
+        h("p", { class: "note" }, "Have a link? Paste it in the chat."),
         h(
           "div",
           { class: "actions" },
@@ -915,7 +892,6 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         ),
       ];
     } else {
-      const unavailableLink = items.some(item => item.importedFrom && item.status === "invalid");
       const status =
         phase === "uploading"
           ? badge("Uploading", { spinner: true })
@@ -923,7 +899,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
             ? badge("Ready", { success: true })
             : phase === "failed"
               ? badge("Upload failed", { danger: true })
-              : badge(unavailableLink ? "Link unavailable" : "Can't upload", { danger: true });
+              : badge("Can't upload", { danger: true });
       const actions: (HTMLElement | null)[] =
         phase === "uploading"
           ? [button("Cancel", "secondary", cancel)]
@@ -936,7 +912,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
                   done.length > 0 ? useButton("secondary") : null,
                   deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null,
                 ]
-              : [done.length > 0 ? useButton("primary") : null, button(unavailableLink ? "Choose files" : "Choose again", done.length ? "secondary" : "primary", chooseAgain), unavailableLink && deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null];
+              : [done.length > 0 ? useButton("primary") : null, button("Choose again", "secondary", chooseAgain)];
       body = [head("Add reference media", status), list(), overflowNote(), libraryFullNote(), h("div", { class: "actions" }, ...actions)];
     }
 
@@ -965,6 +941,5 @@ const ICONS: Record<UploadKind, string> = {
   image: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>',
   video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
   audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-  "3d": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 9 5v10l-9 5-9-5V7z M3 7l9 5 9-5 M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
   other: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>',
 };

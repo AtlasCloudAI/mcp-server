@@ -318,13 +318,12 @@ export function cardStateOf(status: string, transferPending: boolean): CardState
   return "failed";
 }
 
-export function openInAtlasUrl(modelId: string | undefined, predictionId: string): string {
-  const host = process.env.MCP_PUBLIC_URL?.match(/^https:\/\/mcp\.(dev|test)\.atlascloud\.ai(?:[/:]|$)/)?.[1];
-  const origin = host ? `https://www.${host}.atlascloud.ai` : SITE_URL;
-  if (modelId?.startsWith("atlascloud/studio/") || modelId?.startsWith("atlascloud/workflow/")) {
-    return `${origin}/workflow/history`;
+export function openInAtlasUrl(modelId: string | undefined): string {
+  if (!modelId) return SITE_URL;
+  if (modelId.startsWith("atlascloud/studio/") || modelId.startsWith("atlascloud/workflow/")) {
+    return `${SITE_URL}/workflow/history`;
   }
-  return `${origin}/console/usage-history?sessionID=${encodeURIComponent(predictionId)}`;
+  return `${SITE_URL}/models/${modelId}`;
 }
 
 export type ChargeStatus = "charged" | "partially_charged" | "pending" | "not_charged" | "refunded";
@@ -374,7 +373,7 @@ export function buildGenerationCardData(input: {
     ...(input.settings && input.settings.length > 0 ? { settings: input.settings } : {}),
     media: input.outputs.map((url) => ({ url, kind: cardMediaKind(url) })),
     ...(input.error ? { error: input.error } : {}),
-    open_url: openInAtlasUrl(input.modelId, input.predictionId),
+    open_url: openInAtlasUrl(input.modelId),
     ...(input.createdAt ? { submitted_at: input.createdAt } : {}),
     ...(input.completedAt ? { completed_at: input.completedAt } : {}),
     ...(input.mediaExpired ? { media_expired: true } : {}),

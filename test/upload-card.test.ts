@@ -153,8 +153,3 @@ test("存进资产库（资产库二期）：视频按视频的上限，回应�
   assert.match(text, /front\.jpg \(image, saved to the Asset Library, asset_1\)/);
   assert.match(text, /side\.jpg \(image, from the Asset Library, asset_2\)/);
 });
-
-test("GLB references use the 3D media type and video size limit", () => {
-  assert.equal(fileKind("mesh.glb", "application/octet-stream"), "3d");
-  assert.equal(limitFor("3d", { max_bytes: 50, max_video_bytes: 100 }), 100);
-});

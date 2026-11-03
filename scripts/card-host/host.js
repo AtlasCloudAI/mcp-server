@@ -39,8 +39,6 @@ const VARIANTS = [
   "upload",
   "upload_uploading",
   "upload_done",
-  "upload_link_ready",
-  "upload_link_unavailable",
   "upload_problem",
   "upload_failed",
   "upload_expired",

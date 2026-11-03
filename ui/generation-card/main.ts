@@ -33,8 +33,6 @@ let loadError: string | undefined;
 let stalled = false;
 // 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户点 Reconnect 再查。
 let signedOut = false;
-let stoppedId: string | undefined;
-let failedDownload: { id: string; media: CardMedia[] } | undefined;
 let refreshing = false;
 let polling = false;
 let pollStartedAt = Date.now();
@@ -65,8 +63,6 @@ function viewOptions(): ViewOptions {
     canRefresh: sample || caps.serverTools !== undefined,
     canMessage: sample || caps.message !== undefined,
     stalled,
-    stopped: stoppedId !== undefined && stoppedId === card?.prediction_id,
-    downloadFailed: failedDownload !== undefined && failedDownload.id === card?.prediction_id,
     signedOut: signedOut || card?.sample_signed_out === true,
     refreshing,
     notice,
@@ -267,21 +263,19 @@ async function pollLoop(): Promise<void> {
   pollStartedAt = Date.now();
   stalled = false;
   try {
-    while (card && stoppedId !== card.prediction_id && isActive(card.state)) {
+    while (card && isActive(card.state)) {
       if (Date.now() - pollStartedAt > POLL_BUDGET_MS) {
         stalled = true;
         render();
         return;
       }
       const started = Date.now();
-      const id: string = card.prediction_id;
       let failed = false;
       try {
         const result = await app.callServerTool({
           name: STATUS_TOOL,
-          arguments: { prediction_id: id },
+          arguments: { prediction_id: card.prediction_id },
         });
-        if (card?.prediction_id !== id || stoppedId === id) continue;
         failed = result.isError === true || !accept(result);
         if (result.isError && isSignedOut(errorTextOf(result))) signedOut = true;
       } catch (error) {
@@ -358,32 +352,25 @@ async function hostDownload(media: CardMedia[]): Promise<boolean> {
   }
 }
 
-async function downloadResults(media: CardMedia[]): Promise<void> {
-  if (!card || media.length === 0) return;
-  const id: string = card.prediction_id;
-  if (hostCaps().downloadFile === undefined) {
-    await openUrl(media.length === 1 ? media[0]!.url : card.open_url || SITE_URL);
-    return;
-  }
-  const ok = await hostDownload(media);
-  if (card?.prediction_id !== id) return;
-  failedDownload = ok ? undefined : { id, media };
-  render();
-}
-
 const actions: CardActions = {
-  download(media) {
-    void downloadResults([media]);
+  download(media: CardMedia) {
+    void (async () => {
+      // 宿主下载不了：退回到打开链接
+      if (!(await hostDownload([media]))) await openUrl(media.url);
+    })();
   },
-  downloadAll(media) {
-    void downloadResults(media);
-  },
-  retryDownload() {
-    if (failedDownload && failedDownload.id === card?.prediction_id) void downloadResults(failedDownload.media);
-  },
-  stopWaiting() {
-    stoppedId = card?.prediction_id;
-    render();
+  downloadAll(media: CardMedia[]) {
+    void (async () => {
+      if (card?.sample) {
+        setNotice("This is a sample card, so nothing was downloaded.");
+        return;
+      }
+      // 一次打开好几个链接会被浏览器拦：宿主下载不了就去 Atlas 那条记录里下。
+      if (!(await hostDownload(media))) {
+        setNotice("This app can't download several files at once. Opening the request in Atlas.");
+        await openUrl(card?.open_url || SITE_URL);
+      }
+    })();
   },
   openInAtlas() {
     void openUrl(card?.open_url || SITE_URL);
@@ -395,7 +382,6 @@ const actions: CardActions = {
     requestMode("inline");
   },
   refresh() {
-    stoppedId = undefined;
     signedOut = false;
     void refreshOnce().then(() => pollLoop());
   },
@@ -509,7 +495,6 @@ function historyOptions() {
     fullscreen: context?.displayMode === "fullscreen",
     canExpand: (context?.availableDisplayModes ?? []).includes("fullscreen") && context?.displayMode !== "fullscreen",
     canQuery: hostCaps().serverTools !== undefined,
-    canMessage: hostCaps().message !== undefined,
   };
 }
 
@@ -527,7 +512,7 @@ async function queryHistory(args: { page: number; state?: HistoryFilter }, appen
   try {
     const result = await app.callServerTool({
       name: LIST_TOOL,
-      arguments: history.data.batch ? { prediction_ids: history.data.items.map(item => item.prediction_id) } : { page: args.page, size: history.data.size, ...(args.state ? { state: args.state } : {}) },
+      arguments: { page: args.page, size: history.data.size, ...(args.state ? { state: args.state } : {}) },
     });
     const next = result.isError ? undefined : historyFromToolResult(result);
     if (!next || !history) throw new Error("bad result");
@@ -542,12 +527,6 @@ async function queryHistory(args: { page: number; state?: HistoryFilter }, appen
 }
 
 const historyActions = {
-  refreshBatch() {
-    void queryHistory({ page: 1 }, false);
-  },
-  retryFailed(ids: string[]) {
-    sendUserMessage(`Please show a fresh quote for only these failed tasks: ${ids.join(", ")}. Wait for my confirmation before submitting.`);
-  },
   expand() {
     void app.requestDisplayMode({ mode: "fullscreen" }).catch(() => undefined);
   },

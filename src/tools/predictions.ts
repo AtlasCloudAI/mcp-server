@@ -1,17 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { api, generationApi } from "../services/api-client.js";
+import { api } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
 import { toolAnnotations } from "../tool-policy.js";
 import {
   historyResponseSchema,
-  predictionResponseSchema,
-  type PredictionResponse,
   type HistoryItem,
   type HistoryResponse,
 } from "../response-schemas.js";
-import { predictionIdSchema } from "../tool-contracts.js";
-import { predictionOutputUrls } from "../services/prediction-wait.js";
 import { generationCardEnabled } from "../apps/generation-card.js";
 import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
@@ -95,8 +91,6 @@ export function registerPredictionTools(server: McpServer): void {
       title: "List Predictions",
       description: `List the authenticated account's recent generation tasks (image, video, audio), newest first.
 
-For a batch from this conversation, pass its exact prediction_ids together to display per-task progress, results and failed-only re-quoting.
-
 Use this to find a task ID the user lost, to see what was generated earlier in a session, or to review which recent runs failed. It reads history only — nothing is submitted or billed.
 
 Each entry gives prediction_id, model, status, created_at, the output URLs (when finished), the error text (when failed) and a prompt snippet. For the full record of one task, call atlas_get_prediction with its prediction_id.
@@ -113,10 +107,8 @@ Returns:
 
 Notes:
   - Status values are the platform's own ("completed", "failed", "processing", ...); filter with "state" rather than matching status strings yourself.
-  - Check the task’s billing details for its final charge.`,
+  - A task in status "failed" was not billed.`,
       inputSchema: {
-        prediction_ids: z.array(predictionIdSchema).min(1).max(10).optional()
-          .describe("Exact task IDs from one batch, in submission order. Overrides history pagination and filters."),
         page: z
           .number()
           .int()
@@ -143,7 +135,6 @@ Notes:
           .describe("Model ID prefix selecting a whole family"),
       },
       outputSchema: {
-        batch: z.boolean().optional(),
         total: z.number().int().nonnegative(),
         page: z.number().int().positive(),
         size: z.number().int().positive(),
@@ -163,22 +154,8 @@ Notes:
       annotations: toolAnnotations("atlas_list_predictions"),
       ...generationToolCardMeta(),
     },
-    async ({ page, size, state, model, model_prefix, prediction_ids }) => {
+    async ({ page, size, state, model, model_prefix }) => {
       try {
-        if (prediction_ids) {
-          const predictions = await Promise.all([...new Set(prediction_ids)].map(async (id) => {
-            const result = await generationApi<PredictionResponse>(`/model/prediction/${encodeURIComponent(id)}`, { responseSchema: predictionResponseSchema });
-            const { status } = result.data;
-            const modelId = (result.data as Record<string, unknown>).model;
-            return { prediction_id: id, status: status || "unknown", model: typeof modelId === "string" ? modelId : "",
-              outputs: predictionOutputUrls(result) };
-          }));
-          const total = predictions.length;
-          return {
-            structuredContent: { batch: true, predictions, page: 1, size: total, total, has_more: false },
-            content: [{ type: "text", text: predictions.map(p => `${p.prediction_id}: ${p.status}`).join("\n") }],
-          };
-        }
         // /model/history 由 kubedl 的 console backend 提供，走 api()（ATLASCLOUD_API_BASE_URL）。
         // 后端的分页参数叫 no/size，不是 page/pageSize；传错不报错，只是静默按默认值分页。
         const result = await api<HistoryResponse>("/model/history", {
@@ -212,7 +189,7 @@ Notes:
             : "This is the last page."
         );
         lines.push(
-          "Use atlas_get_prediction with a prediction_id for the full record and billing details."
+          "Use atlas_get_prediction with a prediction_id for the full record. Failed tasks were not billed."
         );
 
         // 卡片打开时，结果显示成历史列表卡（能展开全屏、筛选、点开单条）。

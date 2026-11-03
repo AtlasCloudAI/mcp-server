@@ -39,7 +39,6 @@ export type QuotePhase =
   | "ready"
   | "quoting"
   | "submitting"
-  | "already_running"
   | "verifying"
   | "expired"
   | "low_balance"
@@ -149,7 +148,6 @@ export function failureState(text: string, now = Date.now()): QuoteState {
   // 提交没拿到确定的回答（服务端那句 "without a confirmed response"），或者防重复扣费的锁说上一次
   // 还没完：可能已经开跑，也可能没有。卡片先自己核实。
   // 上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
-  if (/idempotency key is still in progress/i.test(text)) return { phase: "already_running" };
   if (/without a confirmed response|still in progress|did not return a prediction id/i.test(text)) return { phase: "verifying" };
   // 确认令牌和这次请求对不上（src/services/generation-confirmation.ts）。卡片带的参数不会变，
   // 多半是价格变了：卡片会先按同一个幂等键重新报价，比一比价格（见 createQuoteActions）。
@@ -653,12 +651,6 @@ export function renderQuoteCard(
       ),
       notice(opts)
     );
-  }
-
-  if (state.phase === "already_running") {
-    return h("section", { class: "card" }, head(modelLabel(card), badge("Already running")),
-      h("p", { class: "desc" }, "The same request is already being processed."),
-      h("div", { class: "actions" }, button("Refresh", "secondary", actions.checkAgain)));
   }
 
   if (state.phase === "uncertain") {

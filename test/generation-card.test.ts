@@ -252,20 +252,6 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
   }
 });
 
-test("explicit batches read each distinct prediction in order and never submit a job", async () => {
-  const { client, close } = await connect({ rendersCards: true });
-  const submits = submitKeys.length;
-  try {
-    const result = await client.callTool({ name: "atlas_list_predictions", arguments: { prediction_ids: ["done", "nope", "running", "done"] } });
-    const { batch, predictions } = result.structuredContent as { batch: boolean; predictions: Array<{ prediction_id: string; status: string }> };
-    assert.equal(batch, true);
-    assert.deepEqual(predictions.map(p => [p.prediction_id, p.status]), [["done", "completed"], ["nope", "failed"], ["running", "processing"]]);
-    assert.equal(submitKeys.length, submits);
-  } finally {
-    await close();
-  }
-});
-
 test("查结果：卡片数据带模型名、类型、价格；工作流的「在 Atlas 打开」去历史页", async () => {
   const restore = withEnv({ MCP_UI_CARDS: "1" });
   const { client, close } = await connect({ rendersCards: false });
@@ -275,7 +261,7 @@ test("查结果：卡片数据带模型名、类型、价格；工作流的「�
     assert.equal(done?.model_name, "Flux Schnell");
     assert.equal(done?.model_type, "Image");
     assert.equal(done?.price_usd, 0.003);
-    assert.equal(done?.open_url, "https://www.atlascloud.ai/console/usage-history?sessionID=done");
+    assert.equal(done?.open_url, "https://www.atlascloud.ai/models/black-forest-labs/flux-schnell");
     assert.deepEqual(done?.media, [{ url: `${origin}/media/done.jpg`, kind: "image" }]);
 
     const workflow = cardOf(

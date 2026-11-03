@@ -14,7 +14,7 @@ export interface HistoryCardItem {
   model_id: string;
   model_name?: string;
   model_type?: string;
-  state: CardState | "unknown";
+  state: CardState;
   created_at?: string;
   thumb?: { url: string; kind: CardMediaKind };
   outputs: number;
@@ -24,7 +24,6 @@ export interface HistoryCardItem {
 
 export interface HistoryCardData {
   view: "history";
-  batch?: boolean;
   page: number;
   size: number;
   total: number;
@@ -47,8 +46,6 @@ export interface HistoryActions {
   setFilter(filter: HistoryFilter | undefined): void;
   loadMore(): void;
   open(predictionId: string): void;
-  refreshBatch(): void;
-  retryFailed(ids: string[]): void;
 }
 
 export interface HistoryOptions {
@@ -57,7 +54,6 @@ export interface HistoryOptions {
   canExpand: boolean;
   /** 宿主允许卡片调工具（筛选、加载更多、点开单条）。 */
   canQuery: boolean;
-  canMessage?: boolean;
 }
 
 const INLINE_ROWS = 5;
@@ -82,7 +78,7 @@ function stateOfStatus(status: string): CardState {
   const s = status.toLowerCase();
   if (["completed", "succeeded", "success"].includes(s)) return "succeeded";
   if (["queued", "created", "waiting"].includes(s)) return "queued";
-  if (["submitted", "starting", "processing", "running", "pending", "in_progress"].includes(s)) return "running";
+  if (["starting", "processing", "running", "pending", "in_progress"].includes(s)) return "running";
   if (s === "canceled" || s === "cancelled") return "canceled";
   return "failed";
 }
@@ -103,8 +99,7 @@ export function historyFromToolResult(result: unknown): HistoryCardData | undefi
       {
         prediction_id: p.prediction_id,
         model_id: typeof p.model === "string" ? p.model : "",
-        state: structured.batch && !/^(completed|succeeded|success|queued|created|waiting|submitted|starting|processing|running|pending|in_progress|failed|error|canceled|cancelled)$/i.test(String(p.status))
-          ? "unknown" : stateOfStatus(typeof p.status === "string" ? p.status : ""),
+        state: stateOfStatus(typeof p.status === "string" ? p.status : ""),
         ...(typeof p.created_at === "string" ? { created_at: p.created_at } : {}),
         ...(outputs[0] ? { thumb: { url: outputs[0], kind: kindOfUrl(outputs[0]) } } : {}),
         outputs: outputs.length,
@@ -115,7 +110,6 @@ export function historyFromToolResult(result: unknown): HistoryCardData | undefi
   const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
   return {
     view: "history",
-    ...(structured.batch === true ? { batch: true } : {}),
     page: num(structured.page, 1),
     size: num(structured.size, items.length || 10),
     total: num(structured.total, items.length),
@@ -181,8 +175,6 @@ function statusMark(item: HistoryCardItem): HTMLElement {
       return badge("Generating", { spinner: true });
     case "failed":
       return badge("Failed", { danger: true });
-    case "unknown":
-      return badge("Unknown");
     case "canceled":
       return badge("Canceled");
     default:
@@ -212,25 +204,6 @@ const FILTERS: Array<{ label: string; value: HistoryFilter | undefined }> = [
 
 export function renderHistory(view: HistoryView, opts: HistoryOptions, actions: HistoryActions): HTMLElement {
   const { data } = view;
-  if (data.batch) {
-    const done = data.items.filter(item => item.state === "succeeded");
-    const failed = data.items.filter(item => item.state === "failed");
-    const active = data.items.some(item => ["running", "queued", "transfer_pending", "unknown"].includes(item.state));
-    const list = h("ul", { class: "history-list" }, ...data.items.map((item, i) =>
-      h("li", {}, h("button", { type: "button", class: "history-row", disabled: !opts.canQuery, onclick: () => actions.open(item.prediction_id) },
-        h("span", { class: "history-text" }, `Task #${i + 1}`),
-        item.state === "succeeded" ? badge("Done") : statusMark(item)))));
-    return h("section", { class: "card history" },
-      h("div", { class: "head" }, h("p", { class: "title" }, `${data.total} tasks`), badge(`${done.length} of ${data.total} done`)),
-      list,
-      h("div", { class: "actions" },
-        failed.length && opts.canMessage ? button(`Retry failed (${failed.length})`, "primary", () => actions.retryFailed(failed.map(i => i.prediction_id))) : null,
-        done.length && opts.canQuery ? button("View results", "secondary", () => {
-          list.replaceChildren(...done.map(item => rowFor(item, opts, actions)));
-        }) : null,
-        active && opts.canQuery ? button("Refresh", "secondary", actions.refreshBatch, { disabled: view.loading }) : null),
-      view.error ? h("p", { class: "note", role: "status" }, view.error) : null);
-  }
   const rows = opts.fullscreen ? data.items : data.items.slice(0, INLINE_ROWS);
   const tabs =
     opts.fullscreen && opts.canQuery

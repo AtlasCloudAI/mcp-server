@@ -39,6 +39,7 @@ export type QuotePhase =
   | "ready"
   | "quoting"
   | "submitting"
+  | "canceled"
   | "already_running"
   | "verifying"
   | "expired"
@@ -531,6 +532,11 @@ export function renderQuoteCard(
     `${modelLabel(card)} · ${template ? "Marketing Studio template" : typeLabel(card)}`
   );
 
+  if (state.phase === "canceled") {
+    return h("section", { class: "card" }, head("Canceled", badge("Canceled")),
+      h("p", { class: "note" }, "Nothing was charged."));
+  }
+
   if (state.phase === "expired") {
     const duration = validFor(quote?.valid_seconds);
     return h(
@@ -774,6 +780,11 @@ export function renderQuoteCard(
     subtitle,
     ...task(quote),
     chips(quote?.settings ?? []),
+    quote?.tool === "atlas_quick_generate"
+      ? h("p", { class: "note" }, typeof quote.arguments.model_keyword === "string"
+        ? "Why this model: it matches the requested model and supports these inputs."
+        : "Why this model: Atlas selected its default model for this task and input type.")
+      : null,
     ...amount,
     // 需求文档 6.1：报价写明从哪个账户扣、余额多少（设计稿 v2 收成底部一行）。
     billingLine(quote?.account, quote?.account?.balance_usd),

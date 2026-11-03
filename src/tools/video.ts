@@ -62,6 +62,8 @@ You should also use atlas_get_model_info to see the full parameter list and sche
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
+Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). If the user asks for vertical, square or widescreen output and the image has another shape, say so before quoting and offer a model whose schema has a ratio parameter, or a cropped image. Do not drop the request silently.
+
 Args:
   - model (string, required): The exact video model ID. Use atlas_list_models to find valid IDs.
   - params (object, required): Model-specific parameters as a JSON object. Parameters vary by model - use atlas_get_model_info to see available params. Common ones include:

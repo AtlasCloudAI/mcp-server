@@ -42,8 +42,11 @@ export function settingsChips(params: Record<string, unknown> | undefined): stri
   if (duration !== undefined) chips.push(`${duration} s`);
 
   // Kling、Veo 叫 aspect_ratio，Seedance、Wan 叫 ratio。
+  // adaptive 是「跟着输入图片的比例」，直接写 adaptive 用户看不懂（11-03：要竖屏却拿到横图比例）。
   const aspect = params.aspect_ratio ?? params.ratio;
-  if (typeof aspect === "string" && aspect.trim()) chips.push(aspect.trim());
+  if (typeof aspect === "string" && aspect.trim()) {
+    chips.push(aspect.trim().toLowerCase() === "adaptive" ? "Ratio from image" : aspect.trim());
+  }
 
   for (const key of ["num_images", "max_images", "n", "count"]) {
     const n = positiveNumber(params[key]);

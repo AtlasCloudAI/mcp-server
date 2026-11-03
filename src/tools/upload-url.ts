@@ -12,6 +12,7 @@ import {
   generationCardEnabled,
   generationCardToolMeta,
 } from "../apps/generation-card.js";
+import { inspectReferenceLinks } from "../services/input-link-check.js";
 import { UPLOAD_CARD_NOTE, UPLOAD_META_KEY, uploadCardData } from "../apps/upload-card.js";
 import { getRequestContext } from "../services/request-context.js";
 import { assetLibraryAvailable } from "./assets.js";
@@ -63,6 +64,8 @@ export function registerUploadUrlTool(server: McpServer): void {
 
 Use this when the user has a local file (product photo, reference image, audio to transcribe) and the target model needs a URL. The hosted MCP server cannot read files on the user's machine; this URL lets you push the bytes yourself.
 
+For a media link pasted in a card-enabled chat, pass it in reference_urls so the user can review it before use.
+
 Steps:
   1. Call this tool. It returns upload_url, expires_at and max_bytes.
   2. POST the raw file bytes to upload_url with the file name (keep the extension) in the ${UPLOAD_FILENAME_HEADER} header. The curl_example in the result is ready to run.
@@ -83,6 +86,7 @@ Args:
 Returns:
   upload_url, method, filename_header, expires_at, max_bytes, max_video_bytes (when uploads go to the Asset Library), saves_to_asset_library, curl_example.`,
       inputSchema: {
+        reference_urls: z.array(z.string().url().max(8192)).min(1).max(10).optional().describe("Public media links the user pasted in this chat"),
         filename_hint: z
           .string()
           .min(1)
@@ -93,6 +97,7 @@ Returns:
           ),
       },
       outputSchema: {
+        imported: z.array(z.object({ name: z.string(), host: z.string(), mime: z.string(), size_bytes: z.number().optional(), url: z.string().optional() })).optional(),
         upload_url: z.string().url(),
         method: z.literal("POST"),
         filename_header: z.string(),
@@ -106,7 +111,7 @@ Returns:
       // 卡片打开时挂上传卡；卡片里的「Upload again」也调这个工具换一张新地址。
       ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
-    async ({ filename_hint }) => {
+    async ({ filename_hint, reference_urls }) => {
       // 开着「上传存进资产库」时先查资产库能不能用（要充值后才开通）；能用才签存进资产库的票。
       const library = getRequestContext()?.libraryUpload ? await assetLibraryAvailable() : false;
       const issued = await issueUploadTicketFromContext({ library });
@@ -135,8 +140,10 @@ Returns:
       const sizeLine = issued.maxVideoBytes
         ? `images and audio up to ${megabytes} MB, videos and 3D models up to ${Math.floor(issued.maxVideoBytes / 1_048_576)} MB`
         : `${megabytes} MB`;
-      const cardMeta = generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: uploadCardData(issued) } } : {};
+      const imported = reference_urls ? { imported: await inspectReferenceLinks(reference_urls) } : {};
+      const cardMeta = generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: { ...uploadCardData(issued), ...imported } } } : {};
       const structuredContent = {
+        ...imported,
         upload_url: issued.uploadUrl,
         method: "POST" as const,
         filename_header: UPLOAD_FILENAME_HEADER,
@@ -151,7 +158,7 @@ Returns:
         return {
           ...cardMeta,
           structuredContent,
-          content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${sizeLine}.` }],
+          content: [{ type: "text", text: `# Upload card\n\n${reference_urls ? "The card shows the link check results. Wait for the user to choose which files to use." : UPLOAD_CARD_NOTE}\n\nMax size per file: ${sizeLine}.` }],
         };
       }
       const text = [

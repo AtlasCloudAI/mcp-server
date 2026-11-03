@@ -293,6 +293,7 @@ const UPLOAD_VARIANTS: Record<
   string,
   {
     files: UploadSampleFile[];
+    imported?: UploadCardData["imported"];
     expired?: boolean;
     signedOut?: boolean;
     overflow?: { picked: number; added: number };
@@ -306,6 +307,8 @@ const UPLOAD_VARIANTS: Record<
       { ...SIDE, status: "done" },
     ],
   },
+  upload_link_ready: { files: [], imported: [{ name: "sneaker-front.jpg", host: "example.com", mime: "image/jpeg", size_bytes: FRONT.size_bytes, url: FRONT.url }] },
+  upload_link_unavailable: { files: [], imported: [{ name: "sneaker-front.jpg", host: "example.com", mime: "" }] },
   upload_done: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "done" }] },
   // 格式、大小、像素各不符合一个（设计稿 06 页 11/02「文件不符合」）。
   upload_problem: {
@@ -342,6 +345,7 @@ function uploadSample(variant: string): UploadCardData {
     max_files: UPLOAD_MAX_FILES,
     sample: true,
     sample_files: sample.files,
+    ...(sample.imported ? { imported: sample.imported } : {}),
     ...(sample.expired ? { sample_expired: true } : {}),
     ...(sample.signedOut ? { sample_signed_out: true } : {}),
     ...(sample.overflow ? { sample_overflow: sample.overflow } : {}),

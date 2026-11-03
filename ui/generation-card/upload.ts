@@ -25,6 +25,8 @@ export interface UploadCardData {
   max_bytes: number;
   /** 存进资产库时视频的上限（资产库二期：图片、音频 50 MB，视频 100 MB）。 */
   max_video_bytes?: number;
+  /** 存进资产库时图片的像素上限（AssetD 拒收超过的，默认 2400 万像素）。 */
+  max_image_pixels?: number;
   /** 传上去的文件存进用户的资产库。 */
   library?: boolean;
   max_files: number;
@@ -37,11 +39,14 @@ export interface UploadCardData {
     progress?: number;
     url?: string;
     error?: string;
+    megapixels?: number;
   }>;
   sample_expired?: boolean;
   sample_overflow?: { picked: number; added: number };
   /** 测试卡片：换地址时 Atlas 登录已失效（「需要重新连接」）。 */
   sample_signed_out?: boolean;
+  /** 测试卡片：资产库上传空间已满（设计稿 06 页 11/02「上传空间已满」）。 */
+  sample_library_full?: { quota_bytes: number };
 }
 
 export interface UploadItem {
@@ -62,6 +67,10 @@ export interface UploadItem {
   asset_id?: string;
   /** 这张卡传进资产库的（不是从资产库选来的）。 */
   saved?: boolean;
+  /** 超像素的图片：原因那行写「52 MP · over the 24 MP limit」，不写文件大小。 */
+  megapixels?: number;
+  /** 正在读图片尺寸（存进资产库前先查像素），读完才排队上传。 */
+  checking?: boolean;
 }
 
 export type UploadPhase = "empty" | "uploading" | "done" | "problem" | "failed" | "expired";
@@ -116,6 +125,18 @@ function limitLabel(maxBytes: number): string {
   return `${Math.floor(maxBytes / 1_048_576)} MB`;
 }
 
+/** 上传空间：2 GB（不到 1 GB 的按 MB）。 */
+function quotaLabel(bytes: number): string {
+  return bytes >= 1_073_741_824 ? `${Math.round(bytes / 1_073_741_824)} GB` : limitLabel(bytes);
+}
+
+/** 不符合的原因（设计稿 06 页 11/02「文件不符合」）：格式这条不带文件大小，其余跟在大小后面。 */
+const FORMAT_PREFIX = "Format not supported";
+
+export function pixelLimitMessage(maxPixels: number): string {
+  return `over the ${Math.round(maxPixels / 1_000_000)} MP limit`;
+}
+
 /** 这类文件的上限：存进资产库时视频另有上限，其余按 max_bytes。 */
 export function limitFor(kind: UploadKind, data: Pick<UploadCardData, "max_bytes" | "max_video_bytes">): number {
   return kind === "video" && data.max_video_bytes ? data.max_video_bytes : data.max_bytes;
@@ -123,9 +144,9 @@ export function limitFor(kind: UploadKind, data: Pick<UploadCardData, "max_bytes
 
 /** 选进来的文件能不能传；能传返回 undefined，不能传返回显示在文件名下面的原因。 */
 export function validateFile(file: { name: string; size: number; type?: string }, maxBytes: number): string | undefined {
-  if (fileKind(file.name, file.type) === "other") return "Use an image, video or audio file";
+  if (fileKind(file.name, file.type) === "other") return `${FORMAT_PREFIX} · use an image, video or audio file`;
   if (file.size === 0) return "This file is empty";
-  if (file.size > maxBytes) return `Over the ${limitLabel(maxBytes)} limit`;
+  if (file.size > maxBytes) return `over the ${limitLabel(maxBytes)} limit`;
   return undefined;
 }
 
@@ -141,8 +162,10 @@ export function uploadPhase(items: Pick<UploadItem, "status">[], linkExpired: bo
 export type UploadOutcome =
   | { kind: "done"; url: string; asset_id?: string }
   | { kind: "expired" }
-  | { kind: "invalid"; message: string }
-  | { kind: "failed"; message: string };
+  | { kind: "invalid"; message: string; megapixels?: number }
+  | { kind: "failed"; message: string }
+  /** 资产库上传空间满了：中转另给了一张普通上传的地址，这个文件改传那里（不存进资产库）。 */
+  | { kind: "library_full"; quota_bytes?: number; fallback?: { upload_url: string; expires_at: string; max_bytes: number } };
 
 /** 上传中转的回应 → 这个文件怎么样了。状态码见 src/http/upload-relay.ts。 */
 export function outcomeOf(status: number, body: string, maxBytes: number): UploadOutcome {
@@ -158,10 +181,31 @@ export function outcomeOf(status: number, body: string, maxBytes: number): Uploa
   }
   // 410 票据过期；401 票据无效、里面的凭据被拒或资产库用不了了：都是换一张新地址再传。
   if (status === 410 || status === 401) return { kind: "expired" };
-  if (status === 413 && json?.error === "upload_quota_exceeded") return { kind: "invalid", message: "Your Asset Library is full" };
-  if (status === 413) return { kind: "invalid", message: `Over the ${limitLabel(maxBytes)} limit` };
+  if (status === 413 && json?.error === "upload_quota_exceeded") {
+    const fallbackUrl = json.fallback_upload_url;
+    return {
+      kind: "library_full",
+      ...(typeof json.quota_bytes === "number" ? { quota_bytes: json.quota_bytes } : {}),
+      ...(typeof fallbackUrl === "string" && typeof json.fallback_max_bytes === "number"
+        ? {
+            fallback: {
+              upload_url: fallbackUrl,
+              expires_at: typeof json.fallback_expires_at === "string" ? json.fallback_expires_at : new Date(Date.now() + 5 * 60_000).toISOString(),
+              max_bytes: json.fallback_max_bytes,
+            },
+          }
+        : {}),
+    };
+  }
+  if (status === 413) return { kind: "invalid", message: `over the ${limitLabel(maxBytes)} limit` };
+  // 超像素的图片（AssetD 先解出尺寸再拒收）。
+  if (status === 422 && json?.error === "image_too_large" && typeof json.max_pixels === "number") {
+    const w = typeof json.width === "number" ? json.width : 0;
+    const h = typeof json.height === "number" ? json.height : 0;
+    return { kind: "invalid", message: pixelLimitMessage(json.max_pixels), ...(w && h ? { megapixels: Math.round((w * h) / 1_000_000) } : {}) };
+  }
   // 资产库只收常见格式（AssetD 按内容认）。
-  if (status === 415) return { kind: "invalid", message: "Use JPG, PNG, WEBP, GIF, MP4, MOV, WEBM, MP3, WAV or M4A" };
+  if (status === 415) return { kind: "invalid", message: `${FORMAT_PREFIX} · use JPG, PNG, WEBP, GIF, MP4, MOV, WEBM, MP3, WAV or M4A` };
   if (status === 429) return { kind: "failed", message: "Too many uploads at once. Retry in a minute" };
   if (status === 0) return { kind: "failed", message: "Couldn't reach Atlas Cloud" };
   return { kind: "failed", message: "Upload failed" };
@@ -230,16 +274,18 @@ const THUMB_PX = 96;
 
 let nextId = 0;
 
-async function imageThumb(file: File): Promise<string | undefined> {
+/** 本地图片的缩略图和原始尺寸。浏览器解不开的格式（比如有的 HEIC）返回 undefined。 */
+async function imageInfo(file: File): Promise<{ thumb: string; width: number; height: number } | undefined> {
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = THUMB_PX / Math.max(bitmap.width, bitmap.height, 1);
+    const { width, height } = bitmap;
+    const scale = THUMB_PX / Math.max(width, height, 1);
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * Math.min(1, scale)));
-    canvas.height = Math.max(1, Math.round(bitmap.height * Math.min(1, scale)));
+    canvas.width = Math.max(1, Math.round(width * Math.min(1, scale)));
+    canvas.height = Math.max(1, Math.round(height * Math.min(1, scale)));
     canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    return canvas.toDataURL("image/jpeg", 0.8);
+    return { thumb: canvas.toDataURL("image/jpeg", 0.8), width, height };
   } catch {
     return undefined;
   }
@@ -257,6 +303,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     progress: f.progress ?? (f.status === "done" ? 1 : 0),
     ...(f.url ? { url: f.url, thumb: f.url } : {}),
     ...(f.error ? { error: f.error } : {}),
+    ...(f.megapixels ? { megapixels: f.megapixels } : {}),
   }));
   // linkExpired：手上的地址不能用了，要换；gaveUp：自动换了几次都没换到，显示「过期」等用户点。
   // 分开是为了自动重试那一两秒里卡片照常显示上传中，不闪一下「过期」。
@@ -278,6 +325,11 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   let expanded = false;
   /** 上一次选了多少个、超出上限没收进来的有几个（设计稿 v2「超出数量上限」）。 */
   let overflow: { picked: number; added: number } | undefined = initial.sample_overflow;
+  /**
+   * 资产库上传空间满了（设计稿 06 页 11/02「上传空间已满」）：之后的文件改走普通上传，照样能用在这次
+   * 生成里，只是不存进资产库。卡片上留一句说明。
+   */
+  let libraryFull: { quota_bytes?: number } | undefined = initial.sample_library_full;
   const inflight = new Map<string, XMLHttpRequest>();
   const sample = initial.sample === true;
 
@@ -331,16 +383,50 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       };
       items.push(item);
       if (kind === "image" && !error) {
-        void imageThumb(file).then((thumb) => {
-          if (thumb && items.includes(item)) {
-            item.thumb = thumb;
-            changed();
+        // 存进资产库的图片先查像素（AssetD 拒收超过上限的），查完才上传；顺带出缩略图。
+        const maxPixels = data.library ? data.max_image_pixels : undefined;
+        if (maxPixels) item.checking = true;
+        void imageInfo(file).then((info) => {
+          item.checking = false;
+          if (!items.includes(item)) return;
+          if (info) item.thumb = info.thumb;
+          if (info && maxPixels && item.status === "queued" && info.width * info.height > maxPixels) {
+            item.status = "invalid";
+            item.error = pixelLimitMessage(maxPixels);
+            item.megapixels = Math.round((info.width * info.height) / 1_000_000);
           }
+          changed();
+          void pump();
         });
       }
     }
     changed();
     void pump();
+  }
+
+  /**
+   * 上传空间满了：中转另给了一张普通上传的地址。换上它，排队的文件按普通上传的上限重新查一遍
+   * （超了的标出来），这个文件放回队列重传。
+   */
+  function fallBackToPlainUpload(fallback: { upload_url: string; expires_at: string; max_bytes: number }): void {
+    data = {
+      ...data,
+      upload_url: fallback.upload_url,
+      expires_at: fallback.expires_at,
+      max_bytes: fallback.max_bytes,
+      library: false,
+      max_video_bytes: undefined,
+      max_image_pixels: undefined,
+    };
+    linkExpired = false;
+    for (const queued of items) {
+      if (queued.status !== "queued" || !queued.file) continue;
+      const error = validateFile(queued.file, limitFor(queued.kind, data));
+      if (error) {
+        queued.status = "invalid";
+        queued.error = error;
+      }
+    }
   }
 
   function expiresSoon(): boolean {
@@ -399,7 +485,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
   async function pump(): Promise<void> {
     while (inflight.size < CONCURRENCY) {
-      const next = items.find((i) => i.status === "queued");
+      const next = items.find((i) => i.status === "queued" && !i.checking);
       if (!next) return;
       if (linkExpired) {
         // 中转说地址过期了（或卡片按时钟判断）：换新地址；连着换了几次都不成就停下，等用户点「Upload again」。
@@ -470,9 +556,27 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         item.status = "queued";
         item.progress = 0;
         if (usedUrl === data.upload_url) linkExpired = true;
+      } else if (outcome.kind === "library_full") {
+        libraryFull = { ...(outcome.quota_bytes ? { quota_bytes: outcome.quota_bytes } : {}) };
+        item.progress = 0;
+        if (outcome.fallback) {
+          // 别的文件已经换上普通上传的地址时，直接用手上的重传。
+          if (data.library) fallBackToPlainUpload(outcome.fallback);
+          item.status = "queued";
+          const error = validateFile(file, limitFor(item.kind, data));
+          if (error) {
+            item.status = "invalid";
+            item.error = error;
+          }
+        } else {
+          // 旧版中转没给普通上传的地址：只能标成传不了。
+          item.status = "invalid";
+          item.error = "Your upload space is full";
+        }
       } else {
         item.status = outcome.kind;
         item.error = outcome.message;
+        if (outcome.kind === "invalid" && outcome.megapixels) item.megapixels = outcome.megapixels;
       }
       changed();
       void pump();
@@ -618,6 +722,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       case "saving":
         return `${size} · Saving…`;
       case "invalid":
+        if (item.megapixels) return `${item.megapixels} MP · ${item.error ?? ""}`;
+        if (item.error?.startsWith(FORMAT_PREFIX)) return item.error;
+        return `${size} · ${item.error ?? "Upload failed"}`;
       case "failed":
         return `${size} · ${item.error ?? "Upload failed"}`;
       default:
@@ -730,6 +837,16 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     );
   }
 
+  function libraryFullNote(): HTMLElement | null {
+    if (!libraryFull) return null;
+    const space = libraryFull.quota_bytes ? ` (${quotaLabel(libraryFull.quota_bytes)})` : "";
+    return h(
+      "p",
+      { class: "note" },
+      `Your upload space${space} is full, so these files weren't saved to your Asset Library. You can still use them for this request.`
+    );
+  }
+
   function noticeEl(): HTMLElement | null {
     const text = deps.noticeText();
     return text ? h("p", { class: "note", role: "status" }, text) : null;
@@ -796,7 +913,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
                   deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null,
                 ]
               : [done.length > 0 ? useButton("primary") : null, button("Choose again", "secondary", chooseAgain)];
-      body = [head("Add reference media", status), list(), overflowNote(), h("div", { class: "actions" }, ...actions)];
+      body = [head("Add reference media", status), list(), overflowNote(), libraryFullNote(), h("div", { class: "actions" }, ...actions)];
     }
 
     return h("section", { class: "card upload" }, ...body, noticeEl());

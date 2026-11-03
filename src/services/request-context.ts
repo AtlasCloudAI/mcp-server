@@ -21,13 +21,25 @@ export interface AtlasRequestContext {
   uploadTicketTtlSeconds?: number;
   uploadMaxBytes?: number;
   /** 上传存进资产库时的上限（按类型）；省略则只走 /model/uploadMedia。 */
-  libraryUpload?: { maxBytes: number; maxVideoBytes: number };
+  libraryUpload?: LibraryUploadLimits;
   /** 短上传地址：完整票据存这里，URL 里只放编号。省略则发长票据。 */
   uploadTicketStore?: UploadTicketStore;
   /** 报价记录：确认时按参数找回报价，不靠模型抄回令牌（generation-confirmation.ts）。 */
   quoteStore?: UploadTicketStore;
   /** 素材地址 → 原文件名，报价卡按原名显示输入素材（media-names.ts）。 */
   mediaNameStore?: UploadTicketStore;
+}
+
+/** 上传存进资产库（资产库二期）的限制，默认值跟 AssetD 一致。 */
+export interface LibraryUploadLimits {
+  /** 图片、音频的大小上限。 */
+  maxBytes: number;
+  /** 视频、3D 的大小上限。 */
+  maxVideoBytes: number;
+  /** 图片像素上限（AssetD 拒收超过的图片）。 */
+  maxImagePixels: number;
+  /** 每个账户的上传空间，只用在「空间已满」的提示里。 */
+  quotaBytes: number;
 }
 
 const requestContext = new AsyncLocalStorage<AtlasRequestContext>();

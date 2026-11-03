@@ -83,6 +83,18 @@ async function mockUpload(req, res, mode) {
   if (mode === "expired") return send(res, 410, { error: "upload_ticket_expired" });
   if (mode === "toolarge") return send(res, 413, { error: "upload_too_large" });
   if (mode === "rejected") return send(res, 401, { error: "credential_rejected" });
+  // 资产库上传空间满了：像真中转那样另给一张普通上传的地址（这里是 ok 模式），卡片改传那里。
+  if (mode === "libraryfull") {
+    return send(res, 413, {
+      error: "upload_quota_exceeded",
+      quota_bytes: 2 * 1024 * 1024 * 1024,
+      fallback_upload_url: `http://${req.headers.host}/mock-upload/ok`,
+      fallback_expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+      fallback_max_bytes: 32 * 1024 * 1024,
+    });
+  }
+  // AssetD 拒收超像素图片（卡片没查出来时，比如浏览器解不开这种格式）。
+  if (mode === "pixels") return send(res, 422, { error: "image_too_large", width: 8000, height: 6500, max_pixels: 24_000_000 });
   if (mode === "fail-once" && !failedOnce.has(name)) {
     failedOnce.add(name);
     return send(res, 502, { error: "upstream_upload_failed" });

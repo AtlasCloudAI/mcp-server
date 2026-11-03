@@ -291,7 +291,13 @@ const FRONT = { name: "sneaker-front.jpg", size_bytes: Math.round(2.4 * MB), kin
 const SIDE = { name: "sneaker-side.jpg", size_bytes: Math.round(1.8 * MB), kind: "image", url: `${STATIC}/model/example/material/product-shot-02.jpg` } as const;
 const UPLOAD_VARIANTS: Record<
   string,
-  { files: UploadSampleFile[]; expired?: boolean; signedOut?: boolean; overflow?: { picked: number; added: number } }
+  {
+    files: UploadSampleFile[];
+    expired?: boolean;
+    signedOut?: boolean;
+    overflow?: { picked: number; added: number };
+    libraryFull?: boolean;
+  }
 > = {
   upload: { files: [] },
   upload_uploading: {
@@ -301,10 +307,12 @@ const UPLOAD_VARIANTS: Record<
     ],
   },
   upload_done: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "done" }] },
+  // 格式、大小、像素各不符合一个（设计稿 06 页 11/02「文件不符合」）。
   upload_problem: {
     files: [
-      { name: "launch-video.mov", size_bytes: Math.round(148 * MB), kind: "video", status: "invalid", error: "Over the 100 MB limit" },
-      { name: "brand-notes.pdf", size_bytes: Math.round(0.3 * MB), kind: "other", status: "invalid", error: "Use an image, video or audio file" },
+      { name: "brand-notes.pdf", size_bytes: Math.round(0.3 * MB), kind: "other", status: "invalid", error: "Format not supported · use an image, video or audio file" },
+      { name: "lookbook.png", size_bytes: Math.round(68 * MB), kind: "image", status: "invalid", error: "over the 50 MB limit" },
+      { name: "campaign-hero.png", size_bytes: Math.round(31 * MB), kind: "image", status: "invalid", error: "over the 24 MP limit", megapixels: 52 },
     ],
   },
   upload_failed: { files: [{ ...FRONT, status: "failed", error: "Upload failed" }] },
@@ -316,6 +324,8 @@ const UPLOAD_VARIANTS: Record<
     files: Array.from({ length: 10 }, (_, i) => ({ ...(i % 2 ? SIDE : FRONT), name: `product-${i + 1}.jpg`, status: "done" as const })),
     overflow: { picked: 12, added: 10 },
   },
+  // 资产库上传空间满了：文件改走普通上传，照样能用，只是没存进资产库（设计稿 06 页 11/02「上传空间已满」）。
+  upload_library_full: { files: [{ ...FRONT, status: "done" }, { ...SIDE, status: "done" }], libraryFull: true },
 };
 
 function uploadSample(variant: string): UploadCardData {
@@ -327,6 +337,7 @@ function uploadSample(variant: string): UploadCardData {
     // 资产库二期的上限：上传存进资产库，图片、音频 50 MB，视频 100 MB。
     max_bytes: 50 * MB,
     max_video_bytes: 100 * MB,
+    max_image_pixels: 24_000_000,
     library: true,
     max_files: UPLOAD_MAX_FILES,
     sample: true,
@@ -334,6 +345,7 @@ function uploadSample(variant: string): UploadCardData {
     ...(sample.expired ? { sample_expired: true } : {}),
     ...(sample.signedOut ? { sample_signed_out: true } : {}),
     ...(sample.overflow ? { sample_overflow: sample.overflow } : {}),
+    ...(sample.libraryFull ? { sample_library_full: { quota_bytes: 2 * 1024 * MB } } : {}),
   };
 }
 

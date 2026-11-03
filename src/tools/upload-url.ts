@@ -161,7 +161,11 @@ Returns:
           ? `- **Max size**: ${issued.maxBytes} bytes for images and audio, ${issued.maxVideoBytes} bytes for videos and 3D models (${sizeLine})`
           : `- **Max size**: ${issued.maxBytes} bytes (${megabytes} MB)`,
         ...(issued.library
-          ? ["- **Saved to**: the user's Asset Library. The returned `url` lasts about 15 minutes; if it expires, call atlas_use_assets with the returned `asset_id`."]
+          ? [
+              "- **Saved to**: the user's Asset Library. The returned `url` lasts about 15 minutes; if it expires, call atlas_use_assets with the returned `asset_id`.",
+              ...(issued.maxImagePixels ? [`- **Images**: up to ${Math.floor(issued.maxImagePixels / 1_000_000)} MP; larger ones are rejected, so resize them first`] : []),
+              "- **If the Asset Library is full**: the response is HTTP 413 `upload_quota_exceeded` with a `fallback_upload_url`. POST the same file there: it still works for this request but isn't saved to the Asset Library, so tell the user.",
+            ]
           : []),
         `- **Method**: POST the raw bytes; file name in the \`${UPLOAD_FILENAME_HEADER}\` header`,
         "",

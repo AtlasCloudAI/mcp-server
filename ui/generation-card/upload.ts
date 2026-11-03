@@ -8,7 +8,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
-import { PREFILLED_NOTE, hostPrefills, say, userLang } from "./voice.js";
+import { prefillNote, say, userLang } from "./voice.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
 
@@ -704,8 +704,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       handedOff = doneKey();
       changed();
     }
-    if (outcome === "sent" && hostPrefills(deps.app)) deps.notice(PREFILLED_NOTE);
-    if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
+    const claudeNote = prefillNote(deps.app, outcome);
+    if (claudeNote) deps.notice(claudeNote);
+    else if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
     if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
     if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat for another way to share them.");
   }

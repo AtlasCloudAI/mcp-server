@@ -2,7 +2,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { PREFILLED_NOTE, SEND_FAILED_NOTE, hostPrefills, say, sendForUser, userLang } from "../ui/generation-card/voice.js";
+import {
+  PREFILLED_NOTE,
+  PREFILL_ASK_NOTE,
+  SEND_FAILED_NOTE,
+  hostPrefills,
+  isPrefillNote,
+  prefillNote,
+  say,
+  sendForUser,
+  userLang,
+} from "../ui/generation-card/voice.js";
 
 function fakeApp(host: string, locale: string | undefined, reply: () => Promise<{ isError?: boolean }>): { app: App; sent: string[] } {
   const sent: string[] = [];
@@ -55,4 +65,19 @@ test("in Claude the message only lands in the message box, so the card says to p
   sendForUser(fakeApp("chatgpt", undefined, async () => Promise.reject(new Error("no"))).app, "hi", (t) => failed.push(t));
   await settle();
   assert.deepEqual(failed, [SEND_FAILED_NOTE, SEND_FAILED_NOTE]);
+});
+
+test("Claude with text already in the message box: ask the user to accept the replacement, not 'files are ready'", async () => {
+  const claude = fakeApp("Claude", undefined, async () => ({ isError: true }));
+  assert.equal(prefillNote(claude.app, "sent"), PREFILLED_NOTE);
+  // 写进了上下文、消息没放进输入框：Claude 里模型看不到上下文，不能说已经好了。
+  assert.equal(prefillNote(claude.app, "context"), PREFILL_ASK_NOTE);
+  assert.equal(prefillNote(claude.app, "failed"), undefined);
+  assert.equal(prefillNote(fakeApp("chatgpt", undefined, async () => ({})).app, "context"), undefined);
+
+  const notices: string[] = [];
+  sendForUser(claude.app, "hi", (t) => notices.push(t));
+  await settle();
+  assert.deepEqual(notices, [PREFILL_ASK_NOTE]);
+  assert.ok(isPrefillNote(PREFILLED_NOTE) && isPrefillNote(PREFILL_ASK_NOTE) && !isPrefillNote(SEND_FAILED_NOTE));
 });

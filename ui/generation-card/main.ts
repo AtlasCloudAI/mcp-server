@@ -15,7 +15,7 @@ import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, r
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
 import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
-import { PREFILLED_NOTE, hostPrefills, say, sendForUser, userLang } from "./voice.js";
+import { PREFILL_NOTE_MS, isPrefillNote, prefillNote, say, sendForUser, userLang } from "./voice.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -174,7 +174,7 @@ function render(force = false): void {
   if (card?.sample) root.append(diagnostics());
 }
 
-function setNotice(text: string | undefined, ttlMs = 4000): void {
+function setNotice(text: string | undefined, ttlMs = isPrefillNote(text) ? PREFILL_NOTE_MS : 4000): void {
   notice = text;
   render();
   if (text) {
@@ -459,8 +459,9 @@ async function chooseReplacement(missing: string[]): Promise<void> {
           `Use the file${picked.length === 1 ? "" : "s"} below in its place and quote again before generating.\n` +
           assetsForModel(picked);
         void handOff(app, forModel, say.replacedDeleted(userLang(app), picked.length, labels, missing)).then((outcome) => {
-          if (outcome === "sent" && hostPrefills(app)) setNotice(PREFILLED_NOTE);
-          if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
+          const claudeNote = prefillNote(app, outcome);
+          if (claudeNote) setNotice(claudeNote);
+          else if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
           if (outcome === "failed" || outcome === "unsupported") setNotice("Couldn't pass the file on. Tell the chat which file to use instead.");
         });
       },

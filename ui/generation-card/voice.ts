@@ -21,7 +21,26 @@ export function hostPrefills(app: App): boolean {
 }
 
 export const PREFILLED_NOTE = "It's in your message box. Press send to continue.";
+/** 输入框里已经有字时，Claude 先问要不要替换，卡片这边拿到的是「没放进去」（11-03 实测）。 */
+export const PREFILL_ASK_NOTE = "Your message box already has text. If Claude asks to replace it, accept, then press send.";
 export const SEND_FAILED_NOTE = "Couldn't send that. Type it in the chat instead.";
+/** 这两句要用户去输入框里动手，停久一点（别的提示 4 秒）。 */
+export const PREFILL_NOTE_MS = 15_000;
+export function isPrefillNote(text: string | undefined): boolean {
+  return text === PREFILLED_NOTE || text === PREFILL_ASK_NOTE;
+}
+
+/**
+ * 卡片把文件交给模型之后，在 Claude 里该提示什么：放进输入框了就请用户点发送；没放进去（输入框里有字，
+ * Claude 在问要不要替换）就请用户接受替换。写进上下文在 Claude 里不算数（模型看不到），不能说「已经好了」。
+ * 不是 Claude 返回 undefined，照各自原来的提示。
+ */
+export function prefillNote(app: App, outcome: "sent" | "context" | "failed" | "unsupported"): string | undefined {
+  if (!hostPrefills(app)) return undefined;
+  if (outcome === "sent") return PREFILLED_NOTE;
+  if (outcome === "context") return PREFILL_ASK_NOTE;
+  return undefined;
+}
 
 const it = (lang: Lang, count: number) => (lang === "zh" ? (count === 1 ? "它" : "它们") : count === 1 ? "it" : "them");
 const files = (lang: Lang, count: number) => (lang === "zh" ? `${count} 个文件` : count === 1 ? "1 file" : `${count} files`);
@@ -84,7 +103,7 @@ export function sendForUser(app: App, text: string, notice: (text: string) => vo
   app
     .sendMessage({ role: "user", content: [{ type: "text", text }] })
     .then((res) => {
-      if (res.isError) notice(SEND_FAILED_NOTE);
+      if (res.isError) notice(hostPrefills(app) ? PREFILL_ASK_NOTE : SEND_FAILED_NOTE);
       else if (hostPrefills(app)) notice(PREFILLED_NOTE);
     })
     .catch(() => notice(SEND_FAILED_NOTE));

@@ -80,6 +80,14 @@ export function formatModelInfo(model: Model, defaultQuote?: Quote | null): stri
     if (model.price?.discount && model.price.discount !== "100") {
       lines.push(`- Discount: ${model.price.discount}%`);
     }
+    // 验收问题 38：Codex 拿这里的价格直接回答「要花多少」，没调生成工具报价，用户看不到扣费账号，
+    // 也拿不到确认令牌。写明这些数只用来挑模型，给用户的报价要走生成工具。
+    lines.push(
+      `- **Quoting the user**: these prices are for choosing a model. When the user asks what their ` +
+        `request will cost, or wants to approve the cost first, call the generate tool with their ` +
+        `settings and without \`confirmed\`. That call is free, prices this exact request and returns ` +
+        `the billing account and a confirmation_token. Show the user that quote, not the figures above.`
+    );
   }
 
   if (model.coreStrengths?.length) {

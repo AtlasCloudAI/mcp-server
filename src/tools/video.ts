@@ -48,6 +48,11 @@ import type { InputImageShape } from "../services/input-link-check.js";
  * 报价里写明输入图片的形状（2026-11-03 Claude 验收问题 13）：模型看不到图，不知道横竖，要竖屏时
  * 只能反问用户。没写比例（或写的是 adaptive）时出片跟着图走，提醒模型在用户确认前说清楚。
  */
+/** 结构化结果里的输入图片尺寸（报价和提交都带，卡片据此写「Ratio from image · 4:3」）。 */
+function inputImageSummaries(images: InputImageShape[]) {
+  return images.map(({ field, width, height, orientation, ratio }) => ({ field, width, height, orientation, ratio }));
+}
+
 export function inputShapeNotice(images: InputImageShape[] | undefined, body: Record<string, unknown>): string {
   if (!images || images.length === 0) return "";
   const shapes = images.length === 1
@@ -121,8 +126,9 @@ Returns:
           expectedType: "Video",
           endpoint: "/model/generateVideo",
           typeLabel: "video",
-          // 报价时读输入图片的横竖；确认那次不用再读。
-          readInputShapes: !confirmation_token && !confirmed,
+          // 报价和确认都读输入图片的横竖：确认后的进度卡也要写「Ratio from image · 4:3」（验收问题 26）。
+          // 和链接检查一起读，不多等一轮。
+          readInputShapes: true,
         });
         if (!preparation.ok) {
           return {
@@ -161,17 +167,7 @@ Returns:
                 costEstimate(spend),
                 prepared.body
               ),
-              ...(prepared.inputImages
-                ? {
-                    input_images: prepared.inputImages.map(({ field, width, height, orientation, ratio }) => ({
-                      field,
-                      width,
-                      height,
-                      orientation,
-                      ratio,
-                    })),
-                  }
-                : {}),
+              ...(prepared.inputImages ? { input_images: inputImageSummaries(prepared.inputImages) } : {}),
             },
             content: [{
               type: "text",
@@ -224,6 +220,7 @@ Returns:
             prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
+            ...(prepared.inputImages ? { input_images: inputImageSummaries(prepared.inputImages) } : {}),
           },
           content: [
             {

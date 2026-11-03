@@ -18,6 +18,7 @@ import {
   fileNameOf,
   isActive,
   isSignedOut,
+  keepImageRatio,
   newIdempotencyKey,
 } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
@@ -212,6 +213,8 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
     ...(previous?.retry ? { retry: previous.retry } : {}),
   };
   const next = { ...kept, ...carry, ...parsed };
+  // 报价时读出的输入图比例：确认后从报价卡（carry）、刷新时从上一张卡带过来。
+  if (parsed.settings) next.settings = keepImageRatio(parsed.settings, [...(previous?.settings ?? []), ...(carry.settings ?? [])]);
   // 已用时间从最早见到的开始时间算：工作流每一步的 created_at 都会往后跳。
   const startedAt = earliestTime(previous?.submitted_at, next.submitted_at);
   if (startedAt) next.submitted_at = startedAt;

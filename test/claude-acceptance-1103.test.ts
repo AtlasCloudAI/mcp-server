@@ -9,7 +9,7 @@ import { describeNotStarted, recentNotStarted, rememberNotStarted } from "../src
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
 import { isWorkflowModelId } from "../src/services/workflow-catalog.js";
 import { fillAllDefaults, fillRequiredDefaults } from "../src/utils/schema-validator.js";
-import { earliestTime, formatBalance } from "../ui/generation-card/card.js";
+import { earliestTime, formatBalance, keepImageRatio } from "../ui/generation-card/card.js";
 import { contextReachesModel, handOff } from "../ui/generation-card/handoff.js";
 
 function fakeApp(hostName: string, sent: string[], context: string[]): App {
@@ -156,4 +156,16 @@ test("workflow models get every schema default, plain models only the required o
   assert.equal(isWorkflowModelId("atlascloud/studio/product-visuals"), true);
   assert.equal(isWorkflowModelId("atlascloud/workflow/ugc-ad"), true);
   assert.equal(isWorkflowModelId("bytedance/seedream-5.0-pro"), false);
+});
+
+test("progress and result cards keep the input image's ratio from the quote (issue 26)", () => {
+  // 报价时读得出输入图 4:3；提交结果和查结果的参数里只有 adaptive，标签只剩「Ratio from image」。
+  const quoted = settingsChips({ resolution: "720p", duration: 5, ratio: "adaptive" }, { ratio: "4:3" });
+  const later = settingsChips({ resolution: "720p", duration: 5, ratio: "adaptive" });
+  assert.deepEqual(later, ["720p", "5 s", "Ratio from image"]);
+  assert.deepEqual(keepImageRatio(later, quoted), ["720p", "5 s", "Ratio from image · 4:3"]);
+  // 手上没有带比例的标签，或者这一单写明了比例：原样。
+  assert.deepEqual(keepImageRatio(later, ["720p"]), later);
+  assert.deepEqual(keepImageRatio(later, undefined), later);
+  assert.deepEqual(keepImageRatio(["720p", "9:16"], quoted), ["720p", "9:16"]);
 });

@@ -46,7 +46,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 export { settingsChips } from "./card-params.js";
 
-/** 视频报价读出的第一张输入图片的比例（tools/video.ts）。 */
+/** 视频报价和提交结果读出的第一张输入图片的比例（tools/video.ts）。 */
 function inputShapeOf(value: unknown): { ratio: string } | undefined {
   const first = Array.isArray(value) ? record(value[0]) : undefined;
   return typeof first?.ratio === "string" ? { ratio: first.ratio } : undefined;
@@ -147,7 +147,7 @@ export function generationResultCard(
         modelName,
         modelType,
         createdAt: new Date().toISOString(),
-        settings: settingsChips(submittedParams),
+        settings: settingsChips(submittedParams, inputShapeOf(content.input_images)),
       }),
       retry: { tool, arguments: callArgs },
     };

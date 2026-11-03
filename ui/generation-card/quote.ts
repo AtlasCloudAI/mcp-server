@@ -233,7 +233,10 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   /** 服务端核实接口说开始了：接着显示进度。 */
   function startedFrom(result: unknown, quote: QuoteInfo): boolean {
     const before = deps.card();
-    const carry = quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {};
+    const carry = {
+      ...(quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {}),
+      ...(quote.settings ? { settings: quote.settings } : {}),
+    };
     if (!deps.accept(result, carry)) return false;
     const after = deps.card();
     if (!after || after.state === "quote") return false;
@@ -334,7 +337,10 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         return;
       }
       const before = deps.card();
-      const carry = withConfirmation && quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {};
+      const carry = {
+        ...(withConfirmation && quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {}),
+        ...(quote.settings ? { settings: quote.settings } : {}),
+      };
       if (!deps.accept(result, carry)) {
         deps.setState({ phase: "error", message: "Atlas Cloud sent back something this card can't show." });
         return;

@@ -366,6 +366,19 @@ export function earliestTime(a: string | undefined, b: string | undefined): stri
   return bt < at ? b : a;
 }
 
+/** 出片比例跟着输入图时的小标签；服务端 src/apps/card-params.ts 照这个写，后面带「 · 4:3」。 */
+const RATIO_FROM_IMAGE = "Ratio from image";
+
+/**
+ * 输入图的具体比例（「Ratio from image · 4:3」）只有报价时读得出来，提交结果和查结果都只剩
+ * 「Ratio from image」。同一个任务换卡时沿用手上那份带比例的标签（验收问题 26）。
+ */
+export function keepImageRatio(settings: string[], known: string[] | undefined): string[] {
+  const detailed = known?.find((label) => label.startsWith(`${RATIO_FROM_IMAGE} · `));
+  if (!detailed || !settings.includes(RATIO_FROM_IMAGE)) return settings;
+  return settings.map((label) => (label === RATIO_FROM_IMAGE ? detailed : label));
+}
+
 /** 余额：截断到分（$45.3967 写 $45.39），和官网一致；服务端同口径见 src/services/billing-account.ts。 */
 export function formatBalance(value: number): string {
   const cents = Math.floor(value * 100 + 1e-6);

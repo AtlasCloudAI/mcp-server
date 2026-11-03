@@ -8,12 +8,14 @@ import {
   type InputImageShape,
 } from "./input-link-check.js";
 import {
+  fillAllDefaults,
   fillPreferredDefaults,
   fillRequiredDefaults,
   validateModelParams,
   formatValidationError,
 } from "../utils/schema-validator.js";
 import { routeDefaultParams } from "./default-models.js";
+import { isWorkflowModelId } from "./workflow-catalog.js";
 import type { Model } from "../types.js";
 import {
   predictionResponseSchema,
@@ -87,7 +89,9 @@ export async function prepareGeneration(
         "No billable request was submitted. Retry later or choose another model whose schema can be inspected.",
     };
   }
-  const finalParams = fillRequiredDefaults(
+  // 工作流每个选项都要给值，默认值全填；普通模型只填必填的，其余交给上游自己的默认。
+  const fillDefaults = isWorkflowModelId(found.model) ? fillAllDefaults : fillRequiredDefaults;
+  const finalParams = fillDefaults(
     schema,
     fillPreferredDefaults(schema, params, routeDefaultParams(found.model))
   );

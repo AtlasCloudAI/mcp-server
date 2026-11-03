@@ -238,6 +238,26 @@ export function fillRequiredDefaults(
 }
 
 /**
+ * 所有带默认值的字段都填上，不只是必填的。工作流（atlascloud/studio/*）后端要每个选项都给值：
+ * schema 里 ratio、resolution 有默认值但不算必填，只填必填的话报价能过，提交时 Coze 回
+ * 「Missing required parameters：'resolution'」（11-03 ChatGPT 验收）。官网表单也是把默认值全带上提交。
+ */
+export function fillAllDefaults(
+  schema: Record<string, unknown> | null | undefined,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  const extracted = extractInputSchema(schema);
+  if (!extracted) return { ...params };
+  const out: Record<string, unknown> = { ...params };
+  for (const [key, property] of Object.entries(extracted.input.properties || {})) {
+    if (key === "model") continue;
+    if (out[key] !== undefined && out[key] !== null) continue;
+    if (property?.default !== undefined) out[key] = property.default;
+  }
+  return out;
+}
+
+/**
  * 把首选默认值（默认路由模型的产品默认参数）填进调用方没给的字段。只填 schema 里
  * 有的字段，有枚举的必须在枚举里：默认值表和某个模型的 schema 对不上时宁可不填，
  * 也不能把本来能过的请求弄成校验失败。

@@ -7,6 +7,8 @@ import { formatBalanceUsd, describeBillingAccount } from "../src/services/billin
 import { passesChatAttachmentLinks } from "../src/services/client-profile.js";
 import { describeNotStarted, recentNotStarted, rememberNotStarted } from "../src/services/not-started.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
+import { isWorkflowModelId } from "../src/services/workflow-catalog.js";
+import { fillAllDefaults, fillRequiredDefaults } from "../src/utils/schema-validator.js";
 import { earliestTime, formatBalance } from "../ui/generation-card/card.js";
 import { contextReachesModel, handOff } from "../ui/generation-card/handoff.js";
 
@@ -116,4 +118,42 @@ test("a workflow's later steps don't restart the card's elapsed time (issue 27)"
   assert.equal(earliestTime(submitted, undefined), submitted);
   assert.equal(earliestTime(submitted, "not a time"), submitted);
   assert.equal(earliestTime(undefined, undefined), undefined);
+});
+
+// ChatGPT 验收（11-03）：落地页「用模板生成」报价通过、提交时 Coze 回缺 resolution / ratio。
+// product-visuals 的 schema 里这两个有默认值但不在 required 里。
+test("workflow models get every schema default, plain models only the required ones", () => {
+  const productVisuals = {
+    components: {
+      schemas: {
+        Input: {
+          type: "object",
+          properties: {
+            model: { type: "string", default: "atlascloud/studio/product-visuals" },
+            product_image: { type: "string" },
+            user_prompt: { type: "string" },
+            model_image: { type: "string" },
+            ratio: { type: "string", enum: ["1:1", "3:4", "4:3", "16:9", "9:16"], default: "9:16" },
+            resolution: { type: "string", enum: ["1k", "2k", "4k"], default: "2k" },
+            format: { type: "string", default: "png" },
+            count: { type: "integer", default: 1 },
+            visual_type: { type: "string", default: "product_hero" },
+          },
+          required: ["model", "product_image", "user_prompt"],
+        },
+      },
+    },
+  };
+  const given = { product_image: "https://x/p.png", user_prompt: "on a marble table", ratio: "1:1" };
+  assert.deepEqual(fillAllDefaults(productVisuals, given), {
+    ...given,
+    resolution: "2k",
+    format: "png",
+    count: 1,
+    visual_type: "product_hero",
+  });
+  assert.deepEqual(fillRequiredDefaults(productVisuals, given), given);
+  assert.equal(isWorkflowModelId("atlascloud/studio/product-visuals"), true);
+  assert.equal(isWorkflowModelId("atlascloud/workflow/ugc-ad"), true);
+  assert.equal(isWorkflowModelId("bytedance/seedream-5.0-pro"), false);
 });

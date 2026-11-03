@@ -116,6 +116,11 @@ function isDraft(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.toLowerCase() === "true");
 }
 
+/** 工作流的模型 ID：atlascloud/studio/*（老的叫 atlascloud/workflow/*）。 */
+export function isWorkflowModelId(modelId: string): boolean {
+  return modelId.startsWith("atlascloud/studio/") || modelId.startsWith("atlascloud/workflow/");
+}
+
 /** wf-ugc-ad / studio-ugc-ad → atlascloud/studio/ugc-ad；详情没给 model 时的退路。 */
 export function modelIdFromTemplateId(templateId: string): string | undefined {
   const slug = /^(?:wf|studio)-(.+)$/.exec(templateId)?.[1];

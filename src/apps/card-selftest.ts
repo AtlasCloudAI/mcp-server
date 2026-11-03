@@ -125,6 +125,15 @@ const VARIANTS = {
     price: "0.05",
     outputs: [],
   },
+  // 网关原样透传的工作流报错（验收问题 33）：卡片应该只写「缺 resolution」，任务号不被挤出卡片。
+  failed_gateway: {
+    status: "failed",
+    model: "atlascloud/studio/product-visuals",
+    name: "Image ads",
+    type: "Image",
+    price: undefined,
+    outputs: [],
+  },
   // 故意给一个打不开的链接，看卡片「预览不可用」的样子。
   blocked: {
     status: "completed",
@@ -186,6 +195,8 @@ const FAILED_REASONS: Partial<Record<string, string>> = {
   failed_rate_limited: "Too Many Requests (429): the provider rate limit was exceeded",
   failed_unavailable: "The model is temporarily unavailable: ServerOverloaded",
   failed_partial: "Output rejected by content review",
+  failed_gateway:
+    'unexpected http status code: 502, body: {"code":400,"message":"workflow error: Missing required parameters：\'resolution\'","data":null,"request_id":"7703890691595698176"}',
 };
 
 // 网关给的扣费状态（aiproxy#1074）；没列的样例按老网关处理（没有这个字段）。

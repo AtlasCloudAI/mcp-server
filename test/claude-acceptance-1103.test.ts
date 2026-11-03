@@ -1,10 +1,12 @@
-// 2026-11-03 Claude 网页版验收发现的几处：卡片交给模型的内容、附件导入工具、图生视频比例、余额取整。
+// 2026-11-03 Claude 网页版验收发现的几处：卡片交给模型的内容、附件导入工具、图生视频比例、余额取整、确认没开始。
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { settingsChips } from "../src/apps/card-params.js";
 import { formatBalanceUsd, describeBillingAccount } from "../src/services/billing-account.js";
 import { passesChatAttachmentLinks } from "../src/services/client-profile.js";
+import { describeNotStarted, recentNotStarted, rememberNotStarted } from "../src/services/not-started.js";
+import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
 import { formatBalance } from "../ui/generation-card/card.js";
 import { contextReachesModel, handOff } from "../ui/generation-card/handoff.js";
 
@@ -74,4 +76,33 @@ test("balances are cut to the cent, never rounded up, on the card and in the quo
     describeBillingAccount({ name: "Lucas Zhu", type: "personal", user_email: "lucas@example.com", available_usd: 45.3967 }),
     "Lucas Zhu (personal account, lucas@example.com) · $45.39 available"
   );
+});
+
+test("a confirm that did not start is remembered per user and shown with the history", async () => {
+  const store = new InMemoryUploadTicketStore();
+  const now = new Date("2026-11-03T08:30:00.000Z");
+  await rememberNotStarted(
+    "black-forest-labs/flux-schnell",
+    "Model black-forest-labs/flux-schnell is temporarily unavailable. Nothing was charged.\nTell the user to pick another model.",
+    { store, now }
+  );
+  const entries = await recentNotStarted({ store, now });
+  assert.deepEqual(entries, [
+    {
+      model: "black-forest-labs/flux-schnell",
+      reason: "Model black-forest-labs/flux-schnell is temporarily unavailable. Nothing was charged.",
+      at: "2026-11-03T08:30:00.000Z",
+    },
+  ]);
+  const text = describeNotStarted(entries)!;
+  assert.match(text, /did not start/);
+  assert.match(text, /flux-schnell: Model black-forest-labs\/flux-schnell is temporarily unavailable/);
+
+  // 一小时以后不再提；没有记录时不附任何文字。
+  assert.deepEqual(await recentNotStarted({ store, now: new Date("2026-11-03T09:31:00.000Z") }), []);
+  assert.equal(describeNotStarted([]), undefined);
+
+  // 最多留最近 3 条，新的在前。
+  for (const model of ["a/1", "a/2", "a/3"]) await rememberNotStarted(model, "Insufficient balance.", { store, now });
+  assert.deepEqual((await recentNotStarted({ store, now })).map((entry) => entry.model), ["a/3", "a/2", "a/1"]);
 });

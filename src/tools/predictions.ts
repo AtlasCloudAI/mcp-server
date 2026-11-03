@@ -11,6 +11,7 @@ import {
 import { generationCardEnabled } from "../apps/generation-card.js";
 import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
+import { describeNotStarted, recentNotStarted } from "../services/not-started.js";
 
 // 和目录里的模型 ID 同形：厂商/名字/变体，只放这几类字符。
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
@@ -191,6 +192,9 @@ Notes:
         lines.push(
           "Use atlas_get_prediction with a prediction_id for the full record. Failed tasks were not billed."
         );
+        // 确认了却没开始的不会进历史：附在第一页后面，模型才不会猜「卡片没收到点击」。
+        const notStarted = page === 1 ? describeNotStarted(await recentNotStarted()) : undefined;
+        if (notStarted) lines.push("", notStarted);
 
         // 卡片打开时，结果显示成历史列表卡（能展开全屏、筛选、点开单条）。
         const history = generationCardEnabled()

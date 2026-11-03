@@ -6,6 +6,7 @@ import { inputsOf, positiveNumber, promptOf, settingsChips } from "./card-params
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
 import { rememberedMedia } from "../services/media-names.js";
+import { rememberNotStarted } from "../services/not-started.js";
 import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
@@ -193,8 +194,8 @@ const QUOTE_CARD_NOTE =
   "they confirm in the chat instead, call again as described above; the same idempotency_key " +
   "returns the job the card already started rather than a second one. Some apps don't tell you " +
   "what happened on the card, so don't assume the quote is still waiting: if the user asks about it, " +
-  "check atlas_list_predictions first. A confirm the card could not start (for example, not enough " +
-  "balance) charged nothing.";
+  "check atlas_list_predictions first: it also lists confirms that did not start, and why. A confirm " +
+  "the card could not start (for example, not enough balance) charged nothing.";
 
 /**
  * 报价结果补上「主要参数」和扣费账户（需求文档 6.1）。不管卡片开没开都补：Codex、
@@ -242,6 +243,14 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
 ): (args: Args, extra: Extra) => Promise<CallToolResult> {
   return async (args, extra) => {
     const result = await withQuoteDetails(await handler(args, extra), options);
+    if (result.isError && (args.confirmed === true || typeof args.confirmation_token === "string")) {
+      // 确认了却没开始：记下原因，模型之后查历史时能看到（not-started.ts）。
+      const text = result.content.find((block) => block.type === "text");
+      await rememberNotStarted(
+        typeof args.model === "string" ? args.model : tool,
+        text?.type === "text" ? text.text : "Did not start."
+      );
+    }
     if (!generationCardEnabled()) return result;
     if (result.isError) return withAvailableBalance(result);
     const card = generationResultCard(tool, args, result.structuredContent);

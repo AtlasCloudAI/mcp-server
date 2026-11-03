@@ -46,6 +46,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 export { settingsChips } from "./card-params.js";
 
+/** 视频报价读出的第一张输入图片的比例（tools/video.ts）。 */
+function inputShapeOf(value: unknown): { ratio: string } | undefined {
+  const first = Array.isArray(value) ? record(value[0]) : undefined;
+  return typeof first?.ratio === "string" ? { ratio: first.ratio } : undefined;
+}
+
 /** 报价卡上的「任务内容」和「输入素材」（需求文档 6.1）。 */
 function quoteTask(params: Record<string, unknown> | undefined): Pick<QuoteInfo, "prompt" | "inputs"> {
   const prompt = promptOf(params);
@@ -108,7 +114,7 @@ export function generationResultCard(
         ...(content.estimate_partial === true ? { partial: true } : {}),
         ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
         ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
-        settings: settingsChips(params),
+        settings: settingsChips(params, inputShapeOf(content.input_images)),
         ...quoteTask(params),
         ...(account && typeof account.name === "string"
           ? {

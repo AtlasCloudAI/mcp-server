@@ -13,11 +13,27 @@ export function positiveNumber(value: unknown): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+// 这些比例取值出片形状跟着输入图片走（Seedance 的 adaptive 等）。
+const FOLLOWS_IMAGE = new Set(["adaptive", "auto", "original", "keep", "match_input", "match_input_image"]);
+
+/** 参数里写明的出片比例；没写，或写的是「跟随原图」，返回 undefined。 */
+export function requestedRatio(params: Record<string, unknown> | undefined): string | undefined {
+  const aspect = params?.aspect_ratio ?? params?.ratio;
+  if (typeof aspect !== "string") return undefined;
+  const value = aspect.trim();
+  return value && !FOLLOWS_IMAGE.has(value.toLowerCase()) ? value : undefined;
+}
+
 /**
  * 参数里挑几个用户关心的做成小标签（设计稿：1080p · 10 s · 16:9 · Audio）。
  * 只认常见字段名，认不出来就不显示，不去猜。
+ *
+ * 给了输入图片的比例（视频报价读出来的）而参数没写比例时，标出出片会跟着它：「Ratio from image · 4:3」。
  */
-export function settingsChips(params: Record<string, unknown> | undefined): string[] {
+export function settingsChips(
+  params: Record<string, unknown> | undefined,
+  inputShape?: { ratio: string }
+): string[] {
   if (!params) return [];
   const chips: string[] = [];
   const resolution = params.resolution;
@@ -44,8 +60,12 @@ export function settingsChips(params: Record<string, unknown> | undefined): stri
   // Kling、Veo 叫 aspect_ratio，Seedance、Wan 叫 ratio。
   // adaptive 是「跟着输入图片的比例」，直接写 adaptive 用户看不懂（11-03：要竖屏却拿到横图比例）。
   const aspect = params.aspect_ratio ?? params.ratio;
+  const fromImage = inputShape ? `Ratio from image · ${inputShape.ratio}` : "Ratio from image";
   if (typeof aspect === "string" && aspect.trim()) {
-    chips.push(aspect.trim().toLowerCase() === "adaptive" ? "Ratio from image" : aspect.trim());
+    chips.push(FOLLOWS_IMAGE.has(aspect.trim().toLowerCase()) ? fromImage : aspect.trim());
+  } else if (inputShape) {
+    // 模型根本没有比例参数（Kling 图生视频等）：出片同样跟着图。
+    chips.push(fromImage);
   }
 
   for (const key of ["num_images", "max_images", "n", "count"]) {

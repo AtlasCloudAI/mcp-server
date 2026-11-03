@@ -5,7 +5,7 @@
 // 服务端数据见 src/apps/upload-card.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { PickedAsset } from "./assets.js";
+import { type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
 import { thrownErrorText } from "./quote.js";
@@ -71,6 +71,8 @@ export interface UploadItem {
   megapixels?: number;
   /** 正在读图片尺寸（存进资产库前先查像素），读完才排队上传。 */
   checking?: boolean;
+  /** 图片的尺寸和横竖，交给模型时写上（模型看不到图，判断不了横竖）。 */
+  shape?: string;
 }
 
 export type UploadPhase = "empty" | "uploading" | "done" | "problem" | "failed" | "expired";
@@ -211,13 +213,14 @@ export function outcomeOf(status: number, body: string, maxBytes: number): Uploa
   return { kind: "failed", message: "Upload failed" };
 }
 
-/** 交给模型的文字：文件名、类型、地址。资产库选来的带上编号（临时地址过期了模型用它再换）。 */
-export function filesForModel(items: Array<Pick<UploadItem, "name" | "kind" | "url" | "asset_id" | "saved">>): string {
-  const lines = items.map((item) =>
-    item.asset_id
-      ? `- ${item.name} (${item.kind}, ${item.saved ? "saved to" : "from"} the Asset Library, ${item.asset_id}): ${item.url}`
-      : `- ${item.name} (${item.kind}): ${item.url}`
-  );
+/** 交给模型的文字：文件名、类型、尺寸、地址。资产库选来的带上编号（临时地址过期了模型用它再换）。 */
+export function filesForModel(items: Array<Pick<UploadItem, "name" | "kind" | "url" | "asset_id" | "saved" | "shape">>): string {
+  const lines = items.map((item) => {
+    const kind = item.shape ? `${item.kind}, ${item.shape}` : item.kind;
+    return item.asset_id
+      ? `- ${item.name} (${kind}, ${item.saved ? "saved to" : "from"} the Asset Library, ${item.asset_id}): ${item.url}`
+      : `- ${item.name} (${kind}): ${item.url}`;
+  });
   const fromLibrary = items.some((item) => item.asset_id)
     ? " Links for Asset Library files are temporary (about 15 minutes); if one has expired, call atlas_use_assets with its asset ID."
     : "";
@@ -389,7 +392,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         void imageInfo(file).then((info) => {
           item.checking = false;
           if (!items.includes(item)) return;
-          if (info) item.thumb = info.thumb;
+          if (info) {
+            item.thumb = info.thumb;
+            item.shape = shapeText(info.width, info.height);
+          }
           if (info && maxPixels && item.status === "queued" && info.width * info.height > maxPixels) {
             item.status = "invalid";
             item.error = pixelLimitMessage(maxPixels);
@@ -652,6 +658,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         url: asset.url,
         asset_id: asset.asset_id,
         ...(asset.thumb ? { thumb: asset.thumb } : {}),
+        ...(asset.shape ? { shape: asset.shape } : {}),
       });
     }
     changed();

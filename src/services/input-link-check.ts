@@ -1,6 +1,7 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import net from "node:net";
 import { Agent, request } from "undici";
+import { IMAGE_HEADER_BYTES, type ImageShape, imageShape, imageSizeFromBytes } from "./image-size.js";
 
 /**
  * 素材链接报价前先检查（一期需求文档 5.2：素材链接要「检查能否访问，以及是否满足模型要求；
@@ -248,4 +249,93 @@ export function formatInputLinkProblems(problems: InputLinkProblem[]): string {
     ...lines,
     "A direct link to the file itself (not a web page), an uploaded file, or a file from the Asset Library works instead.",
   ].join("\n");
+}
+
+// ---------- 图片宽高 ----------
+
+const MAX_SHAPE_LINKS = 4;
+const SHAPE_TIMEOUT_MS = 3000;
+
+/** 取开头 128 KB（Range 请求），挡内网、逐跳重判重定向和上面一样。读不到返回 undefined。 */
+async function readHead(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs: number): Promise<Uint8Array | undefined> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    if (!allowPrivate && (host === "localhost" || (net.isIP(host) && isBlockedAddress(host)))) return undefined;
+    const res = await request(url, {
+      method: "GET",
+      dispatcher: agent,
+      headers: { range: `bytes=0-${IMAGE_HEADER_BYTES - 1}`, "user-agent": "AtlasCloud-MCP-LinkCheck/1.0" },
+      headersTimeout: timeoutMs,
+      bodyTimeout: timeoutMs,
+      maxRedirections: 0,
+    } as Parameters<typeof request>[1]);
+    if (res.statusCode >= 300) {
+      const location = res.headers.location;
+      await res.body.dump({ limit: 64 * 1024 }).catch(() => undefined);
+      const next = Array.isArray(location) ? location[0] : location;
+      if (res.statusCode >= 400 || !next) return undefined;
+      url = new URL(next, url);
+      continue;
+    }
+    // 服务器无视 Range、整个文件往回推时，读够就停（跳出循环会关掉连接）。
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+      chunks.push(chunk as Buffer);
+      total += (chunk as Buffer).length;
+      if (total >= IMAGE_HEADER_BYTES) break;
+    }
+    return Buffer.concat(chunks).subarray(0, IMAGE_HEADER_BYTES);
+  }
+  return undefined;
+}
+
+/** 几张图片地址 → 各自的宽高和横竖；读不出的不在结果里。 */
+export async function readImageShapes(urls: string[], options: InputLinkCheckOptions = {}): Promise<Map<string, ImageShape>> {
+  const unique = [...new Set(urls)].slice(0, MAX_SHAPE_LINKS);
+  const shapes = new Map<string, ImageShape>();
+  if (unique.length === 0) return shapes;
+  const timeoutMs = options.timeoutMs ?? SHAPE_TIMEOUT_MS;
+  const allowPrivate = options.allowPrivateAddresses === true;
+  const agent = guardedAgent(allowPrivate, timeoutMs);
+  try {
+    await Promise.all(
+      unique.map(async (url) => {
+        try {
+          const head = await readHead(url, allowPrivate, agent, timeoutMs);
+          const size = head ? imageSizeFromBytes(head) : undefined;
+          if (size) shapes.set(url, imageShape(size));
+        } catch {
+          // 读不出就不写宽高，别的照常。
+        }
+      })
+    );
+    return shapes;
+  } finally {
+    await agent.close().catch(() => undefined);
+  }
+}
+
+export interface InputImageShape extends ImageShape {
+  field: string;
+}
+
+/** 参数里图片字段的宽高（视频报价告诉模型出片会是什么形状）。 */
+export async function inputImageShapes(
+  params: Record<string, unknown>,
+  options: InputLinkCheckOptions = {}
+): Promise<InputImageShape[]> {
+  const links = inputLinks(params).filter((link) => expectedKind(link.field) === "image");
+  const shapes = await readImageShapes(links.map((link) => link.url), options);
+  return links.flatMap((link) => {
+    const shape = shapes.get(link.url);
+    return shape ? [{ field: link.field, ...shape }] : [];
+  });
 }

@@ -56,6 +56,8 @@ export interface PickedAsset {
   kind: AssetKind;
   url: string;
   thumb?: string;
+  /** 图片的尺寸和横竖（「1600×1200, landscape (4:3)」）：模型看不到图，要竖屏时据此先说清楚。 */
+  shape?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -98,13 +100,25 @@ export function assetsFromToolResult(result: unknown): AssetCardData | undefined
   return { view: "assets", items, ...(typeof s.next_cursor === "string" ? { next_cursor: s.next_cursor } : {}), max_pick: 10 };
 }
 
-/** atlas_use_assets 的结果：换到的地址和不可用的编号。 */
-export function usedFromToolResult(result: unknown): { assets: Array<{ asset_id: string; url: string }>; missing: string[] } | undefined {
+/** 图片尺寸写给模型看的样子，和服务端一致：「1600×1200, landscape (4:3)」；没有比例就只写横竖。 */
+export function shapeText(width: number, height: number, ratio?: string): string {
+  const value = width / height;
+  const orientation = Math.abs(value - 1) < 0.03 ? "square" : value > 1 ? "landscape" : "portrait";
+  return `${width}×${height}, ${orientation}${ratio ? ` (${ratio})` : ""}`;
+}
+
+/** atlas_use_assets 的结果：换到的地址（图片带尺寸）和不可用的编号。 */
+export function usedFromToolResult(
+  result: unknown
+): { assets: Array<{ asset_id: string; url: string; shape?: string }>; missing: string[] } | undefined {
   const s = record(record(result)?.structuredContent);
   if (!s || !Array.isArray(s.assets)) return undefined;
   const assets = s.assets.flatMap((entry) => {
     const a = record(entry);
-    return a && typeof a.asset_id === "string" && typeof a.url === "string" ? [{ asset_id: a.asset_id, url: a.url }] : [];
+    if (!a || typeof a.asset_id !== "string" || typeof a.url !== "string") return [];
+    const sized = typeof a.width === "number" && typeof a.height === "number" && a.width > 0 && a.height > 0;
+    const shape = sized ? shapeText(a.width as number, a.height as number, typeof a.ratio === "string" ? a.ratio : undefined) : undefined;
+    return [{ asset_id: a.asset_id, url: a.url, ...(shape ? { shape } : {}) }];
   });
   const missing = Array.isArray(s.missing) ? s.missing.filter((id): id is string => typeof id === "string") : [];
   return { assets, missing };
@@ -117,9 +131,9 @@ function resultErrorText(result: { content?: Array<{ type: string; text?: unknow
 
 const KIND_WORD: Record<AssetKind, string> = { image: "image", video: "video", audio: "audio", "3d": "3D model", other: "file" };
 
-/** 交给模型的文字：名字、类型、编号、地址。地址是临时的，过期了模型用编号再换。 */
-export function assetsForModel(picked: Pick<PickedAsset, "asset_id" | "label" | "kind" | "url">[]): string {
-  const lines = picked.map((a) => `- ${a.label} (${KIND_WORD[a.kind]}, ${a.asset_id}): ${a.url}`);
+/** 交给模型的文字：名字、类型、尺寸、编号、地址。地址是临时的，过期了模型用编号再换。 */
+export function assetsForModel(picked: Pick<PickedAsset, "asset_id" | "label" | "kind" | "url" | "shape">[]): string {
+  const lines = picked.map((a) => `- ${a.label} (${KIND_WORD[a.kind]}${a.shape ? `, ${a.shape}` : ""}, ${a.asset_id}): ${a.url}`);
   return (
     `The user picked ${picked.length === 1 ? "1 file" : `${picked.length} files`} from their Atlas Asset Library in the card. ` +
     "Use these URLs as the media inputs for their request. They are temporary (about 15 minutes); if one has expired, " +
@@ -301,7 +315,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       const byId = new Map(picks.map((p) => [p.asset_id, p]));
       const ready = used.assets.flatMap((u): PickedAsset[] => {
         const p = byId.get(u.asset_id);
-        return p ? [{ asset_id: p.asset_id, label: p.label, kind: p.kind, url: u.url, ...(p.thumb_url ? { thumb: p.thumb_url } : {}) }] : [];
+        return p
+          ? [{ asset_id: p.asset_id, label: p.label, kind: p.kind, url: u.url, ...(p.thumb_url ? { thumb: p.thumb_url } : {}), ...(u.shape ? { shape: u.shape } : {}) }]
+          : [];
       });
       if (used.missing.length > 0) {
         for (const id of used.missing) selected.delete(id);

@@ -145,6 +145,18 @@ export const generationOutputSchema = {
   estimate_missing: z.array(z.string()).optional(),
   // 实际要提交的参数（含服务端补的默认值）：报价上的「主要参数」按它显示
   params: z.record(z.unknown()).optional(),
+  // 输入图片的宽高和横竖（视频报价读的）：出片形状跟着图走时，模型据此提醒用户
+  input_images: z
+    .array(
+      z.object({
+        field: z.string(),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        orientation: z.enum(["landscape", "portrait", "square"]),
+        ratio: z.string(),
+      })
+    )
+    .optional(),
   // 扣费账户（需求文档 6.1）：查不到就不给
   billing_account: z
     .object({

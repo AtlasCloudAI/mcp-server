@@ -125,6 +125,8 @@ before(async () => {
   process.env.ATLASCLOUD_API_BASE_URL = origin;
   process.env.ATLASCLOUD_GENERATION_API_BASE_URL = origin;
   process.env.ATLASCLOUD_API_KEY = "test-atlas-key";
+  // 假地址指向真的 OSS 域名：atlas_use_assets 不去读图片宽高（读法在 image-shape.test.ts）。
+  process.env.MCP_INPUT_LINK_CHECK = "off";
 });
 
 after(async () => {

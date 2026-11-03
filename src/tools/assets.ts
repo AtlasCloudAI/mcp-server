@@ -3,6 +3,8 @@ import { z } from "zod";
 import { ApiRequestError, api } from "../services/api-client.js";
 import { rememberAssetNames, rememberAssetUrls, rememberedMedia } from "../services/media-names.js";
 import { handleError } from "../utils/error-handler.js";
+import { describeImageShape, type ImageShape } from "../services/image-size.js";
+import { inputLinkCheckEnabled, readImageShapes } from "../services/input-link-check.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { clientRendersCards, generationCardEnabled } from "../apps/generation-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
@@ -484,7 +486,7 @@ Args:
   - asset_ids (string[], 1-${ASSETS_MAX_PICK}): asset_id values from atlas_search_assets
 
 Returns:
-  the URLs with their expiry, and any asset IDs that are no longer available.
+  the URLs with their expiry, the size and shape of images (landscape, portrait or square), and any asset IDs that are no longer available.
 
 Rules:
   - The URLs expire after about 15 minutes. Generate soon; if a generation can't fetch one, call this tool again for fresh URLs.
@@ -503,6 +505,10 @@ Rules:
             url: z.string(),
             expires_at: z.string().optional(),
             mime_type: z.string().optional(),
+            width: z.number().int().positive().optional(),
+            height: z.number().int().positive().optional(),
+            orientation: z.enum(["landscape", "portrait", "square"]).optional(),
+            ratio: z.string().optional(),
           })
         ),
         missing: z.array(z.string()),
@@ -517,9 +523,23 @@ Rules:
       try {
         const { resolved, missing } = await resolveAssets(ids);
         await rememberAssetUrls(resolved);
+        // 图片的宽高和横竖：模型看不到图，要竖屏视频时据此先跟用户说清楚（问题 13）。
+        const shapes = inputLinkCheckEnabled()
+          ? await readImageShapes(
+              resolved.filter((asset) => !asset.mime_type || asset.mime_type.startsWith("image/")).map((asset) => asset.url)
+            )
+          : new Map<string, ImageShape>();
+        const assets = resolved.map((asset) => {
+          const shape = shapes.get(asset.url);
+          return shape
+            ? { ...asset, width: shape.width, height: shape.height, orientation: shape.orientation, ratio: shape.ratio }
+            : asset;
+        });
         const lines = ["# Asset URLs", ""];
         for (const asset of resolved) {
-          lines.push(`- \`${asset.asset_id}\`${asset.mime_type ? ` (${asset.mime_type})` : ""}: ${asset.url}`);
+          const shape = shapes.get(asset.url);
+          const about = [asset.mime_type, shape ? describeImageShape(shape) : undefined].filter(Boolean).join(", ");
+          lines.push(`- \`${asset.asset_id}\`${about ? ` (${about})` : ""}: ${asset.url}`);
         }
         if (missing.length > 0) {
           lines.push(
@@ -538,7 +558,7 @@ Rules:
         }
         return {
           ...(resolved.length === 0 ? { isError: true } : {}),
-          structuredContent: { assets: resolved, missing },
+          structuredContent: { assets, missing },
           content: [{ type: "text", text: lines.join("\n") }],
         };
       } catch (error) {

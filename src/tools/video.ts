@@ -40,6 +40,24 @@ import {
   withGenerationCard,
 } from "../apps/generation-quote.js";
 import { refreshLibraryInputs, replaceUrls } from "./assets.js";
+import { requestedRatio } from "../apps/card-params.js";
+import { describeImageShape } from "../services/image-size.js";
+import type { InputImageShape } from "../services/input-link-check.js";
+
+/**
+ * 报价里写明输入图片的形状（2026-11-03 Claude 验收问题 13）：模型看不到图，不知道横竖，要竖屏时
+ * 只能反问用户。没写比例（或写的是 adaptive）时出片跟着图走，提醒模型在用户确认前说清楚。
+ */
+export function inputShapeNotice(images: InputImageShape[] | undefined, body: Record<string, unknown>): string {
+  if (!images || images.length === 0) return "";
+  const shapes = images.length === 1
+    ? describeImageShape(images[0]!)
+    : images.map((image) => `${image.field} ${describeImageShape(image)}`).join("; ");
+  const ratio = requestedRatio(body);
+  return ratio
+    ? `- **Input image**: ${shapes}. The video is set to ${ratio}, so the model fits the image to that frame.\n`
+    : `- **Input image**: ${shapes}. The video takes this shape. If the user asked for another shape (for example vertical 9:16), tell them before they confirm.\n`;
+}
 
 export function registerVideoTools(server: McpServer): void {
   server.registerTool(
@@ -62,7 +80,7 @@ You should also use atlas_get_model_info to see the full parameter list and sche
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
-Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). If the user asks for vertical, square or widescreen output and the image has another shape, say so before quoting and offer a model whose schema has a ratio parameter, or a cropped image. Do not drop the request silently.
+Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). atlas_use_assets and the quote report the input image's size and whether it is landscape, portrait or square. If the user asks for vertical, square or widescreen output and the image has another shape, say so before they confirm and offer a model whose schema has a ratio parameter, or a cropped image. Do not drop the request silently.
 
 Args:
   - model (string, required): The exact video model ID. Use atlas_list_models to find valid IDs.
@@ -103,6 +121,8 @@ Returns:
           expectedType: "Video",
           endpoint: "/model/generateVideo",
           typeLabel: "video",
+          // 报价时读输入图片的横竖；确认那次不用再读。
+          readInputShapes: !confirmation_token && !confirmed,
         });
         if (!preparation.ok) {
           return {
@@ -133,18 +153,32 @@ Returns:
           );
           const balanceLine = await balanceLinePromise;
           return {
-            structuredContent: generationConfirmationStructuredContent(
-              prepared.model,
-              "video",
-              confirmation,
-              costEstimate(spend),
-              prepared.body
-            ),
+            structuredContent: {
+              ...generationConfirmationStructuredContent(
+                prepared.model,
+                "video",
+                confirmation,
+                costEstimate(spend),
+                prepared.body
+              ),
+              ...(prepared.inputImages
+                ? {
+                    input_images: prepared.inputImages.map(({ field, width, height, orientation, ratio }) => ({
+                      field,
+                      width,
+                      height,
+                      orientation,
+                      ratio,
+                    })),
+                  }
+                : {}),
+            },
             content: [{
               type: "text",
               text:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
+                `${inputShapeNotice(prepared.inputImages, prepared.body)}` +
                 `${confirmationCostNotice(spend)}\n` +
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +

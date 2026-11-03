@@ -1,6 +1,12 @@
 import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
 import { generationApi } from "./api-client.js";
-import { checkInputLinks, formatInputLinkProblems, inputLinkCheckEnabled } from "./input-link-check.js";
+import {
+  checkInputLinks,
+  formatInputLinkProblems,
+  inputImageShapes,
+  inputLinkCheckEnabled,
+  type InputImageShape,
+} from "./input-link-check.js";
 import {
   fillPreferredDefaults,
   fillRequiredDefaults,
@@ -23,6 +29,8 @@ export interface PreparedGeneration {
   body: Record<string, unknown>;
   endpoint: string;
   typeLabel: string;
+  /** 参数里图片的宽高和横竖（只在 readInputShapes 时读）。 */
+  inputImages?: InputImageShape[];
 }
 
 export type PrepareResult =
@@ -36,6 +44,8 @@ interface SubmitOptions {
   endpoint: string;
   // Human label used in messages, e.g. "image", "video", "audio"
   typeLabel: string;
+  // 读输入图片的宽高（视频报价时：告诉模型出片会跟着图是横是竖）
+  readInputShapes?: boolean;
 }
 
 /**
@@ -88,11 +98,17 @@ export async function prepareGeneration(
 
   // 素材链接先检查（需求文档 5.2）：打不开、是网页、类型不对的链接，在报价之前就说清楚是哪一条，
   // 而不是等网关下载失败、任务挂掉之后才知道。
+  // 图片宽高和链接检查一起读，不多等一轮。
+  let inputImages: InputImageShape[] = [];
   if (inputLinkCheckEnabled()) {
-    const problems = await checkInputLinks(finalParams);
+    const [problems, shapes] = await Promise.all([
+      checkInputLinks(finalParams),
+      opts.readInputShapes ? inputImageShapes(finalParams) : Promise.resolve([]),
+    ]);
     if (problems.length > 0) {
       return { ok: false, message: formatInputLinkProblems(problems) };
     }
+    inputImages = shapes;
   }
 
   const body = { model: found.model, ...finalParams };
@@ -103,6 +119,7 @@ export async function prepareGeneration(
       body,
       endpoint: opts.endpoint,
       typeLabel: opts.typeLabel,
+      ...(inputImages.length > 0 ? { inputImages } : {}),
     },
   };
 }

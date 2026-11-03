@@ -8,6 +8,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
+import { PREFILLED_NOTE, hostPrefills, say, userLang } from "./voice.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
 
@@ -697,16 +698,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const done = items.filter((i) => i.status === "done" && i.url);
     if (done.length === 0) return;
     const names = done.map((i) => i.name).join(", ");
-    const them = done.length === 1 ? "it" : "them";
     // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
-    const outcome = await handOff(deps.app, filesForModel(done), {
-      short: `I've added ${done.length === 1 ? "1 file" : `${done.length} files`} in the Atlas card (${names}). Please use ${them}.`,
-      ask: `Please use ${them}.`,
-    });
+    const outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names));
     if (outcome === "sent" || outcome === "context") {
       handedOff = doneKey();
       changed();
     }
+    if (outcome === "sent" && hostPrefills(deps.app)) deps.notice(PREFILLED_NOTE);
     if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
     if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
     if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat for another way to share them.");

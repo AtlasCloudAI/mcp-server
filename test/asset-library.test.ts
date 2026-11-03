@@ -14,6 +14,7 @@ import { filesForModel } from "../ui/generation-card/upload.js";
 
 let fake: Server;
 let lastListQuery = "";
+const listQueries: string[] = [];
 const sourceUrlBodies: string[][] = [];
 /** 每次换地址都给新的签名参数，像真的 AssetD 一样：同一素材两次换到的地址不同。 */
 let signature = 0;
@@ -83,9 +84,16 @@ before(async () => {
         return;
       }
       lastListQuery = url.search;
+      listQueries.push(url.search);
       const type = url.searchParams.get("media_type");
       // 3D 只在按 3D 筛时出现，不改动其余用例看到的列表。
-      const items = type === "3d" ? [MODEL_3D] : [IMAGE, VIDEO, UPLOAD].filter((item) => !type || item.media_type === type);
+      // 资产名都是英文：按中文词搜什么都搜不到（问题 20）。
+      const items =
+        url.searchParams.get("q") === "耳机"
+          ? []
+          : type === "3d"
+            ? [MODEL_3D]
+            : [IMAGE, VIDEO, UPLOAD].filter((item) => !type || item.media_type === type);
       res.end(JSON.stringify({ code: 200, msg: "succeed", data: { items, pagination: { limit: 12, count: items.length, next_cursor: type ? undefined : "cursor-2" } } }));
       return;
     }
@@ -333,4 +341,27 @@ test("交给模型的文字：带编号，说清地址是临时的、过期了�
   assert.match(mixed, new RegExp(`from the Asset Library, ${UPLOAD.asset_id}\\): https://x/s.jpg`));
   assert.match(mixed, /temporary/);
   assert.doesNotMatch(filesForModel([{ name: "photo.jpg", kind: "image", url: "https://u/p.jpg" }]), /temporary/);
+});
+
+test("中文词搜不到：改列最近的素材并写明没搜到，卡片标出来（问题 20）", async () => {
+  listQueries.length = 0;
+  const { result } = await callTool(true, "atlas_search_assets", { query: "耳机", media_type: "image" });
+  // 先按词搜，没搜到再不带词列最近的同类素材。
+  assert.deepEqual(
+    listQueries.map((q) => [new URLSearchParams(q).get("q"), new URLSearchParams(q).get("media_type")]),
+    [["耳机", "image"], [null, "image"]]
+  );
+  const structured = result.structuredContent as { count: number; unmatched_query?: string };
+  assert.equal(structured.unmatched_query, "耳机");
+  assert.equal(structured.count, 2);
+  assert.match(text(result), /No assets match "耳机"\. Asset names are usually English/);
+  const card = result._meta?.["atlascloud/assets"] as Record<string, unknown>;
+  assert.equal(card.unmatched_query, "耳机");
+  assert.equal(card.query, undefined, "列的不是搜索结果，卡片不写「Results for」");
+  assert.equal(assetsFromToolResult(result)?.unmatched_query, "耳机");
+
+  // 翻页（带游标）时不再退回，照常按词搜。
+  listQueries.length = 0;
+  await callTool(false, "atlas_search_assets", { query: "耳机", cursor: "cursor-2" });
+  assert.equal(listQueries.length, 1);
 });

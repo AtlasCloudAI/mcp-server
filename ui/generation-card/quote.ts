@@ -22,6 +22,7 @@ import {
   typeLabel,
 } from "./card.js";
 import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
+import { say, sendForUser, userLang } from "./voice.js";
 
 const CHECK_TOOL = "atlas_card_check_submission";
 /** 核实「到底提交没有」：每 5 秒问一次，两分钟还说不准就交给用户。服务端 90 秒查不到就会说没开始。 */
@@ -373,21 +374,14 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         deps.notice("This is a sample card, so nothing was sent.");
         return;
       }
-      deps.app
-        .sendMessage({ role: "user", content: [{ type: "text", text: "Before generating, I'd like to change the request." }] })
-        .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
+      sendForUser(deps.app, say.changeRequest(userLang(deps.app)), deps.notice);
     },
     switchModel() {
       if (sample()) {
         deps.notice("This is a sample card, so nothing was sent.");
         return;
       }
-      deps.app
-        .sendMessage({
-          role: "user",
-          content: [{ type: "text", text: `${modelLabel(deps.card() ?? {})} is unavailable right now. Please suggest a different model for the same request.` }],
-        })
-        .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
+      sendForUser(deps.app, say.switchModel(userLang(deps.app), modelLabel(deps.card() ?? {})), deps.notice);
     },
     checkAgain: () => void verify(),
     chooseAnother(missing) {
@@ -401,13 +395,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         return;
       }
       // 宿主不让卡片调工具：请模型打开资产库。
-      const what = missing.length > 0 ? missing.join(", ") : "One of my files";
-      deps.app
-        .sendMessage({
-          role: "user",
-          content: [{ type: "text", text: `${what} is no longer in my Asset Library. Show me my Asset Library so I can choose another file.` }],
-        })
-        .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
+      sendForUser(deps.app, say.missingFromLibrary(userLang(deps.app), missing), deps.notice);
     },
     topUp: () => deps.openUrl(billingUrlFor(deps.card()?.open_url)),
     openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),

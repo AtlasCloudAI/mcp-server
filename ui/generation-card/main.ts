@@ -15,6 +15,7 @@ import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, r
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
 import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
+import { PREFILLED_NOTE, hostPrefills, say, sendForUser, userLang } from "./voice.js";
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
@@ -324,12 +325,7 @@ function sendUserMessage(text: string): void {
     setNotice("This is a sample card, so nothing was sent.");
     return;
   }
-  app
-    .sendMessage({ role: "user", content: [{ type: "text", text }] })
-    .then((res) => {
-      if (res.isError) setNotice("Couldn't send that. Type it in the chat instead.");
-    })
-    .catch(() => setNotice("Couldn't send that. Type it in the chat instead."));
+  sendForUser(app, text, setNotice);
 }
 
 /** 交给宿主下载（一个或几个文件）；宿主不支持或下载没成，返回 false。 */
@@ -394,7 +390,7 @@ const actions: CardActions = {
     // 报价卡，用户在上面改或确认。不知道（比如从查结果进来的卡片）就请模型重新报价。
     const retry = card?.retry;
     if (!retry || card?.sample || hostCaps().serverTools === undefined) {
-      sendUserMessage("That generation failed. Please give me a new quote for it; I may want to change something first.");
+      sendUserMessage(say.failedRequote(userLang(app)));
       return;
     }
     void app
@@ -406,7 +402,7 @@ const actions: CardActions = {
       .catch(() => setNotice("Couldn't get a new quote. Try again in a moment."));
   },
   switchModel() {
-    sendUserMessage("That generation failed. Please suggest a different model for the same request.");
+    sendUserMessage(say.failedSwitchModel(userLang(app)));
   },
 };
 
@@ -431,7 +427,7 @@ const quoteActions = createQuoteActions({
 async function chooseReplacement(missing: string[]): Promise<void> {
   const sample = card?.sample === true;
   if (!sample && hostCaps().serverTools === undefined) {
-    sendUserMessage(`${missing.join(", ") || "One of my files"} is no longer in my Asset Library. Show me my Asset Library so I can choose another file.`);
+    sendUserMessage(say.missingFromLibrary(userLang(app), missing));
     return;
   }
   let initial: AssetCardData | undefined;
@@ -462,10 +458,8 @@ async function chooseReplacement(missing: string[]): Promise<void> {
           `${gone} was deleted from the user's Asset Library, so the last quote was not submitted and nothing was charged. ` +
           `Use the file${picked.length === 1 ? "" : "s"} below in its place and quote again before generating.\n` +
           assetsForModel(picked);
-        void handOff(app, forModel, {
-          short: `I picked ${labels} to replace ${gone}. Please quote again with ${picked.length === 1 ? "it" : "them"}.`,
-          ask: "Please quote again with the new file.",
-        }).then((outcome) => {
+        void handOff(app, forModel, say.replacedDeleted(userLang(app), picked.length, labels, missing)).then((outcome) => {
+          if (outcome === "sent" && hostPrefills(app)) setNotice(PREFILLED_NOTE);
           if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
           if (outcome === "failed" || outcome === "unsupported") setNotice("Couldn't pass the file on. Tell the chat which file to use instead.");
         });

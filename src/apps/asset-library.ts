@@ -32,6 +32,8 @@ export interface AssetCardItem {
 export interface AssetCardData {
   view: "assets";
   query?: string;
+  /** 这个词一个都没搜到，卡片里列的是最近的素材（写明「没搜到，这些是最近的」）。 */
+  unmatched_query?: string;
   media_type?: AssetMediaType;
   items: AssetCardItem[];
   /** 还有下一页时的游标。 */

@@ -5,6 +5,7 @@
 
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
+import { PREFILLED_NOTE, hostPrefills, say, userLang } from "./voice.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
@@ -38,6 +39,8 @@ export interface AssetCardItem {
 export interface AssetCardData {
   view: "assets";
   query?: string;
+  /** 这个词一个都没搜到，列的是最近的素材。 */
+  unmatched_query?: string;
   media_type?: AssetFilter;
   items: AssetCardItem[];
   next_cursor?: string;
@@ -97,7 +100,13 @@ export function assetsFromToolResult(result: unknown): AssetCardData | undefined
       },
     ];
   });
-  return { view: "assets", items, ...(typeof s.next_cursor === "string" ? { next_cursor: s.next_cursor } : {}), max_pick: 10 };
+  return {
+    view: "assets",
+    items,
+    ...(typeof s.next_cursor === "string" ? { next_cursor: s.next_cursor } : {}),
+    ...(typeof s.unmatched_query === "string" ? { unmatched_query: s.unmatched_query } : {}),
+    max_pick: 10,
+  };
 }
 
 /** 图片尺寸写给模型看的样子，和服务端一致：「1600×1200, landscape (4:3)」；没有比例就只写横竖。 */
@@ -252,7 +261,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
         arguments: {
           limit: PAGE_SIZE,
           ...(filter ? { media_type: filter } : {}),
-          ...(keepQuery ? { query: keepQuery } : {}),
+          // 没搜到改列最近的那一页，「Load more」接着列最近的，不再带搜索词。
+          ...(keepQuery && !(next.append && data.unmatched_query) ? { query: keepQuery } : {}),
           ...(next.append && data.next_cursor ? { cursor: data.next_cursor } : {}),
         },
       });
@@ -264,7 +274,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
         return;
       }
       const items = next.append ? [...data.items, ...page.items] : page.items;
-      data = { ...page, items, ...(keepQuery ? { query: keepQuery } : {}), max_pick: data.max_pick };
+      const unmatched = next.append ? data.unmatched_query : page.unmatched_query;
+      data = { ...page, items, ...(keepQuery ? { query: keepQuery } : {}), ...(unmatched ? { unmatched_query: unmatched } : {}), max_pick: data.max_pick };
+      if (!unmatched) delete data.unmatched_query;
       if (!keepQuery) delete data.query;
     } catch (e) {
       const text = thrownErrorText(e);
@@ -328,14 +340,12 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
         return;
       }
       const labels = ready.map((a) => a.label).join(", ");
-      const outcome = await handOff(deps.app, assetsForModel(ready), {
-        short: `I've picked ${ready.length === 1 ? "1 file" : `${ready.length} files`} from my Asset Library in the Atlas card (${labels}). Please use ${ready.length === 1 ? "it" : "them"}.`,
-        ask: `Please use ${ready.length === 1 ? "it" : "them"}.`,
-      });
+      const outcome = await handOff(deps.app, assetsForModel(ready), say.pickedFromLibrary(userLang(deps.app), ready.length, labels));
       if (outcome === "sent" || outcome === "context") {
         handedOff = selectionKey();
         deps.onHandedOff?.();
       }
+      if (outcome === "sent" && hostPrefills(deps.app)) deps.notice(PREFILLED_NOTE);
       if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
       if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
       if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat to use them.");
@@ -516,7 +526,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
       title,
       opts.fullscreen ? searchBox() : null,
-      data.query && !opts.fullscreen
+      data.unmatched_query && data.items.length > 0
+        ? h("p", { class: "desc asset-query" }, `Nothing matched “${data.unmatched_query}”, so these are your latest files.`)
+        : data.query && !opts.fullscreen
         ? h(
             "p",
             { class: "desc asset-query" },

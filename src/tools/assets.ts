@@ -389,6 +389,8 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
         next_cursor: z.string().optional(),
         /** 资产库没开通时为 false（充值后才能用）。 */
         activated: z.boolean().optional(),
+        /** 这个词一个都没搜到，列的是最近的素材。 */
+        unmatched_query: z.string().optional(),
         assets: z.array(
           z.object({
             asset_id: z.string(),
@@ -407,7 +409,11 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
     },
     async ({ query, media_type, limit, cursor }) => {
       try {
-        const { items, nextCursor } = await searchAssets({ query, media_type, limit, cursor });
+        let { items, nextCursor } = await searchAssets({ query, media_type, limit, cursor });
+        // 资产名多是英文文件名或模型 ID，用中文等别的语言搜几乎搜不到，用户有图也会被引去重新上传
+        // （验收问题 20：ChatGPT 按「耳机」搜）。没搜到就改列最近的，让用户自己挑。
+        const unmatched = query && !cursor && items.length === 0 ? query : undefined;
+        if (unmatched) ({ items, nextCursor } = await searchAssets({ media_type, limit }));
         const assets = items.map((item) => {
           const { model, prompt } = contextOf(item);
           const thumb = httpsUrl(item.thumbnail_url);
@@ -425,8 +431,21 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
 
         await rememberAssetNames(assets);
 
-        const lines = [`# Asset Library (${assets.length}${query ? ` matching "${query}"` : ""})`, ""];
+        const lines = [
+          unmatched
+            ? `# Asset Library (nothing matches "${unmatched}"; ${assets.length} most recent)`
+            : `# Asset Library (${assets.length}${query ? ` matching "${query}"` : ""})`,
+          "",
+        ];
         if (clientRendersCards(server)) lines.push(ASSETS_CARD_NOTE, "");
+        if (unmatched && items.length > 0) {
+          lines.push(
+            `No assets match "${unmatched}". Asset names are usually English file names or model IDs, so words in other ` +
+              "languages rarely match. These are the most recent assets instead: let the user pick one, or search again in English " +
+              "before asking them to upload.",
+            ""
+          );
+        }
         if (items.length === 0) {
           lines.push(
             query || media_type || cursor
@@ -447,7 +466,7 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
         const card: AssetCardData | undefined = generationCardEnabled()
           ? {
               view: "assets",
-              ...(query ? { query } : {}),
+              ...(unmatched ? { unmatched_query: unmatched } : query ? { query } : {}),
               ...(media_type ? { media_type } : {}),
               items: items.map(assetCardItem),
               ...(nextCursor ? { next_cursor: nextCursor } : {}),
@@ -456,7 +475,12 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
           : undefined;
         return {
           ...(card ? { _meta: { [ASSETS_META_KEY]: card } } : {}),
-          structuredContent: { count: assets.length, ...(nextCursor ? { next_cursor: nextCursor } : {}), assets },
+          structuredContent: {
+            count: assets.length,
+            ...(nextCursor ? { next_cursor: nextCursor } : {}),
+            ...(unmatched ? { unmatched_query: unmatched } : {}),
+            assets,
+          },
           content: [{ type: "text", text: lines.join("\n") }],
         };
       } catch (error) {

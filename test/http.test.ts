@@ -513,7 +513,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     assert.deepEqual((importTool?._meta as Record<string, unknown>)["openai/fileParams"], ["files"]);
   });
 
-  await t.test("a server-side client sees the same tools, and atlas_chat needs tasks:write", async () => {
+  await t.test("a server-side client sees the same tools except the ChatGPT attachment importer, and atlas_chat needs tasks:write", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       // Claude 从服务端调用，不带 Origin
       requestInit: { headers: { Authorization: "Bearer claude" } },
@@ -522,8 +522,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 18);
-      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...REMOTE_TOOL_NAMES].sort());
+      // Claude 不会把附件当下载链接交给工具，导入附件的工具对它没用（11-03 Claude 实测露出来了）。
+      const expected = REMOTE_TOOL_NAMES.filter((name) => name !== "atlas_import_chat_files");
+      assert.equal(listed.tools.length, expected.length);
+      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...expected].sort());
       const chat = listed.tools.find((tool) => tool.name === "atlas_chat");
       assert.ok(chat, "atlas_chat must be listed for Claude");
       assert.deepEqual(chat.annotations, TOOL_POLICIES.atlas_chat.annotations);

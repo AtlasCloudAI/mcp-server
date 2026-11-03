@@ -22,11 +22,18 @@ import {
 import { registerCardSelftestTool } from "./apps/card-selftest.js";
 import { registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
+import { passesChatAttachmentLinks } from "./services/client-profile.js";
 
 export type ServerProfile = "stdio" | "remote";
 
+export interface ServerClient {
+  /** OAuth client_id of the remote client; decides which client-specific tools to list. */
+  clientId?: string;
+}
+
 export function createAtlasCloudServer(
-  profile: ServerProfile = "stdio"
+  profile: ServerProfile = "stdio",
+  client: ServerClient = {}
 ): McpServer {
   const server = new McpServer(
     {
@@ -63,7 +70,10 @@ export function createAtlasCloudServer(
   // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
   // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。
   registerUploadUrlTool(server);
-  registerImportChatFilesTool(server);
+  // 只给会把附件当下载链接传过来的客户端（ChatGPT）；stdio 照旧全部注册。
+  if (profile === "stdio" || passesChatAttachmentLinks(client.clientId)) {
+    registerImportChatFilesTool(server);
+  }
   if (profile === "stdio") {
     registerUploadTools(server);
   }

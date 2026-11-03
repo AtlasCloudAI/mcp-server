@@ -64,6 +64,17 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
   }
 }
 
+/**
+ * Does this client hand chat attachments to tools as download links (what
+ * atlas_import_chat_files reads)? ChatGPT does. Claude on the web, Claude Code and
+ * Codex don't, so the tool only clutters their tool list (seen in Claude on
+ * 2026-11-03). Unknown clients keep it: some of them may pass links the same way.
+ */
+export function passesChatAttachmentLinks(clientId: string | undefined): boolean {
+  const client = knownClient(clientId);
+  return client === null || client === "chatgpt";
+}
+
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
   return clientProfile(getRequestContext()?.authInfo.clientId);

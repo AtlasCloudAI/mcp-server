@@ -21,7 +21,7 @@ Workflow:
 
 Supported file types: images (jpg, png, webp, etc.), videos, and other media files.
 
-IMPORTANT: This upload is intended for temporary use with Atlas Cloud generation tasks only. Uploaded files may be cleaned up periodically. Do NOT use this as a permanent file hosting service. Abuse (e.g., bulk uploads unrelated to generation tasks) may result in API key suspension.
+Uploads are temporary inputs for Atlas Cloud generation tasks and may be cleaned up periodically; this is not permanent file hosting. Bulk uploads unrelated to generation tasks may lead to API key suspension.
 
 Args:
   - file_path (string, required): Absolute path to the local file to upload

@@ -16,6 +16,7 @@ import {
   isTemplate,
   modelLabel,
   perItemPrice,
+  readableReason,
   shortId,
   typeLabel,
 } from "./card.js";
@@ -140,7 +141,11 @@ export function head(title: string, badgeEl: HTMLElement | null, large = false):
   return h("div", { class: "head" }, h("p", { class: large ? "title-lg" : "title" }, title), badgeEl);
 }
 
-export function row(label: string, value: string, opts: { mono?: boolean; title?: string; elapsedFrom?: string } = {}): HTMLElement {
+export function row(
+  label: string,
+  value: string,
+  opts: { mono?: boolean; title?: string; elapsedFrom?: string; wrap?: boolean } = {}
+): HTMLElement {
   return h(
     "div",
     { class: "row" },
@@ -148,7 +153,7 @@ export function row(label: string, value: string, opts: { mono?: boolean; title?
     h(
       "span",
       {
-        class: `row-value${opts.mono ? " mono" : ""}`,
+        class: `row-value${opts.mono ? " mono" : ""}${opts.wrap ? " wrap" : ""}`,
         title: opts.title,
         "data-elapsed-from": opts.elapsedFrom,
       },
@@ -331,16 +336,26 @@ function rateLimitedCard(card: CardData, opts: ViewOptions, actions: CardActions
   );
 }
 
+/**
+ * 失败卡的「Task」和「Reason」两行。确认时就被拒、没有任务号的不画 Task；原因换成能看懂的一句、可以折行，
+ * 原话放悬停提示。原来原因一长，整列被撑宽，任务号被挤到卡片外面去了（验收问题 33）。
+ */
+function failureRows(card: CardData): HTMLElement[] {
+  const rows: HTMLElement[] = [];
+  if (card.prediction_id) rows.push(row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id }));
+  if (card.error) rows.push(row("Reason", readableReason(card.error), { title: card.error, wrap: true }));
+  return rows;
+}
+
 /** 设计稿「模型暂时不可用」：重试或换模型。 */
 function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions, canRetry: boolean): HTMLElement {
-  const rows = [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })];
-  if (card.error) rows.push(row("Reason", card.error, { title: card.error }));
+  const rows = failureRows(card);
   return h(
     "section",
     { class: "card" },
     head("Model unavailable", badge("Unavailable", { danger: true })),
     h("p", { class: "desc" }, `${modelLabel(card)} is temporarily unavailable. ${chargeSentence(card)}`),
-    h("div", { class: "rows" }, ...rows),
+    rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
     canRetry
       ? h(
           "div",
@@ -360,15 +375,14 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
   if (isModelUnavailable(card.error)) return unavailableCard(card, opts, actions, canRetry);
   const kind = typeLabel(card).toLowerCase();
   const what = kind === "generation" ? "this generation" : `this ${kind}`;
-  const rows = [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })];
-  if (card.error) rows.push(row("Reason", card.error, { title: card.error }));
+  const rows = failureRows(card);
   // 设计稿 v2：按钮改成「修改后重新报价」和「查看记录」。重新报价出一张新报价卡，在那上面改或确认。
   return h(
     "section",
     { class: "card" },
     head(progressTitle(card), badge("Failed", { danger: true })),
     h("p", { class: "desc" }, `The model couldn't finish ${what}. ${chargeSentence(card)}`),
-    h("div", { class: "rows" }, ...rows),
+    rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
     h(
       "div",
       { class: "actions" },

@@ -38,7 +38,7 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
-import { refreshLibraryInputs, replaceUrls } from "./assets.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
 
 export function registerAudioTools(server: McpServer): void {
   server.registerTool(
@@ -55,11 +55,11 @@ Pricing: a call without confirmed: true only prices the request. It returns the 
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Audio". Do NOT guess model IDs.
+The "model" parameter takes an exact current model ID; atlas_list_models with type="Audio" lists them, and an ID that is not in the catalog is rejected.
 
 NOTE: For speech-to-text (transcription / ASR), use atlas_transcribe_audio instead.
 
-You should also use atlas_get_model_info to see the full parameter list and schema for your chosen audio model before calling this tool. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
+atlas_get_model_info shows the full parameter list and schema of an audio model. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
@@ -86,11 +86,8 @@ Returns:
     },
     withGenerationCard(server, "atlas_generate_audio", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
-        const inputs =
-          confirmation_token || confirmed
-            ? await refreshLibraryInputs(params)
-            : { ok: true as const, params, original: new Map<string, string>() };
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
         if (!inputs.ok) {
           return { isError: true, content: [{ type: "text", text: inputs.message }] };
         }
@@ -225,7 +222,7 @@ This tool submits the transcription request and returns immediately with a predi
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current speech-to-text model ID. Speech-to-text models are Audio-type models — use atlas_list_models with type="Audio" to find them. Do NOT guess model IDs.
+The "model" parameter takes an exact current speech-to-text model ID. Speech-to-text models are Audio-type models; atlas_list_models with type="Audio" lists them, and an ID that is not in the catalog is rejected.
 
 Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. A job that ends in status "failed" is not billed. A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
@@ -253,11 +250,8 @@ Returns:
     },
     async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
-        const inputs =
-          confirmation_token || confirmed
-            ? await refreshLibraryInputs(params)
-            : { ok: true as const, params, original: new Map<string, string>() };
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
         if (!inputs.ok) {
           return { isError: true, content: [{ type: "text", text: inputs.message }] };
         }

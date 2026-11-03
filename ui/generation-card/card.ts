@@ -366,6 +366,37 @@ export function earliestTime(a: string | undefined, b: string | undefined): stri
   return bt < at ? b : a;
 }
 
+/**
+ * 失败原因里网关的原话（「unexpected http status code: 502, body: {"code":400,"message":"…"}」）换成能看懂的
+ * 一句：取出 body 里的 message；工作流缺参数时直接说缺哪几项。取不出就只说状态码（验收问题 33）。原话
+ * 放在悬停提示里。
+ */
+export function readableReason(raw: string): string {
+  const text = raw.trim();
+  const http = /unexpected http status code:\s*(\d{3})\s*,\s*body:\s*([\s\S]*)$/i.exec(text);
+  let reason = text;
+  if (http) {
+    const body = http[2]!;
+    let message: string | undefined;
+    try {
+      const parsed = JSON.parse(body) as { message?: unknown; msg?: unknown; error?: { message?: unknown } | unknown };
+      const nested = parsed.error && typeof parsed.error === "object" ? (parsed.error as { message?: unknown }).message : parsed.error;
+      const found = [parsed.message, parsed.msg, nested].find((value) => typeof value === "string" && value.trim());
+      message = typeof found === "string" ? found : undefined;
+    } catch {
+      // body 被截断了：照着 "message":"…" 取一段。
+      message = /"(?:message|msg)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(body)?.[1]?.replace(/\\"/g, '"');
+    }
+    reason = message?.trim() || `Atlas Cloud returned an error (HTTP ${http[1]}).`;
+  }
+  const missing = /missing required parameters?\s*[:：]\s*(.+)$/i.exec(reason)?.[1];
+  if (missing) {
+    const names = missing.match(/[A-Za-z_][\w.-]*/g) ?? [];
+    if (names.length > 0) return `A required setting was missing: ${names.join(", ")}.`;
+  }
+  return reason.replace(/^(?:workflow error|error)\s*[:：]\s*/i, "").replace(/\s+/g, " ").slice(0, 200);
+}
+
 /** 出片比例跟着输入图时的小标签；服务端 src/apps/card-params.ts 照这个写，后面带「 · 4:3」。 */
 const RATIO_FROM_IMAGE = "Ratio from image";
 

@@ -39,7 +39,7 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
-import { refreshLibraryInputs, replaceUrls } from "./assets.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
 
 export function registerImageTools(server: McpServer): void {
   server.registerTool(
@@ -54,11 +54,11 @@ Pricing: a call without confirmed: true only prices the request. It returns the 
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Image". Do NOT guess model IDs.
+The "model" parameter takes an exact current model ID; atlas_list_models with type="Image" lists them, and an ID that is not in the catalog is rejected.
 
 ${defaultRouteGuidance("Image")}
 
-You should also use atlas_get_model_info to understand what parameters a specific image model accepts before calling this tool.
+atlas_get_model_info shows the parameters a specific image model accepts.
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
@@ -85,11 +85,8 @@ Returns:
     },
     withGenerationCard(server, "atlas_generate_image", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
-        const inputs =
-          confirmation_token || confirmed
-            ? await refreshLibraryInputs(params)
-            : { ok: true as const, params, original: new Map<string, string>() };
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
         if (!inputs.ok) {
           return { isError: true, content: [{ type: "text", text: inputs.message }] };
         }

@@ -19,6 +19,7 @@ import {
   isTemplate,
   modelLabel,
   newIdempotencyKey,
+  readableReason,
   typeLabel,
 } from "./card.js";
 import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
@@ -108,7 +109,7 @@ function priceLabel(quote: QuoteInfo | undefined): string | null {
 
 function errorText(result: { content?: unknown }): string {
   const blocks = (result.content ?? []) as Array<{ type: string; text?: string }>;
-  return blocks.find((block) => block.type === "text")?.text?.replace(/^Error:\s*/, "").slice(0, 240) ?? "";
+  return blocks.find((block) => block.type === "text")?.text?.replace(/^Error:\s*/, "").slice(0, 2000) ?? "";
 }
 
 /**
@@ -121,7 +122,7 @@ export function thrownErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const inner = message.match(/text=(['"])([\s\S]*?)\1,\s*annotations/) ?? message.match(/text=(['"])([\s\S]*?)\1/);
   const text = inner ? inner[2] : message;
-  return text.replace(/^Error:\s*/, "").trim().slice(0, 240);
+  return text.replace(/^Error:\s*/, "").trim().slice(0, 2000);
 }
 
 /** 服务端在余额不足的报错后面附的那句 "Available balance: $8.50."（src/apps/generation-quote.ts）。 */
@@ -441,7 +442,7 @@ const NOT_STARTED: Partial<Record<QuotePhase, string>> = {
 function tellModelNotStarted(app: App, card: CardData | undefined, state: QuoteState): void {
   const reason = NOT_STARTED[state.phase];
   if (!reason || app.getHostCapabilities()?.updateModelContext === undefined) return;
-  const detail = state.phase === "error" && state.message ? ` (${state.message.slice(0, 160)})` : "";
+  const detail = state.phase === "error" && state.message ? ` (${readableReason(state.message)})` : "";
   const text =
     `The user pressed Confirm on the Atlas Cloud quote in the card for ${card ? modelLabel(card) : "this job"}, ` +
     `but it did not start: ${reason}${detail}. Nothing was charged. Do not say it is still waiting for the user's ` +
@@ -741,7 +742,7 @@ export function renderQuoteCard(
       { class: "card" },
       head("Couldn't start the generation", badge("Failed", { danger: true })),
       subtitle,
-      h("p", { class: "desc" }, state.message ?? "Atlas Cloud didn't accept this request."),
+      h("p", { class: "desc" }, state.message ? readableReason(state.message) : "Atlas Cloud didn't accept this request."),
       quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
       notice(opts)
     );

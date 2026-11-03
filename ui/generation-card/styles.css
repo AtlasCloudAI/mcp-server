@@ -469,6 +469,8 @@ p {
 .rows {
   margin-top: 10px;
   display: grid;
+  /* 单列也要 minmax(0, 1fr)：不然一行长文字把整列撑宽，别的行的值被挤到卡片外（验收问题 33）。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -494,6 +496,15 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* 失败原因：可以折行，最多三行。 */
+.row-value.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .mono {

@@ -39,7 +39,7 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
-import { refreshLibraryInputs, replaceUrls } from "./assets.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
 import { requestedRatio } from "../apps/card-params.js";
 import { describeImageShape } from "../services/image-size.js";
 import type { InputImageShape } from "../services/input-link-check.js";
@@ -49,7 +49,7 @@ import type { InputImageShape } from "../services/input-link-check.js";
  * 只能反问用户。没写比例（或写的是 adaptive）时出片跟着图走，提醒模型在用户确认前说清楚。
  */
 /** 结构化结果里的输入图片尺寸（报价和提交都带，卡片据此写「Ratio from image · 4:3」）。 */
-function inputImageSummaries(images: InputImageShape[]) {
+export function inputImageSummaries(images: InputImageShape[]) {
   return images.map(({ field, width, height, orientation, ratio }) => ({ field, width, height, orientation, ratio }));
 }
 
@@ -77,15 +77,15 @@ Pricing: a call without confirmed: true only prices the request. It returns the 
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Video". Do NOT guess model IDs.
+The "model" parameter takes an exact current model ID; atlas_list_models with type="Video" lists them, and an ID that is not in the catalog is rejected.
 
 ${defaultRouteGuidance("Video")}
 
-You should also use atlas_get_model_info to see the full parameter list and schema for your chosen video model before calling this tool.
+atlas_get_model_info shows the full parameter list and schema of a video model.
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
-Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). atlas_use_assets and the quote report the input image's size and whether it is landscape, portrait or square. If the user asks for vertical, square or widescreen output and the image has another shape, say so before they confirm and offer a model whose schema has a ratio parameter, or a cropped image. Do not drop the request silently.
+Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). atlas_use_assets and the quote report the input image's size and whether it is landscape, portrait or square. When the user wants vertical, square or widescreen output and the image has another shape, the output will not match; a model whose schema has a ratio parameter, or a cropped image, gives the requested shape, and the user can choose before confirming.
 
 Args:
   - model (string, required): The exact video model ID. Use atlas_list_models to find valid IDs.
@@ -114,11 +114,8 @@ Returns:
     },
     withGenerationCard(server, "atlas_generate_video", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。
-        const inputs =
-          confirmation_token || confirmed
-            ? await refreshLibraryInputs(params)
-            : { ok: true as const, params, original: new Map<string, string>() };
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
         if (!inputs.ok) {
           return { isError: true, content: [{ type: "text", text: inputs.message }] };
         }

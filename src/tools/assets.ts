@@ -295,6 +295,79 @@ export async function refreshLibraryInputs(params: Record<string, unknown>): Pro
   return { ok: true, params: replaceUrls(params, swap), original };
 }
 
+/** 参数里整串写成 Atlas 资产编号的值：asset://asset_… 或 asset_…。 */
+const ASSET_REFERENCE = /^(?:asset:\/\/)?(asset_[A-Za-z0-9_-]{8,58})$/;
+
+function assetReferencesIn(value: unknown, out = new Map<string, string>()): Map<string, string> {
+  if (typeof value === "string") {
+    const id = ASSET_REFERENCE.exec(value.trim())?.[1];
+    if (id) out.set(value, id);
+  } else if (Array.isArray(value)) {
+    for (const item of value) assetReferencesIn(item, out);
+  } else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) assetReferencesIn(item, out);
+  }
+  return out;
+}
+
+/**
+ * 参数里直接写的 Atlas 资产编号换成资产库的临时地址。验收问题 31（ChatGPT，11-03）：卡片把资产编号和地址
+ * 一起交给模型，Seedance 2.5 的 schema 又写着 image 可以填「asset reference (asset://<ASSET_ID>)」，模型就填了
+ * asset://asset_…。那是上游自己资产库的编号，认不出 Atlas 的；而且不是链接，报价卡没有输入图、读不出横竖。
+ * 换成地址后和用户直接给链接一样走。original 记着「地址 → 原来写的编号」：确认令牌按模型传的参数核对。
+ */
+export async function resolveAssetReferences(params: Record<string, unknown>): Promise<LibraryInputRefresh> {
+  const refs = assetReferencesIn(params);
+  if (refs.size === 0) return { ok: true, params, original: new Map() };
+  let resolved: ResolvedAsset[];
+  let missing: string[];
+  try {
+    ({ resolved, missing } = await resolveAssets([...new Set(refs.values())]));
+  } catch (error) {
+    console.error(`[assets] couldn't resolve asset references in params: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      ok: false,
+      message:
+        "Error: Couldn't look up the Asset Library files named in params right now. Nothing was submitted or charged. " +
+        "Pass the file URLs from atlas_use_assets instead, or try again.",
+    };
+  }
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message:
+        `Error: ${missing.map((id) => `\`${id}\``).join(", ")} ${missing.length === 1 ? "is" : "are"} not in this account's Asset Library ` +
+        "(deleted, expired or a different account). Nothing was submitted or charged. Search again with atlas_search_assets, or ask the user for the file.",
+    };
+  }
+  const url = new Map(resolved.map((asset) => [asset.asset_id, asset.url]));
+  const swap = new Map<string, string>();
+  const original = new Map<string, string>();
+  for (const [written, id] of refs) {
+    const fresh = url.get(id);
+    if (!fresh) continue;
+    swap.set(written, fresh);
+    original.set(fresh, written);
+  }
+  // 记上名字和编号：报价卡写「Asset Library」和原文件名，确认时 refreshLibraryInputs 也认得。
+  await rememberAssetUrls(resolved);
+  return { ok: true, params: replaceUrls(params, swap), original };
+}
+
+/**
+ * 生成工具收到参数后先过这一步：资产编号换成地址（报价、确认都换），确认时再把资产库的地址换成新的。
+ * original 合成一张表：最后提交的地址 → 模型当初传的值。
+ */
+export async function libraryInputs(params: Record<string, unknown>, confirming: boolean): Promise<LibraryInputRefresh> {
+  const refs = await resolveAssetReferences(params);
+  if (!refs.ok || !confirming) return refs;
+  const refreshed = await refreshLibraryInputs(refs.params);
+  if (!refreshed.ok) return refreshed;
+  const original = new Map(refs.original);
+  for (const [fresh, before] of refreshed.original) original.set(fresh, refs.original.get(before) ?? before);
+  return { ok: true, params: refreshed.params, original };
+}
+
 /**
  * 上传前查一下资产库能不能用（资产库二期要充值后才开通）：能用，atlas_get_upload_url 就签一张把字节
  * 存进资产库的票；查不了（没开通、AssetD 出错）就照旧走 /model/uploadMedia，不因为这一步拦下上传。

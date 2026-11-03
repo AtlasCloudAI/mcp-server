@@ -3,7 +3,7 @@ import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { generationApi } from "../services/api-client.js";
-import { idempotencyHeaders } from "../services/generation.js";
+import { idempotencyHeaders, prepareWithSchema } from "../services/generation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { resolveDefaultModel, routeDefaultParams } from "../services/default-models.js";
 import {
@@ -25,11 +25,7 @@ import {
   confirmationReuseNotice,
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
-import {
-  fillPreferredDefaults,
-  validateModelParams,
-  formatValidationError,
-} from "../utils/schema-validator.js";
+import { fillPreferredDefaults } from "../utils/schema-validator.js";
 import type { Model } from "../types.js";
 import type { PredictionResponse } from "../response-schemas.js";
 import {
@@ -46,7 +42,8 @@ import {
   generationToolCardMeta,
   withGenerationCard,
 } from "../apps/generation-quote.js";
-import { refreshLibraryInputs } from "./assets.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
+import { inputImageSummaries, inputShapeNotice } from "./video.js";
 
 type GenType = "Image" | "Video" | "Audio";
 
@@ -148,20 +145,28 @@ export function buildQuickGenerateParams(
 
   // Set image URL if provided
   if (imageUrl) {
-    const imageField = Object.keys(properties).find((key) => {
-      const property = asRecord(properties[key]);
-      return (
-        key === "image_url" ||
-        key === "image" ||
-        key === "input_image" ||
-        key === "init_image" ||
-        key === "source_image" ||
-        schemaDescriptionIncludes(property, "image url") ||
-        schemaDescriptionIncludes(property, "input image")
-      );
-    });
+    // 常见字段名和描述都对不上时（工作流的 product_image、只写「商品图」），退到名字以 image 结尾或标了
+    // x-format: image 的字段，必填的优先。原来找不到就把图悄悄丢了（验收问题 29 那单的商品图）。
+    const looksLikeImage = (key: string): boolean =>
+      /(^|_)images?$/.test(key) || asRecord(properties[key])?.["x-format"] === "image";
+    const imageField =
+      Object.keys(properties).find((key) => {
+        const property = asRecord(properties[key]);
+        return (
+          key === "image_url" ||
+          key === "image" ||
+          key === "input_image" ||
+          key === "init_image" ||
+          key === "source_image" ||
+          schemaDescriptionIncludes(property, "image url") ||
+          schemaDescriptionIncludes(property, "input image")
+        );
+      }) ??
+      required.find(looksLikeImage) ??
+      Object.keys(properties).find(looksLikeImage);
     if (imageField) {
-      params[imageField] = imageUrl;
+      // 参考图生视频的 images 是数组：包一层，不然校验报类型不对。
+      params[imageField] = asRecord(properties[imageField])?.type === "array" ? [imageUrl] : imageUrl;
     }
   }
 
@@ -215,7 +220,7 @@ Parameters are validated against the model's schema BEFORE submitting. If extra_
 
 Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. A job that ends in status "failed" is not billed. A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
-IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image / atlas_generate_video / atlas_generate_audio with the exact model ID instead. Do NOT invent extra_params - only pass parameters you know the model accepts (check atlas_get_model_info).
+When no single model matches the keyword, atlas_list_models gives exact model IDs for atlas_generate_image / atlas_generate_video / atlas_generate_audio. extra_params outside the model's schema are rejected; atlas_get_model_info lists the accepted ones.
 
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
@@ -316,7 +321,7 @@ Returns:
 
         // Step 3: Build params
         // 默认路由模型的默认参数在 extra_params 之后补：用户要的值优先。
-        const requestBody = fillPreferredDefaults(
+        const { model: _model, ...builtParams } = fillPreferredDefaults(
           schema,
           buildQuickGenerateParams(
             schema,
@@ -329,47 +334,39 @@ Returns:
           routeDefaultParams(foundModel.model)
         );
 
-        // Step 3b: Validate the built params against the schema before submitting,
-        // so invented/invalid extra_params fail fast without spending credits.
-        const { model: _model, ...paramsToValidate } = requestBody;
-        const validation = validateModelParams(
-          schema,
-          foundModel.model,
-          paramsToValidate
-        );
-        if (!validation.ok) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: formatValidationError(foundModel.model, validation),
-              },
-            ],
-          };
-        }
-
         const kind =
           type === "Image"
             ? "image"
             : type === "Video"
               ? "video"
               : "audio";
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(builtParams, Boolean(confirmation_token || confirmed));
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+
+        // Step 3b: 和 atlas_generate_image/video/audio 同一套：补默认值（工作流全补）、按 schema 校验、
+        // 查素材链接、读输入图片的横竖。校验不过就不花钱。
+        const preparation = await prepareWithSchema(foundModel, schema, inputs.params, {
+          expectedType: type,
+          endpoint: ENDPOINTS[type],
+          typeLabel: kind,
+          readInputShapes: true,
+        });
+        if (!preparation.ok) {
+          return { isError: true, content: [{ type: "text", text: preparation.message }] };
+        }
+        const { prepared } = preparation;
+        const requestBody = prepared.body;
+        const inputImages = prepared.inputImages ? { input_images: inputImageSummaries(prepared.inputImages) } : {};
+        // 令牌按模型传的参数核对（换过的地址先换回去），提交的是换好地址的这一份。
         const confirmedRequest = {
           type,
           resolved_model: foundModel.model,
-          request_body: requestBody,
+          request_body: replaceUrls(requestBody, inputs.original),
         };
-        // 确认那次：资产库素材换新地址、查有没有被删（refreshLibraryInputs）。令牌照旧按报价时的
-        // requestBody 核对，提交的是换好地址的这一份。
-        let submitBody = requestBody;
-        if (confirmation_token || confirmed) {
-          const inputs = await refreshLibraryInputs(requestBody);
-          if (!inputs.ok) {
-            return { isError: true, content: [{ type: "text", text: inputs.message }] };
-          }
-          submitBody = inputs.params as typeof requestBody;
-        }
+        const submitBody = requestBody;
 
         // Step 4: Quote without submitting, or verify the prior quote.
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
@@ -389,18 +386,22 @@ Returns:
           );
           const balanceLine = await balanceLinePromise;
           return {
-            structuredContent: generationConfirmationStructuredContent(
-              foundModel,
-              kind,
-              confirmation,
-              costEstimate(spend),
-              requestBody
-            ),
+            structuredContent: {
+              ...generationConfirmationStructuredContent(
+                foundModel,
+                kind,
+                confirmation,
+                costEstimate(spend),
+                requestBody
+              ),
+              ...inputImages,
+            },
             content: [{
               type: "text",
               text:
                 `Confirmation required — exactly one model was resolved, but no billable request was submitted and no credits were spent.\n\n` +
                 `- **Resolved model**: ${foundModel.displayName} (\`${foundModel.model}\`)\n` +
+                `${type === "Video" ? inputShapeNotice(prepared.inputImages, requestBody) : ""}` +
                 `${confirmationCostNotice(spend)}\n` +
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
@@ -492,6 +493,7 @@ Returns:
           structuredContent: {
             ...generationStructuredContent(predictionId, foundModel, kind, requestBody),
             ...(finished ? { status: "completed" as const, outputs } : {}),
+            ...inputImages,
           },
           content: [
             { type: "text", text: lines.join("\n") },

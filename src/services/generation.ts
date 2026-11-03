@@ -89,6 +89,20 @@ export async function prepareGeneration(
         "No billable request was submitted. Retry later or choose another model whose schema can be inspected.",
     };
   }
+  return prepareWithSchema(found, schema, params, opts);
+}
+
+/**
+ * 模型和 schema 都拿到之后的那一段：补默认值、校验、查素材链接、读输入图片的横竖。atlas_quick_generate
+ * 按关键词找到模型、拼好参数后也走这里（验收问题 29、31：它原来自己校验，工作流的默认值、链接检查和
+ * 图片横竖都没有）。
+ */
+export async function prepareWithSchema(
+  found: Model,
+  schema: Record<string, unknown>,
+  params: Record<string, unknown>,
+  opts: SubmitOptions
+): Promise<PrepareResult> {
   // 工作流每个选项都要给值，默认值全填；普通模型只填必填的，其余交给上游自己的默认。
   const fillDefaults = isWorkflowModelId(found.model) ? fillAllDefaults : fillRequiredDefaults;
   const finalParams = fillDefaults(

@@ -4,7 +4,7 @@ import { balanceResponseSchema } from "../response-schemas.js";
 import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
 import { inputsOf, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
-import { billingAccount, describeBillingAccount } from "../services/billing-account.js";
+import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
 import { rememberedMedia } from "../services/media-names.js";
 import type { BalanceResponse } from "../types.js";
 import {
@@ -162,7 +162,7 @@ async function availableBalance(fetcher?: ApiRequestOptions["fetcher"]): Promise
     });
     const value = Number(res.available?.value);
     if (!Number.isFinite(value) || res.available?.currency.toLowerCase() !== "usd") return undefined;
-    return value < 0 ? `-$${(-value).toFixed(2)}` : `$${value.toFixed(2)}`;
+    return formatBalanceUsd(value);
   } catch {
     return undefined;
   }
@@ -191,7 +191,10 @@ const QUOTE_CARD_NOTE =
   "The Atlas card shows this quote with a Generate button. If the user approves it there, the " +
   "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
   "they confirm in the chat instead, call again as described above; the same idempotency_key " +
-  "returns the job the card already started rather than a second one.";
+  "returns the job the card already started rather than a second one. Some apps don't tell you " +
+  "what happened on the card, so don't assume the quote is still waiting: if the user asks about it, " +
+  "check atlas_list_predictions first. A confirm the card could not start (for example, not enough " +
+  "balance) charged nothing.";
 
 /**
  * 报价结果补上「主要参数」和扣费账户（需求文档 6.1）。不管卡片开没开都补：Codex、

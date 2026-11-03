@@ -10,6 +10,7 @@ import {
   RATE_LIMIT_WAIT_MS,
   RECONNECT_NOTE,
   billingUrlFor,
+  formatBalance,
   formatClock,
   formatUsd,
   isModelUnavailable,
@@ -296,7 +297,10 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       return;
     }
     if (state.phase === "verifying") void verify();
-    else deps.setState(state);
+    else {
+      deps.setState(state);
+      if (confirmed) tellModelNotStarted(deps.app, deps.card(), state);
+    }
   }
 
   /**
@@ -425,6 +429,32 @@ function tellModel(app: App, quoteCard: CardData | undefined, submitted: CardDat
   void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
 }
 
+/** 卡片里确认了、但这一单没开始时，告诉模型为什么（每种都没扣钱）。 */
+const NOT_STARTED: Partial<Record<QuotePhase, string>> = {
+  low_balance: "the account doesn't have enough balance",
+  model_unavailable: "the model is unavailable right now",
+  rate_limited: "Atlas Cloud is rate limiting this account; the card offers Retry after a short wait",
+  expired: "the quote expired; the card offers a new quote",
+  input_missing: "an input file is no longer in the Asset Library",
+  signed_out: "the Atlas Cloud sign-in expired; the user needs to reconnect",
+  error: "Atlas Cloud refused it",
+};
+
+/**
+ * 用户在卡片里点了确认，但没开始（余额不足、模型不可用……）。不说的话，模型以为还在等确认，
+ * 用户问起时会答错（11-03 Claude 实测）。宿主不把上下文交给模型时，靠报价结果里那段说明兜底。
+ */
+function tellModelNotStarted(app: App, card: CardData | undefined, state: QuoteState): void {
+  const reason = NOT_STARTED[state.phase];
+  if (!reason || app.getHostCapabilities()?.updateModelContext === undefined) return;
+  const detail = state.phase === "error" && state.message ? ` (${state.message.slice(0, 160)})` : "";
+  const text =
+    `The user pressed Confirm on the Atlas Cloud quote in the card for ${card ? modelLabel(card) : "this job"}, ` +
+    `but it did not start: ${reason}${detail}. Nothing was charged. Do not say it is still waiting for the user's ` +
+    `confirmation; tell them what is needed, and quote again only if they ask.`;
+  void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
+}
+
 /** 核实时按哪个模型找：卡片上的模型 ID，没有就用报价参数里的。 */
 function modelOf(card: CardData | undefined, quote: QuoteInfo): string | undefined {
   if (card?.model_id) return card.model_id;
@@ -510,9 +540,6 @@ function countdown(quote: QuoteInfo | undefined, now = Date.now()): HTMLElement 
   return h("span", { "data-countdown-to": quote!.expires_at }, formatClock((at - now) / 1000));
 }
 
-function signedUsd(value: number): string {
-  return value < 0 ? `-${formatUsd(-value)}` : formatUsd(value);
-}
 
 export function renderQuoteCard(
   card: CardData,
@@ -810,7 +837,7 @@ function billingLine(account: QuoteInfo["account"], balance: number | undefined,
     { class: "billing" },
     label ? h("span", { class: "billing-to", title: label }, "Billed to ", h("strong", {}, label)) : h("span"),
     balance !== undefined
-      ? h("span", { class: "billing-balance" }, "Balance ", h("strong", { class: short ? "danger" : "" }, signedUsd(balance)))
+      ? h("span", { class: "billing-balance" }, "Balance ", h("strong", { class: short ? "danger" : "" }, formatBalance(balance)))
       : null
   );
 }

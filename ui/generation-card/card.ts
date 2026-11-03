@@ -354,6 +354,12 @@ export function formatUsd(value: number): string {
   return `$${text}`;
 }
 
+/** 余额：截断到分（$45.3967 写 $45.39），和官网一致；服务端同口径见 src/services/billing-account.ts。 */
+export function formatBalance(value: number): string {
+  const cents = Math.floor(value * 100 + 1e-6);
+  return cents < 0 ? `-$${(-cents / 100).toFixed(2)}` : `$${(cents / 100).toFixed(2)}`;
+}
+
 /** 长任务 ID 中间省略：前 6 后 4。 */
 export function shortId(id: string): string {
   return id.length > 14 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;

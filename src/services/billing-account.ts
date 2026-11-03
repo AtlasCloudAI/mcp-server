@@ -68,8 +68,13 @@ export async function billingAccount(
   };
 }
 
-function formatUsd(value: number): string {
-  return value < 0 ? `-$${(-value).toFixed(2)}` : `$${value.toFixed(2)}`;
+/**
+ * 余额：截断到分，不四舍五入（$45.3967 写 $45.39），和官网右上角一致，也不会显示比实际多的钱。
+ * 11-03 实测卡片写 $45.40、官网写 $45.39。负数（欠费）往更负的方向取。
+ */
+export function formatBalanceUsd(value: number): string {
+  const cents = Math.floor(value * 100 + 1e-6);
+  return cents < 0 ? `-$${(-cents / 100).toFixed(2)}` : `$${(cents / 100).toFixed(2)}`;
 }
 
 /** 报价文字里的一行：「Lovelace Studio (personal account, ada@example.com) · $8.50 available」。 */
@@ -77,6 +82,6 @@ export function describeBillingAccount(account: BillingAccount): string {
   const who = [account.type ? `${account.type} account` : null, account.user_email ?? null].filter(Boolean);
   return (
     `${account.name}${who.length > 0 ? ` (${who.join(", ")})` : ""}` +
-    (account.available_usd !== undefined ? ` · ${formatUsd(account.available_usd)} available` : "")
+    (account.available_usd !== undefined ? ` · ${formatBalanceUsd(account.available_usd)} available` : "")
   );
 }

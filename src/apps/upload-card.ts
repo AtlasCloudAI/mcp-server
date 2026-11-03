@@ -22,6 +22,8 @@ export interface UploadSampleFile {
   /** 缩略图（测试卡片用公开示例图）。 */
   url?: string;
   error?: string;
+  /** 像素超限的图片：显示「52 MP · over the 24 MP limit」。 */
+  megapixels?: number;
 }
 
 export interface UploadCardData {
@@ -32,6 +34,8 @@ export interface UploadCardData {
   max_bytes: number;
   /** 存进资产库时视频、3D 的上限（资产库二期）。 */
   max_video_bytes?: number;
+  /** 存进资产库时图片的像素上限：卡片选完先查，超了不传（设计稿 06 页 11/02「文件不符合」）。 */
+  max_image_pixels?: number;
   /** 传上去的文件存进用户的资产库。 */
   library?: boolean;
   max_files: number;
@@ -44,6 +48,8 @@ export interface UploadCardData {
   sample_overflow?: { picked: number; added: number };
   /** 测试卡片：换地址时 Atlas 登录已失效（设计稿 v2「需要重新连接」）。 */
   sample_signed_out?: boolean;
+  /** 测试卡片：资产库上传空间已满，文件照样能用（设计稿 06 页 11/02「上传空间已满」）。 */
+  sample_library_full?: { quota_bytes: number };
 }
 
 export function uploadCardData(issued: {
@@ -51,6 +57,7 @@ export function uploadCardData(issued: {
   expiresAt: number;
   maxBytes: number;
   maxVideoBytes?: number;
+  maxImagePixels?: number;
   library?: boolean;
 }): UploadCardData {
   return {
@@ -59,6 +66,7 @@ export function uploadCardData(issued: {
     expires_at: new Date(issued.expiresAt).toISOString(),
     max_bytes: issued.maxBytes,
     ...(issued.maxVideoBytes ? { max_video_bytes: issued.maxVideoBytes } : {}),
+    ...(issued.library && issued.maxImagePixels ? { max_image_pixels: issued.maxImagePixels } : {}),
     ...(issued.library ? { library: true } : {}),
     max_files: UPLOAD_MAX_FILES,
   };

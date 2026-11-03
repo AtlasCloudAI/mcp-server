@@ -44,6 +44,7 @@ const VARIANTS = [
   "upload_expired",
   "upload_too_many",
   "upload_signed_out",
+  "upload_library_full",
   "assets",
   "assets_empty",
   "assets_no_match",
@@ -66,6 +67,10 @@ const UPLOAD_MOCKS = {
   // 传的时候 Atlas 登录失效：中转回 401，换地址时 ChatGPT 回「Connector authorization required」
   // （用户没在连接框里点允许）；点 Reconnect 再换就换到了。
   "upload-signed-out": "signed-out",
+  // 资产库上传空间满了：中转回 413 并给一张普通上传的地址，卡片改传那里，留一句说明。
+  "upload-library-full": "libraryfull",
+  // 中转回 AssetD 的超像素（422 image_too_large）。
+  "upload-too-many-pixels": "pixels",
 };
 
 function mockUploadCaller(mode) {

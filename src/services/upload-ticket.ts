@@ -118,11 +118,14 @@ function invalid(): UploadTicketError {
 }
 
 export function issueUploadTicket(input: IssueUploadTicketInput): IssuedUploadTicket {
+  return issueForSubjectHash(subjectHash(input.subject), input);
+}
+
+function issueForSubjectHash(hashed: string, input: Omit<IssueUploadTicketInput, "subject">): IssuedUploadTicket {
   const now = input.now ?? Date.now;
   if (input.secret.length < 16) {
     throw new Error("Upload ticket secret is too short");
   }
-  const hashed = subjectHash(input.subject);
   const expiresAt = now() + input.ttlSeconds * 1000;
   const payload: UploadTicketPayload = {
     version: 1,
@@ -193,6 +196,8 @@ export interface IssuedUploadUrl {
   maxBytes: number;
   /** 存进资产库时视频、3D 的上限。 */
   maxVideoBytes?: number;
+  /** 存进资产库时图片的像素上限。 */
+  maxImagePixels?: number;
   /** 字节存进资产库：中转回的地址是临时的，带资产编号。 */
   library: boolean;
 }
@@ -229,9 +234,43 @@ export async function issueUploadTicketFromContext(options: { library?: boolean 
     uploadUrl: `${context.uploadBaseUrl}${pathTicket}`,
     expiresAt,
     ...(library && context.libraryUpload
-      ? { maxBytes: context.libraryUpload.maxBytes, maxVideoBytes: context.libraryUpload.maxVideoBytes, library: true }
+      ? {
+          maxBytes: context.libraryUpload.maxBytes,
+          maxVideoBytes: context.libraryUpload.maxVideoBytes,
+          maxImagePixels: context.libraryUpload.maxImagePixels,
+          library: true,
+        }
       : { maxBytes: context.uploadMaxBytes, library: false }),
   };
+}
+
+/**
+ * 资产库上传空间满了（AssetD 回 upload_quota_exceeded）：中转给同一个用户另签一张走
+ * /model/uploadMedia 的票，文件照样能用在这次生成里，只是不存进资产库（设计稿 06 页 11/02「上传空间已满」）。
+ * 中转手里只有票据里的 subject 哈希和凭据，没有工具调用的 request context，所以单独签。
+ */
+export async function issueFallbackUploadUrl(
+  verified: Pick<VerifiedUploadTicket, "subjectHash" | "atlasApiKey">,
+  options: {
+    secret: string;
+    ttlSeconds: number;
+    baseUrl: string;
+    maxBytes: number;
+    store?: UploadTicketStore;
+  }
+): Promise<IssuedUploadUrl> {
+  const { ticket, expiresAt } = issueForSubjectHash(verified.subjectHash, {
+    atlasApiKey: verified.atlasApiKey,
+    secret: options.secret,
+    ttlSeconds: options.ttlSeconds,
+  });
+  let pathTicket = ticket;
+  if (options.store) {
+    const id = newShortTicketId();
+    await options.store.put(id, ticket, options.ttlSeconds);
+    pathTicket = id;
+  }
+  return { uploadUrl: `${options.baseUrl}${pathTicket}`, expiresAt, maxBytes: options.maxBytes, library: false };
 }
 
 /**

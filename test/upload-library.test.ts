@@ -13,6 +13,10 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 let fake: Server;
 /** 打开后资产库接口回 AssetD 的 403 asset_library_not_activated（充值后才能用）。 */
 let notActivated = false;
+/** 打开后上传回 AssetD 的 413 upload_quota_exceeded（上传空间满了）。 */
+let quotaFull = false;
+/** 打开后上传回 AssetD 拒收超像素图片的 422。 */
+let tooManyPixels = false;
 /** 收到的上传：Content-Type 和原始请求体。 */
 const received: Array<{ contentType: string; body: Buffer; authorization: string | undefined }> = [];
 const media: string[] = [];
@@ -34,6 +38,18 @@ before(async () => {
       }
       if (url.pathname === "/api/v1/assetd/api/assets" && req.method === "GET") {
         res.end(JSON.stringify({ code: 200, msg: "succeed", data: { items: [], pagination: { limit: 1, count: 0 } } }));
+        return;
+      }
+      if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST" && quotaFull) {
+        res.statusCode = 413;
+        res.end(JSON.stringify({ code: 413, msg: "upload_quota_exceeded", error: { code: "upload_quota_exceeded" } }));
+        return;
+      }
+      if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST" && tooManyPixels) {
+        res.statusCode = 422;
+        res.end(
+          JSON.stringify({ code: 422, msg: "not_supported: image 8000x6500 exceeds 24000000 pixel limit", error: { code: "not_supported" } })
+        );
         return;
       }
       if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST") {
@@ -294,6 +310,55 @@ test("没开这项配置：不查资产库，照旧签普通的票", async () =>
     assert.equal(structured.saves_to_asset_library, false);
     assert.equal(structured.max_bytes, 33_554_432);
   } finally {
+    await relay.close();
+  }
+});
+
+test("上传空间满了：回 413 并另给一张普通上传的地址，文件传到那里照样能用，只是不存进资产库", async () => {
+  notActivated = false;
+  quotaFull = true;
+  const relay = await startRelay();
+  try {
+    const { path } = await mint(relay.baseUrl);
+    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    assert.equal(response.status, 413);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.error, "upload_quota_exceeded");
+    assert.equal(body.quota_bytes, 2_147_483_648);
+    assert.equal(body.fallback_max_bytes, 33_554_432);
+    assert.match(String(body.message), /fallback_upload_url/);
+    assert.equal(typeof body.fallback_expires_at, "string");
+
+    const before = media.length;
+    const fallbackPath = new URL(String(body.fallback_upload_url)).pathname;
+    const retried = await fetch(`${relay.baseUrl}${fallbackPath}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    assert.equal(retried.status, 200);
+    const done = (await retried.json()) as Record<string, unknown>;
+    assert.equal(done.url, "https://atlas-img.example.test/images/x.png");
+    assert.equal(done.asset_id, undefined);
+    assert.equal(media.length, before + 1);
+  } finally {
+    quotaFull = false;
+    await relay.close();
+  }
+});
+
+test("超像素的图片：回 422 image_too_large，带尺寸和上限，不再当成格式不收", async () => {
+  notActivated = false;
+  tooManyPixels = true;
+  const relay = await startRelay();
+  try {
+    const { path } = await mint(relay.baseUrl);
+    const response = await fetch(`${relay.baseUrl}${path}?filename=hero.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    assert.equal(response.status, 422);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.error, "image_too_large");
+    assert.equal(body.width, 8000);
+    assert.equal(body.height, 6500);
+    assert.equal(body.max_pixels, 24_000_000);
+    assert.match(String(body.message), /52 MP\), over the 24 MP limit/);
+  } finally {
+    tooManyPixels = false;
     await relay.close();
   }
 });

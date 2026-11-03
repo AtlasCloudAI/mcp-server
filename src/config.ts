@@ -4,6 +4,7 @@ import {
   parseCredentialEncryptionKeys,
   type CredentialEncryptionKey,
 } from "./services/credential-envelope.js";
+import type { LibraryUploadLimits } from "./services/request-context.js";
 
 /**
  * 全平台唯一的一套 scope（令牌契约 v3 §4）。资源服务器不得引入自己的前缀或
@@ -135,7 +136,7 @@ export interface HttpServerConfig {
    * 上传存进资产库（资产库二期）：开通了资产库的用户，中转把字节边收边转给 AssetD，
    * 按类型限大小；没开通的照旧走 /model/uploadMedia，限 uploadMaxBytes。
    */
-  libraryUpload?: { maxBytes: number; maxVideoBytes: number };
+  libraryUpload?: LibraryUploadLimits;
   uploadRequestsPerMinute: number;
   /** 上传中转端点的公网前缀，以 / 结尾；票据直接拼在后面。 */
   publicUploadBaseUrl: URL;
@@ -214,6 +215,10 @@ const envSchema = z.object({
   MCP_UPLOAD_TO_ASSET_LIBRARY: z.enum(["true", "false", "1", "0"]).optional(),
   MCP_LIBRARY_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(52_428_800),
   MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(104_857_600),
+  // 下面两项跟 AssetD 的 ASSETD_MAX_IMAGE_PIXELS、ASSETD_USER_UPLOAD_QUOTA_BYTES 保持一致：像素卡片先查，
+  // 上传空间只用在「空间已满」那句提示里，真正的判断在 AssetD。
+  MCP_LIBRARY_UPLOAD_MAX_IMAGE_PIXELS: z.coerce.number().int().min(1_000_000).max(1_000_000_000).default(24_000_000),
+  MCP_LIBRARY_UPLOAD_QUOTA_BYTES: z.coerce.number().int().min(1_048_576).default(2_147_483_648),
   MCP_UPLOAD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(30),
   MCP_REDIS_URL: z.string().url().optional(),
 });
@@ -550,6 +555,8 @@ export function loadHttpServerConfig(
           libraryUpload: {
             maxBytes: env.MCP_LIBRARY_UPLOAD_MAX_BYTES,
             maxVideoBytes: Math.max(env.MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES, env.MCP_LIBRARY_UPLOAD_MAX_BYTES),
+            maxImagePixels: env.MCP_LIBRARY_UPLOAD_MAX_IMAGE_PIXELS,
+            quotaBytes: env.MCP_LIBRARY_UPLOAD_QUOTA_BYTES,
           },
         }
       : {}),

@@ -7,6 +7,7 @@ import {
   formatBytes,
   limitFor,
   outcomeOf,
+  pixelLimitMessage,
   uploadFromToolResult,
   uploadPhase,
   validateFile,
@@ -48,9 +49,9 @@ test("文件类型先看 MIME，没有就看扩展名；格式、空文件、超
   assert.equal(fileKind("notes.pdf", "application/pdf"), "other");
 
   assert.equal(validateFile({ name: "a.jpg", size: MB, type: "image/jpeg" }, 32 * MB), undefined);
-  assert.equal(validateFile({ name: "notes.pdf", size: 10, type: "application/pdf" }, 32 * MB), "Use an image, video or audio file");
+  assert.equal(validateFile({ name: "notes.pdf", size: 10, type: "application/pdf" }, 32 * MB), "Format not supported · use an image, video or audio file");
   assert.equal(validateFile({ name: "a.png", size: 0, type: "image/png" }, 32 * MB), "This file is empty");
-  assert.equal(validateFile({ name: "a.mp4", size: 48 * MB, type: "video/mp4" }, 32 * MB), "Over the 32 MB limit");
+  assert.equal(validateFile({ name: "a.mp4", size: 48 * MB, type: "video/mp4" }, 32 * MB), "over the 32 MB limit");
 });
 
 test("文件大小写成 2.4 MB、860 KB", () => {
@@ -64,7 +65,7 @@ test("上传中转的回应：成功拿地址，过期和票据无效都去换�
   assert.deepEqual(outcomeOf(200, JSON.stringify({ url: "https://atlas-img/x.png" }), 32 * MB), { kind: "done", url: "https://atlas-img/x.png" });
   assert.deepEqual(outcomeOf(410, "{}", 32 * MB), { kind: "expired" });
   assert.deepEqual(outcomeOf(401, JSON.stringify({ error: "credential_rejected" }), 32 * MB), { kind: "expired" });
-  assert.deepEqual(outcomeOf(413, "{}", 32 * MB), { kind: "invalid", message: "Over the 32 MB limit" });
+  assert.deepEqual(outcomeOf(413, "{}", 32 * MB), { kind: "invalid", message: "over the 32 MB limit" });
   assert.equal(outcomeOf(429, "{}", 32 * MB).kind, "failed");
   assert.deepEqual(outcomeOf(0, "", 32 * MB), { kind: "failed", message: "Couldn't reach Atlas Cloud" });
   assert.deepEqual(outcomeOf(502, "not json", 32 * MB), { kind: "failed", message: "Upload failed" });
@@ -100,15 +101,40 @@ test("存进资产库（资产库二期）：视频按视频的上限，回应�
   assert.equal(limitFor("audio", library), 50 * MB);
   assert.equal(limitFor("video", { max_bytes: 32 * MB }), 32 * MB);
   assert.equal(validateFile({ name: "clip.mp4", size: 80 * MB }, limitFor("video", library)), undefined);
-  assert.equal(validateFile({ name: "photo.jpg", size: 60 * MB }, limitFor("image", library)), "Over the 50 MB limit");
+  assert.equal(validateFile({ name: "photo.jpg", size: 60 * MB }, limitFor("image", library)), "over the 50 MB limit");
 
   assert.deepEqual(outcomeOf(200, JSON.stringify({ url: "https://atlas-asset/a?Expires=1", asset_id: "asset_1" }), 50 * MB), {
     kind: "done",
     url: "https://atlas-asset/a?Expires=1",
     asset_id: "asset_1",
   });
-  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_quota_exceeded" }), 50 * MB), { kind: "invalid", message: "Your Asset Library is full" });
-  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_too_large" }), 100 * MB), { kind: "invalid", message: "Over the 100 MB limit" });
+  // 上传空间满了（设计稿 06 页 11/02）：中转另给一张普通上传的地址，卡片改传那里；旧中转没给就只有配额。
+  assert.deepEqual(
+    outcomeOf(
+      413,
+      JSON.stringify({
+        error: "upload_quota_exceeded",
+        quota_bytes: 2_147_483_648,
+        fallback_upload_url: "https://mcp/upload/plain",
+        fallback_expires_at: "2026-11-03T10:00:00.000Z",
+        fallback_max_bytes: 32 * MB,
+      }),
+      50 * MB
+    ),
+    {
+      kind: "library_full",
+      quota_bytes: 2_147_483_648,
+      fallback: { upload_url: "https://mcp/upload/plain", expires_at: "2026-11-03T10:00:00.000Z", max_bytes: 32 * MB },
+    }
+  );
+  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_quota_exceeded" }), 50 * MB), { kind: "library_full" });
+  assert.deepEqual(outcomeOf(413, JSON.stringify({ error: "upload_too_large" }), 100 * MB), { kind: "invalid", message: "over the 100 MB limit" });
+  // 超像素：原因写像素上限，那一行显示百万像素。
+  assert.deepEqual(
+    outcomeOf(422, JSON.stringify({ error: "image_too_large", width: 8000, height: 6500, max_pixels: 24_000_000 }), 50 * MB),
+    { kind: "invalid", message: "over the 24 MP limit", megapixels: 52 }
+  );
+  assert.equal(pixelLimitMessage(24_000_000), "over the 24 MP limit");
   assert.equal(outcomeOf(415, "{}", 50 * MB).kind, "invalid");
   // 签票后资产库不能用了：和票据失效一样，去换一张。
   assert.deepEqual(outcomeOf(401, JSON.stringify({ error: "asset_library_not_activated" }), 50 * MB), { kind: "expired" });

@@ -84,6 +84,19 @@ export interface CardData {
 export const CARD_META_KEY = "atlascloud/card";
 const SITE_URL = "https://www.atlascloud.ai";
 
+/**
+ * 充值页跟着卡片所在的环境走：服务端给的 open_url 是这个环境的官网（test 是 www.test.atlascloud.ai），
+ * 取它的 origin 拼 /console/billing；没有时用生产官网。
+ */
+export function billingUrlFor(openUrl: string | undefined): string {
+  try {
+    if (openUrl) return `${new URL(openUrl).origin}/console/billing`;
+  } catch {
+    // 地址不对：用默认的
+  }
+  return `${SITE_URL}/console/billing`;
+}
+
 const STATES = new Set<CardState>([
   "quote",
   "queued",

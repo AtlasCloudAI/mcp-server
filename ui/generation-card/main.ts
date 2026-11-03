@@ -9,7 +9,7 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
-import { type CardData, type CardMedia, cardFromToolResult, fileNameOf, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
+import { type CardData, type CardMedia, billingUrlFor, cardFromToolResult, fileNameOf, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
@@ -18,7 +18,6 @@ import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, ass
 
 const STATUS_TOOL = "atlas_card_status";
 const SITE_URL = "https://www.atlascloud.ai";
-const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 /** 卡片自己最多等这么久，之后显示「Still generating」，用户点 Keep waiting 再等一轮。 */
 const POLL_BUDGET_MS = 10 * 60 * 1000;
 /** 两次刷新之间至少隔这么久（服务端本身会等最多 20 秒再回答）。 */
@@ -593,7 +592,7 @@ function libraryDeps(extra: Pick<LibraryDeps, "uploadInstead"> & Partial<Library
     notice: (text) => setNotice(text),
     noticeText: () => notice,
     expand: () => requestMode("fullscreen"),
-    topUp: () => void openUrl(BILLING_URL),
+    topUp: () => void openUrl(billingUrlFor(card?.open_url)),
     ...extra,
   };
 }

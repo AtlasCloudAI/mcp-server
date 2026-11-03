@@ -1,6 +1,6 @@
 import type { Model } from "../types.js";
 import type { Quote } from "../services/spend-policy.js";
-import { CHARACTER_LIMIT } from "../constants.js";
+import { ATLAS_SITE_URL, CHARACTER_LIMIT } from "../constants.js";
 
 // Format model list as Markdown
 export function formatModelList(models: Model[], type?: string): string {
@@ -93,7 +93,7 @@ export function formatModelInfo(model: Model, defaultQuote?: Quote | null): stri
   }
 
   lines.push(`\n## Links\n`);
-  lines.push(`- [Playground](https://www.atlascloud.ai/models/${model.model})`);
+  lines.push(`- [Playground](${ATLAS_SITE_URL}/models/${model.model})`);
 
   return lines.join("\n");
 }

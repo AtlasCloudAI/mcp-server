@@ -34,8 +34,12 @@ Then, for anything the user wants generated:
    generated. Do not say an image or video was made unless a tool call returned it. Do not switch
    to another generator (such as a built-in image tool) instead: the user asked for Atlas, so ask
    them to sign in or retry rather than handing back a result from somewhere else.
-4. **Quote first, then generate, then show.** The generation tool returns the model and a live
-   price and stops; relay them and wait for a yes. When the user confirms, call again with the same
+4. **Quote first, then generate, then show.** To tell the user what something will cost, call the
+   generation tool itself with their settings and without `confirmed`. That call is free: it prices
+   this exact request, returns the billing account and a confirmation_token, and stops. Relay the
+   model, the cost and the billing account, and wait for a yes. Do this even when the user only asks
+   what it would cost: prices from `atlas_get_model_info`, `atlas_list_models` or the tables on this
+   page are for choosing a model, not a quote. When the user confirms, call again with the same
    arguments, `confirmed: true`, and the idempotency_key and confirmation_token shown in the quote.
    Poll `atlas_get_prediction` in the same turn until it finishes, save the result locally and show
    it with `![title](/absolute/path/file.ext)`.
@@ -479,7 +483,7 @@ Before you send a response to the user that references any model ID, parameter, 
 2. For generation code, you must have just fetched the model's schema (or called `atlas_get_model_info`) and confirmed each parameter you use.
 3. If either check was not performed — stop and perform it. Do not fall back to "probably correct" values from the tables in this skill.
 
-The tables below are **illustrative only**. They go stale. Treat them as hints about what *kind* of models exist, never as a source of truth for an actual request.
+The tables below are **illustrative only**. They go stale. Treat them as hints about what *kind* of models exist, never as a source of truth for an actual request. In particular, never quote these prices to the user: the cost of a request comes from the generation tool's quote (see "Read this first").
 
 ## Popular Models (illustrative only — MUST verify via API before use)
 

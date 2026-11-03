@@ -28,7 +28,12 @@ export interface UploadCardData {
   view: "upload";
   upload_url: string;
   expires_at: string;
+  /** 单个文件上限；存进资产库时是图片、音频的上限。 */
   max_bytes: number;
+  /** 存进资产库时视频、3D 的上限（资产库二期）。 */
+  max_video_bytes?: number;
+  /** 传上去的文件存进用户的资产库。 */
+  library?: boolean;
   max_files: number;
   /** 测试卡片：只显示，不真传。 */
   sample?: boolean;
@@ -41,12 +46,20 @@ export interface UploadCardData {
   sample_signed_out?: boolean;
 }
 
-export function uploadCardData(issued: { uploadUrl: string; expiresAt: number; maxBytes: number }): UploadCardData {
+export function uploadCardData(issued: {
+  uploadUrl: string;
+  expiresAt: number;
+  maxBytes: number;
+  maxVideoBytes?: number;
+  library?: boolean;
+}): UploadCardData {
   return {
     view: "upload",
     upload_url: issued.uploadUrl,
     expires_at: new Date(issued.expiresAt).toISOString(),
     max_bytes: issued.maxBytes,
+    ...(issued.maxVideoBytes ? { max_video_bytes: issued.maxVideoBytes } : {}),
+    ...(issued.library ? { library: true } : {}),
     max_files: UPLOAD_MAX_FILES,
   };
 }

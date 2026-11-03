@@ -255,6 +255,7 @@ export function createHttpApp(
             uploadBaseUrl: config.publicUploadBaseUrl.toString(),
             uploadTicketTtlSeconds: config.uploadTicketTtlSeconds,
             uploadMaxBytes: config.uploadMaxBytes,
+            ...(config.libraryUpload ? { libraryUpload: config.libraryUpload } : {}),
             uploadTicketStore,
             quoteStore,
             mediaNameStore,
@@ -391,6 +392,9 @@ export async function startHttpServer(
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
       const listening = app.listen(config.port, config.listenHost, () => resolve(listening));
+      // 存进资产库的上传边收边转，100MB 的视频按用户 250~300KB/s 的上行要传 6 分钟左右，
+      // Node 默认 5 分钟收不完整个请求就断开（requestTimeout）。
+      if (config.libraryUpload) listening.requestTimeout = 30 * 60_000;
       listening.once("error", reject);
     });
     prefetchCardCatalog();

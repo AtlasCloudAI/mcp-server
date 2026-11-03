@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { lstat, readFile, realpath } from "fs/promises";
 import { basename, isAbsolute, relative, resolve } from "path";
 import { fetch, FormData, ProxyAgent, type Dispatcher } from "undici";
@@ -402,6 +403,144 @@ export async function uploadMediaBuffer(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---- 上传存进资产库（资产库二期）----
+
+/** 字节超过上限时中断转发。 */
+export class UploadTooLargeError extends Error {
+  constructor(public readonly maxBytes: number) {
+    super(`The file exceeds the ${maxBytes}-byte limit for this type`);
+    this.name = "UploadTooLargeError";
+  }
+}
+
+export interface AssetLibraryUpload {
+  assetId: string;
+  mimeType?: string;
+  mediaType?: string;
+  sizeBytes?: number;
+}
+
+// 用户上行慢（2026-10-19 实测 250~300KB/s），整个上传可能要好几分钟，所以按「多久没收到字节」
+// 断开，不按总时长；字节送完后再等 AssetD 存好、回结果。
+const LIBRARY_UPLOAD_IDLE_TIMEOUT_MS = 90_000;
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** AssetD 的错误：msg 里有原因，error.code 是 asset_library_not_activated、upload_quota_exceeded 这类代码。 */
+function assetdError(body: string, status: number, fallback: string): ApiRequestError {
+  let code = "";
+  try {
+    code = String(record(record(JSON.parse(body))?.error)?.code ?? "");
+  } catch {
+    // 不是 JSON：只用状态码
+  }
+  const message = upstreamErrorMessage(body, fallback);
+  return new ApiRequestError(code && !message.includes(code) ? `${code}: ${message}` : message, status);
+}
+
+/**
+ * 把字节边收边转给 AssetD 的 POST /api/assets/uploads（经 kubedl 的 /assetd 转发，kubedl 放行到
+ * 101 MiB），不整个读进内存：100MB 的视频在 512Mi 的 pod 里经不起缓冲。超过 maxBytes 就中断。
+ * AssetD 按内容认格式（JPG/PNG/WEBP/GIF、MP4/MOV/WEBM、MP3/WAV/M4A、GLB），按类型再查一次大小。
+ */
+export async function uploadStreamToAssetLibrary(
+  body: AsyncIterable<Uint8Array>,
+  input: { filename: string; contentType: string; maxBytes: number; apiKey: string },
+  options: UploadBufferOptions = {}
+): Promise<AssetLibraryUpload> {
+  const { fetcher = fetch } = options;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), ms);
+  };
+  let tooLarge = false;
+  // 包成 multipart 边收边发：AssetD 收原始字节时从 X-Hermes-Filename 头取文件名，但不做解码，
+  // 中文名会存成乱码；multipart 里的文件名 Go 按 UTF-8 读。
+  const boundary = `----atlas-mcp-${randomUUID()}`;
+  const quoted = input.filename.replace(/["\\\r\n]/g, "_");
+  const head = new TextEncoder().encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${quoted}"; filename*=UTF-8''${encodeURIComponent(input.filename)}\r\n` +
+      `Content-Type: ${input.contentType}\r\n\r\n`
+  );
+  const tail = new TextEncoder().encode(`\r\n--${boundary}--\r\n`);
+  async function* multipart(): AsyncGenerator<Uint8Array> {
+    let total = 0;
+    arm(LIBRARY_UPLOAD_IDLE_TIMEOUT_MS);
+    yield head;
+    for await (const chunk of body) {
+      total += chunk.byteLength;
+      if (total > input.maxBytes) {
+        tooLarge = true;
+        throw new UploadTooLargeError(input.maxBytes);
+      }
+      arm(LIBRARY_UPLOAD_IDLE_TIMEOUT_MS);
+      yield chunk;
+    }
+    yield tail;
+    arm(UPLOAD_TIMEOUT_MS);
+  }
+  try {
+    const response = await fetcher(`${API_BASE}/assetd/api/assets/uploads`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.apiKey}`,
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        Accept: "application/json",
+      },
+      body: multipart(),
+      duplex: "half",
+      signal: controller.signal,
+      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+    });
+    const text = await response.text().catch(() => "");
+    if (!response.ok) throw assetdError(text, response.status, `Upload failed: ${response.status} ${response.statusText}`);
+    const data = record(record(JSON.parse(text))?.data);
+    if (!data || typeof data.asset_id !== "string" || data.asset_id === "") {
+      throw new ApiRequestError("Atlas Cloud returned a malformed Asset Library upload response", 502);
+    }
+    return {
+      assetId: data.asset_id,
+      ...(typeof data.mime_type === "string" ? { mimeType: data.mime_type } : {}),
+      ...(typeof data.media_type === "string" ? { mediaType: data.media_type } : {}),
+      ...(typeof data.size_bytes === "number" ? { sizeBytes: data.size_bytes } : {}),
+    };
+  } catch (error) {
+    if (tooLarge) throw new UploadTooLargeError(input.maxBytes);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 资产的临时原图地址（约 15 分钟），给生成当输入用；过期了模型用资产编号再换。 */
+export async function assetSourceUrl(
+  assetId: string,
+  apiKey: string,
+  options: UploadBufferOptions = {}
+): Promise<{ url: string; expiresAt?: string; mimeType?: string }> {
+  const result = await request<unknown>(API_BASE, "/assetd/api/assets/source-urls", {
+    method: "POST",
+    body: { asset_ids: [assetId] },
+    requireAuth: false,
+    headers: { Authorization: `Bearer ${apiKey}` },
+    ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+  });
+  const items = record(record(result)?.data)?.items;
+  const item = Array.isArray(items) ? record(items.find((entry) => record(entry)?.asset_id === assetId)) : undefined;
+  if (!item || typeof item.source_url !== "string") {
+    throw new ApiRequestError("Atlas Cloud returned no file URL for the uploaded asset", 502);
+  }
+  return {
+    url: item.source_url,
+    ...(typeof item.expires_at === "string" ? { expiresAt: item.expires_at } : {}),
+    ...(typeof item.mime_type === "string" ? { mimeType: item.mime_type } : {}),
+  };
 }
 
 // The shared gate for every outbound fetch to a host we do not own. Kept in one

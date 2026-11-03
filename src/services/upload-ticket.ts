@@ -49,6 +49,8 @@ const payloadSchema = z
     nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
     expires_at: z.number().int().positive(),
     envelope: z.string().min(1).max(8192),
+    /** 上传存进资产库（资产库二期）；省略是 /model/uploadMedia。 */
+    library: z.literal(true).optional(),
   })
   .strict();
 
@@ -74,6 +76,8 @@ export interface IssueUploadTicketInput {
   atlasApiKey: string;
   secret: string;
   ttlSeconds: number;
+  /** 这张票的字节存进资产库。 */
+  library?: boolean;
   now?: () => number;
 }
 
@@ -87,6 +91,7 @@ export interface VerifiedUploadTicket {
   subjectHash: string;
   atlasApiKey: string;
   expiresAt: number;
+  library: boolean;
 }
 
 function subjectHash(subject: string): string {
@@ -125,6 +130,7 @@ export function issueUploadTicket(input: IssueUploadTicketInput): IssuedUploadTi
     nonce: randomBytes(16).toString("base64url"),
     expires_at: expiresAt,
     envelope: encryptAtlasCredential(hashed, input.atlasApiKey, keyringFor(input.secret)),
+    ...(input.library ? { library: true as const } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return { ticket: `${encoded}.${sign(encoded, input.secret)}`, expiresAt };
@@ -175,6 +181,7 @@ export function verifyUploadTicket(
     subjectHash: payload.subject_hash,
     atlasApiKey,
     expiresAt: payload.expires_at,
+    library: payload.library === true,
   };
 }
 
@@ -182,14 +189,20 @@ export interface IssuedUploadUrl {
   uploadUrl: string;
   /** 毫秒时间戳。 */
   expiresAt: number;
+  /** 单个文件上限；存进资产库时是图片、音频的上限。 */
   maxBytes: number;
+  /** 存进资产库时视频、3D 的上限。 */
+  maxVideoBytes?: number;
+  /** 字节存进资产库：中转回的地址是临时的，带资产编号。 */
+  library: boolean;
 }
 
 /**
  * 在工具调用里铸票。只有远程 HTTP 服务会把 uploadBaseUrl 放进 request context；
  * stdio 没有中转端点，也不需要——它有直接收路径的 atlas_upload_media。
+ * library：调用方查过这个用户的资产库能用（开着这项配置、资产库已开通）。
  */
-export async function issueUploadTicketFromContext(): Promise<IssuedUploadUrl | undefined> {
+export async function issueUploadTicketFromContext(options: { library?: boolean } = {}): Promise<IssuedUploadUrl | undefined> {
   const context = getRequestContext();
   if (
     !context?.uploadBaseUrl ||
@@ -198,11 +211,13 @@ export async function issueUploadTicketFromContext(): Promise<IssuedUploadUrl | 
   ) {
     return undefined;
   }
+  const library = options.library === true && context.libraryUpload !== undefined;
   const { ticket, expiresAt } = issueUploadTicket({
     subject: context.subject,
     atlasApiKey: context.atlasApiKey,
     secret: context.generationConfirmationSecret,
     ttlSeconds: context.uploadTicketTtlSeconds,
+    library,
   });
   let pathTicket = ticket;
   if (context.uploadTicketStore) {
@@ -213,7 +228,9 @@ export async function issueUploadTicketFromContext(): Promise<IssuedUploadUrl | 
   return {
     uploadUrl: `${context.uploadBaseUrl}${pathTicket}`,
     expiresAt,
-    maxBytes: context.uploadMaxBytes,
+    ...(library && context.libraryUpload
+      ? { maxBytes: context.libraryUpload.maxBytes, maxVideoBytes: context.libraryUpload.maxVideoBytes, library: true }
+      : { maxBytes: context.uploadMaxBytes, library: false }),
   };
 }
 

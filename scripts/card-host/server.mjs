@@ -64,7 +64,8 @@ function send(res, status, body, type = "application/json") {
 // 模拟上传中转（上传卡在测试宿主里传到这里，不碰真实存储）。地址最后一段是场景：
 //   ok      慢慢收完再回地址；fail-once 第一次回 502、之后成功；
 //   expired 回 410（卡片该去换新地址，换来的是 ok）；toolarge 回 413；
-//   rejected 回 401（票据里的凭据被 Atlas 拒了，卡片也去换新地址）。
+//   rejected 回 401（票据里的凭据被 Atlas 拒了，卡片也去换新地址）；
+//   library 和 ok 一样，但像存进资产库那样带上资产编号。
 const failedOnce = new Set();
 async function mockUpload(req, res, mode) {
   res.setHeader("access-control-allow-origin", "*");
@@ -91,6 +92,7 @@ async function mockUpload(req, res, mode) {
     filename: name,
     size_bytes: size,
     media_type: "image",
+    ...(mode === "library" ? { asset_id: `asset_mock_${failedOnce.size}${size}` } : {}),
   });
 }
 

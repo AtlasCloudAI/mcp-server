@@ -131,6 +131,11 @@ export interface HttpServerConfig {
   generationConfirmationTtlSeconds: number;
   uploadTicketTtlSeconds: number;
   uploadMaxBytes: number;
+  /**
+   * 上传存进资产库（资产库二期）：开通了资产库的用户，中转把字节边收边转给 AssetD，
+   * 按类型限大小；没开通的照旧走 /model/uploadMedia，限 uploadMaxBytes。
+   */
+  libraryUpload?: { maxBytes: number; maxVideoBytes: number };
   uploadRequestsPerMinute: number;
   /** 上传中转端点的公网前缀，以 / 结尾；票据直接拼在后面。 */
   publicUploadBaseUrl: URL;
@@ -204,6 +209,11 @@ const envSchema = z.object({
     .min(1_048_576)
     .max(268_435_456)
     .default(33_554_432),
+  // 上传存进资产库：边收边转，不进内存，所以上限跟 AssetD 走（图片、音频 50MB，视频、3D 100MB）。
+  // Cloudflare 和 ingress 的请求体上限同样要高于视频上限。
+  MCP_UPLOAD_TO_ASSET_LIBRARY: z.enum(["true", "false", "1", "0"]).optional(),
+  MCP_LIBRARY_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(52_428_800),
+  MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(104_857_600),
   MCP_UPLOAD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(30),
   MCP_REDIS_URL: z.string().url().optional(),
 });
@@ -535,6 +545,14 @@ export function loadHttpServerConfig(
       env.MCP_GENERATION_CONFIRMATION_TTL_SECONDS,
     uploadTicketTtlSeconds: env.MCP_UPLOAD_TICKET_TTL_SECONDS,
     uploadMaxBytes: env.MCP_UPLOAD_MAX_BYTES,
+    ...(env.MCP_UPLOAD_TO_ASSET_LIBRARY === "true" || env.MCP_UPLOAD_TO_ASSET_LIBRARY === "1"
+      ? {
+          libraryUpload: {
+            maxBytes: env.MCP_LIBRARY_UPLOAD_MAX_BYTES,
+            maxVideoBytes: Math.max(env.MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES, env.MCP_LIBRARY_UPLOAD_MAX_BYTES),
+          },
+        }
+      : {}),
     uploadRequestsPerMinute: env.MCP_UPLOAD_REQUESTS_PER_MINUTE,
     // 中转端点是 /mcp 的兄弟路径（/mcp → /upload/），同一个 origin，Host 校验、
     // 安全头、CORS 全部复用；挂在子路径下部署时也跟着 MCP 的前缀走。

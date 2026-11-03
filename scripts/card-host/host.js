@@ -55,6 +55,8 @@ const VARIANTS = [
 // 选文件后真的走 XHR 上传。卡片换新地址（调 atlas_get_upload_url）时给一张 ok 的地址。
 const UPLOAD_MOCKS = {
   "upload-ok": "ok",
+  // 存进资产库（资产库二期）：传完带资产编号，卡上显示「Saved to Asset Library」。
+  "upload-to-library": "library",
   "upload-fail-once": "fail-once",
   "upload-link-expired": "expired",
   "upload-too-large": "toolarge",

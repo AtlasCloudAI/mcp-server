@@ -20,6 +20,8 @@ export interface AtlasRequestContext {
   uploadBaseUrl?: string;
   uploadTicketTtlSeconds?: number;
   uploadMaxBytes?: number;
+  /** 上传存进资产库时的上限（按类型）；省略则只走 /model/uploadMedia。 */
+  libraryUpload?: { maxBytes: number; maxVideoBytes: number };
   /** 短上传地址：完整票据存这里，URL 里只放编号。省略则发长票据。 */
   uploadTicketStore?: UploadTicketStore;
   /** 报价记录：确认时按参数找回报价，不靠模型抄回令牌（generation-confirmation.ts）。 */

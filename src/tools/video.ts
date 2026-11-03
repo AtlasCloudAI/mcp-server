@@ -83,7 +83,7 @@ ${defaultRouteGuidance("Video")}
 
 atlas_get_model_info shows the full parameter list and schema of a video model.
 
-Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Frame shape: image-to-video models usually take it from the input image ("adaptive", or no ratio parameter at all). atlas_use_assets and the quote report the input image's size and whether it is landscape, portrait or square. When the user wants vertical, square or widescreen output and the image has another shape, the output will not match; a model whose schema has a ratio parameter, or a cropped image, gives the requested shape, and the user can choose before confirming.
 

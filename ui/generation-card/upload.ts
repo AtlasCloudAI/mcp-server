@@ -5,7 +5,7 @@
 // 服务端数据见 src/apps/upload-card.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type PickedAsset, shapeText } from "./assets.js";
+import { ASSET_REF_NOTE, type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
 import { prefillNote, say, userLang } from "./voice.js";
@@ -216,18 +216,17 @@ export function outcomeOf(status: number, body: string, maxBytes: number): Uploa
 
 /** 交给模型的文字：文件名、类型、尺寸、地址。资产库选来的带上编号（临时地址过期了模型用它再换）。 */
 export function filesForModel(items: Array<Pick<UploadItem, "name" | "kind" | "url" | "asset_id" | "saved" | "shape">>): string {
+  // 进了资产库的给 asset:// 编号，不给签名地址（验收问题 36，见 assets.ts assetsForModel）；没进的给上传地址。
   const lines = items.map((item) => {
     const kind = item.shape ? `${item.kind}, ${item.shape}` : item.kind;
     return item.asset_id
-      ? `- ${item.name} (${kind}, ${item.saved ? "saved to" : "from"} the Asset Library, ${item.asset_id}): ${item.url}`
+      ? `- ${item.name} (${kind}, ${item.saved ? "saved to" : "from"} the Asset Library): asset://${item.asset_id}`
       : `- ${item.name} (${kind}): ${item.url}`;
   });
-  const fromLibrary = items.some((item) => item.asset_id)
-    ? " Links for Asset Library files are temporary (about 15 minutes); if one has expired, call atlas_use_assets with its asset ID."
-    : "";
+  const fromLibrary = items.some((item) => item.asset_id) ? ` ${ASSET_REF_NOTE}` : "";
   return (
     `The user added ${items.length === 1 ? "1 file" : `${items.length} files`} in the Atlas upload card. ` +
-    `Use these URLs as the media inputs for their request (they are already uploaded; do not upload them again).${fromLibrary}\n${lines.join("\n")}`
+    `Use these as the media inputs for their request (they are already uploaded; do not upload them again).${fromLibrary}\n${lines.join("\n")}`
   );
 }
 

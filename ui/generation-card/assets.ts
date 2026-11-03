@@ -140,13 +140,21 @@ function resultErrorText(result: { content?: Array<{ type: string; text?: unknow
 
 const KIND_WORD: Record<AssetKind, string> = { image: "image", video: "video", audio: "audio", "3d": "3D model", other: "file" };
 
-/** 交给模型的文字：名字、类型、尺寸、编号、地址。地址是临时的，过期了模型用编号再换。 */
+/** 资产库文件放进生成参数时的写法：服务端换成新的临时地址（src/tools/assets.ts resolveAssetReferences）。 */
+export const ASSET_REF_NOTE =
+  "In a generation tool's params, put the asset:// reference where the file goes; the server swaps in a fresh file URL, " +
+  "so it does not expire. For anything else that needs a link, atlas_use_assets returns one.";
+
+/**
+ * 交给模型的文字：名字、类型、尺寸和 asset:// 编号，不放签名地址。验收问题 36（ChatGPT，11-03）：参数里的签名地址
+ * 带 x-oss-credential，ChatGPT 当成「访问凭证」，批准框标出来，有一次整个调用被 OpenAI 的安全检查拦下。
+ * Claude 预填消息里也不再是一长串链接（问题 14）。
+ */
 export function assetsForModel(picked: Pick<PickedAsset, "asset_id" | "label" | "kind" | "url" | "shape">[]): string {
-  const lines = picked.map((a) => `- ${a.label} (${KIND_WORD[a.kind]}${a.shape ? `, ${a.shape}` : ""}, ${a.asset_id}): ${a.url}`);
+  const lines = picked.map((a) => `- ${a.label} (${KIND_WORD[a.kind]}${a.shape ? `, ${a.shape}` : ""}): asset://${a.asset_id}`);
   return (
     `The user picked ${picked.length === 1 ? "1 file" : `${picked.length} files`} from their Atlas Asset Library in the card. ` +
-    "Use these URLs as the media inputs for their request. They are temporary (about 15 minutes); if one has expired, " +
-    `call atlas_use_assets with its asset ID for a fresh URL:\n${lines.join("\n")}`
+    `Use ${picked.length === 1 ? "it" : "them"} as the media inputs for their request. ${ASSET_REF_NOTE}\n${lines.join("\n")}`
   );
 }
 

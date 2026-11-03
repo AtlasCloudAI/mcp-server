@@ -150,6 +150,6 @@ test("存进资产库（资产库二期）：视频按视频的上限，回应�
     { name: "front.jpg", kind: "image", url: "https://a/1", asset_id: "asset_1", saved: true },
     { name: "side.jpg", kind: "image", url: "https://a/2", asset_id: "asset_2" },
   ]);
-  assert.match(text, /front\.jpg \(image, saved to the Asset Library, asset_1\)/);
-  assert.match(text, /side\.jpg \(image, from the Asset Library, asset_2\)/);
+  assert.match(text, /front\.jpg \(image, saved to the Asset Library\): asset:\/\/asset_1/);
+  assert.match(text, /side\.jpg \(image, from the Asset Library\): asset:\/\/asset_2/);
 });

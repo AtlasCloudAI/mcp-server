@@ -194,7 +194,7 @@ test("the card hands the image size to the model with library picks and uploads"
   ]);
   assert.match(
     assetsForModel([{ asset_id: "asset_1", label: "teapot", kind: "image", url: "https://x/1", shape: "1600×1200, landscape (4:3)" }]),
-    /- teapot \(image, 1600×1200, landscape \(4:3\), asset_1\): https:\/\/x\/1/
+    /- teapot \(image, 1600×1200, landscape \(4:3\)\): asset:\/\/asset_1/
   );
   assert.equal(shapeText(1080, 1920), "1080×1920, portrait");
   assert.match(
@@ -203,6 +203,6 @@ test("the card hands the image size to the model with library picks and uploads"
   );
   assert.match(
     filesForModel([{ name: "pear.jpg", kind: "image", url: "https://x/p", asset_id: "asset_9", saved: true, shape: "1080×1920, portrait" }]),
-    /\(image, 1080×1920, portrait, saved to the Asset Library, asset_9\)/
+    /\(image, 1080×1920, portrait, saved to the Asset Library\): asset:\/\/asset_9/
   );
 });

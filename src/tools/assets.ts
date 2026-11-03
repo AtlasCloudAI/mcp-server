@@ -649,8 +649,10 @@ Rules:
           const expiry = resolved.map((asset) => asset.expires_at).filter(Boolean).sort()[0];
           lines.push(
             "",
-            `Pass these URLs as the media inputs of the generation tool now. They expire${expiry ? ` at ${expiry}` : " in about 15 minutes"}; ` +
-              "if a generation can't fetch one, call atlas_use_assets again. Don't show these links to the user."
+            // 生成工具里写 asset:// 编号更好：不过期，请求里也没有签名地址（验收问题 36）。
+            "In a generation tool's params, asset://<asset ID> works in place of these URLs: the server swaps in a fresh URL, " +
+              `so it does not expire. The URLs themselves expire${expiry ? ` at ${expiry}` : " in about 15 minutes"}; ` +
+              "if one can't be fetched, call atlas_use_assets again. Don't show these links to the user."
           );
         }
         return {

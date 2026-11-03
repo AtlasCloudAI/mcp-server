@@ -224,7 +224,7 @@ When no single model matches the keyword, atlas_list_models gives exact model ID
 
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
-Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model_keyword (string, optional): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword. When it is omitted for an image or video, the server applies the default route (described in atlas_generate_video / atlas_generate_image), with the image-to-video or edit variant when image_url is given.
@@ -256,10 +256,15 @@ Returns:
           .describe("Text description of what to generate"),
         image_url: z
           .string()
-          .url()
-          .refine((value) => new URL(value).protocol === "https:", "image_url must use HTTPS")
+          .refine(
+            // 资产库的图可以写 asset://asset_…，服务端换成地址（libraryInputs）。
+            (value) => /^asset:\/\/asset_[A-Za-z0-9_-]{8,58}$/.test(value) || /^https:\/\/\S+$/i.test(value),
+            "image_url must be an HTTPS URL or asset://<asset ID>"
+          )
           .optional()
-          .describe("Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models"),
+          .describe(
+            "Source image for image-to-video, image editing, image-to-3D, or talking-avatar models: an HTTPS URL, or asset://<asset ID> for an Asset Library file"
+          ),
         audio_url: z
           .string()
           .url()

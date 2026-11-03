@@ -326,10 +326,12 @@ test("编号格式不对的在参数校验就拦下", async () => {
   assert.equal(result.isError, true);
 });
 
-test("交给模型的文字：带编号，说清地址是临时的、过期了怎么换", () => {
+test("交给模型的文字：给 asset:// 编号不给签名地址，说清服务端会换地址（问题 36）", () => {
   const forModel = assetsForModel([{ asset_id: IMAGE.asset_id, label: "Image · material-clone result", kind: "image", url: "https://x/a.jpg" }]);
   assert.match(forModel, /1 file from their Atlas Asset Library/);
-  assert.match(forModel, new RegExp(`\\(image, ${IMAGE.asset_id}\\): https://x/a.jpg`));
+  assert.match(forModel, new RegExp(`\\(image\\): asset://${IMAGE.asset_id}`));
+  assert.doesNotMatch(forModel, /https:\/\/x\/a\.jpg/);
+  assert.match(forModel, /server swaps in a fresh file URL/);
   assert.match(forModel, /atlas_use_assets/);
 
   // 上传卡里混着上传的文件和资产库选来的：资产库的带编号和提示，上传的照旧。
@@ -338,9 +340,9 @@ test("交给模型的文字：带编号，说清地址是临时的、过期了�
     { name: "sneaker-front.jpg", kind: "image", url: "https://x/s.jpg", asset_id: UPLOAD.asset_id },
   ]);
   assert.match(mixed, /- photo\.jpg \(image\): https:\/\/u\/photo\.jpg/);
-  assert.match(mixed, new RegExp(`from the Asset Library, ${UPLOAD.asset_id}\\): https://x/s.jpg`));
-  assert.match(mixed, /temporary/);
-  assert.doesNotMatch(filesForModel([{ name: "photo.jpg", kind: "image", url: "https://u/p.jpg" }]), /temporary/);
+  assert.match(mixed, new RegExp(`from the Asset Library\\): asset://${UPLOAD.asset_id}`));
+  assert.match(mixed, /asset:\/\/ reference/);
+  assert.doesNotMatch(filesForModel([{ name: "photo.jpg", kind: "image", url: "https://u/p.jpg" }]), /asset:\/\//);
 });
 
 test("中文词搜不到：改列最近的素材并写明没搜到，卡片标出来（问题 20）", async () => {

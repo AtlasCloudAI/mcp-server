@@ -16,6 +16,7 @@ import {
   type AssetMediaType,
   type AssetOrigin,
 } from "../apps/asset-library.js";
+import { BILLING_URL } from "../constants.js";
 
 // 资产库（官网的 Asset Library）：kubedl 把 /api/v1/assetd/* 代理给 AssetD，账户取自令牌。
 // 插件令牌能用的只有搜索（tasks:read）、单个详情（tasks:read）和换原图地址（tasks:write），
@@ -308,7 +309,6 @@ export async function assetLibraryAvailable(): Promise<boolean> {
   }
 }
 
-const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 
 /** 资产库要充值后才能用（资产库二期）：AssetD 回 403 asset_library_not_activated。 */
 function assetLibraryLocked(error: unknown): boolean {

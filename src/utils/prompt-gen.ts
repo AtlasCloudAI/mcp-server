@@ -1,3 +1,5 @@
+import { ATLAS_SITE_URL } from "../constants.js";
+
 /**
  * Generate LLM-friendly model documentation from OpenAPI schema.
  * Adapted from Atlas Cloud homepage generateLLMPrompt utility.
@@ -242,7 +244,7 @@ export function generateLLMPrompt(
   sections.push("## Additional Resources\n");
   if (modelName) {
     sections.push(
-      `- [Model Playground](https://www.atlascloud.ai/models/${modelName})\n`
+      `- [Model Playground](${ATLAS_SITE_URL}/models/${modelName})\n`
     );
   }
 

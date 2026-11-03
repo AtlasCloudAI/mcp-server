@@ -9,6 +9,7 @@ import {
   type QuoteInfo,
   RATE_LIMIT_WAIT_MS,
   RECONNECT_NOTE,
+  billingUrlFor,
   formatClock,
   formatUsd,
   isModelUnavailable,
@@ -21,7 +22,6 @@ import {
 } from "./card.js";
 import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
 
-const BILLING_URL = "https://www.atlascloud.ai/console/billing";
 const CHECK_TOOL = "atlas_card_check_submission";
 /** 核实「到底提交没有」：每 5 秒问一次，两分钟还说不准就交给用户。服务端 90 秒查不到就会说没开始。 */
 const CHECK_GAP_MS = 5_000;
@@ -405,7 +405,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         })
         .catch(() => deps.notice("Couldn't send that. Type it in the chat instead."));
     },
-    topUp: () => deps.openUrl(BILLING_URL),
+    topUp: () => deps.openUrl(billingUrlFor(deps.card()?.open_url)),
     openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
   };
 }

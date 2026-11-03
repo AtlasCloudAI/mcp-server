@@ -30,6 +30,7 @@ import { currentClientProfile } from "../services/client-profile.js";
 import { getRequestContext } from "../services/request-context.js";
 import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
+import { ATLAS_SITE_URL } from "../constants.js";
 import { handleError } from "../utils/error-handler.js";
 
 // 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
@@ -110,7 +111,7 @@ export function cardMediaDomains(env: NodeJS.ProcessEnv = process.env): string[]
   return [...new Set([...DEFAULT_MEDIA_DOMAINS, ...extra])];
 }
 
-const SITE_URL = "https://www.atlascloud.ai";
+const SITE_URL = ATLAS_SITE_URL;
 
 function loadCardHtml(): string {
   // 构建产物：tsc 之后 scripts/build-ui.mjs 把 ui/generation-card 打成一个 HTML 放到 dist/ui/。

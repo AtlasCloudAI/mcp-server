@@ -274,7 +274,7 @@ async function pollLoop(): Promise<void> {
         return;
       }
       const started = Date.now();
-      const id = card.prediction_id;
+      const id: string = card.prediction_id;
       let failed = false;
       try {
         const result = await app.callServerTool({
@@ -360,7 +360,7 @@ async function hostDownload(media: CardMedia[]): Promise<boolean> {
 
 async function downloadResults(media: CardMedia[]): Promise<void> {
   if (!card || media.length === 0) return;
-  const id = card.prediction_id;
+  const id: string = card.prediction_id;
   if (hostCaps().downloadFile === undefined) {
     await openUrl(media.length === 1 ? media[0]!.url : card.open_url || SITE_URL);
     return;

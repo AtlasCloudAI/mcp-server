@@ -354,6 +354,18 @@ export function formatUsd(value: number): string {
   return `$${text}`;
 }
 
+/**
+ * 同一个任务的开始时间只认最早的那个。工作流是多步的，查结果接口的 created_at 是当前这一步的开始时间，
+ * 每换一步就往后跳，卡片上的「Running for」就跟着归零（验收问题 27，ChatGPT 里 Image ads 实测）。
+ */
+export function earliestTime(a: string | undefined, b: string | undefined): string | undefined {
+  const at = a ? Date.parse(a) : NaN;
+  const bt = b ? Date.parse(b) : NaN;
+  if (!Number.isFinite(at)) return Number.isFinite(bt) ? b : undefined;
+  if (!Number.isFinite(bt)) return a;
+  return bt < at ? b : a;
+}
+
 /** 余额：截断到分（$45.3967 写 $45.39），和官网一致；服务端同口径见 src/services/billing-account.ts。 */
 export function formatBalance(value: number): string {
   const cents = Math.floor(value * 100 + 1e-6);

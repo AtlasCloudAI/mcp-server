@@ -9,7 +9,17 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { handOff } from "./handoff.js";
-import { type CardData, type CardMedia, billingUrlFor, cardFromToolResult, fileNameOf, isActive, isSignedOut, newIdempotencyKey } from "./card.js";
+import {
+  type CardData,
+  type CardMedia,
+  billingUrlFor,
+  cardFromToolResult,
+  earliestTime,
+  fileNameOf,
+  isActive,
+  isSignedOut,
+  newIdempotencyKey,
+} from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
 import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
@@ -202,6 +212,9 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
     ...(previous?.retry ? { retry: previous.retry } : {}),
   };
   const next = { ...kept, ...carry, ...parsed };
+  // 已用时间从最早见到的开始时间算：工作流每一步的 created_at 都会往后跳。
+  const startedAt = earliestTime(previous?.submitted_at, next.submitted_at);
+  if (startedAt) next.submitted_at = startedAt;
   if (parsed.price_usd !== undefined) next.price_usd = parsed.price_usd;
   // 网关给了扣费状态、任务也结束了：价格只认结果里的，预估价不能顶替实扣，没结算完
   // 显示「待结算」（需求文档 6.3）。老网关没有 charge_status，照旧沿用。

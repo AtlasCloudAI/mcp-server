@@ -7,7 +7,7 @@ import { formatBalanceUsd, describeBillingAccount } from "../src/services/billin
 import { passesChatAttachmentLinks } from "../src/services/client-profile.js";
 import { describeNotStarted, recentNotStarted, rememberNotStarted } from "../src/services/not-started.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
-import { formatBalance } from "../ui/generation-card/card.js";
+import { earliestTime, formatBalance } from "../ui/generation-card/card.js";
 import { contextReachesModel, handOff } from "../ui/generation-card/handoff.js";
 
 function fakeApp(hostName: string, sent: string[], context: string[]): App {
@@ -105,4 +105,15 @@ test("a confirm that did not start is remembered per user and shown with the his
   // 最多留最近 3 条，新的在前。
   for (const model of ["a/1", "a/2", "a/3"]) await rememberNotStarted(model, "Insufficient balance.", { store, now });
   assert.deepEqual((await recentNotStarted({ store, now })).map((entry) => entry.model), ["a/3", "a/2", "a/1"]);
+});
+
+test("a workflow's later steps don't restart the card's elapsed time (issue 27)", () => {
+  const submitted = "2026-11-03T09:46:46.000Z";
+  // 工作流每一步的 created_at 都更晚：沿用提交时的。
+  assert.equal(earliestTime(submitted, "2026-11-03T09:47:30.000Z"), submitted);
+  assert.equal(earliestTime("2026-11-03T09:47:30.000Z", submitted), submitted);
+  assert.equal(earliestTime(undefined, submitted), submitted);
+  assert.equal(earliestTime(submitted, undefined), submitted);
+  assert.equal(earliestTime(submitted, "not a time"), submitted);
+  assert.equal(earliestTime(undefined, undefined), undefined);
 });

@@ -94,7 +94,7 @@ export function isBlockedAddress(address: string): boolean {
     const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (mapped) return isBlockedAddress(mapped[1]!);
     return (
-      v6 === "::" ||
+      v6.startsWith("::") || v6.startsWith("64:ff9b:") || v6.startsWith("2002:") ||
       v6 === "::1" ||
       /^f[cd][0-9a-f]{2}:/.test(v6) ||
       /^fe[89ab][0-9a-f]:/.test(v6) ||
@@ -131,6 +131,7 @@ function guardedAgent(allowPrivate: boolean, timeoutMs: number): Agent {
 interface Probe {
   status: number;
   contentType: string;
+  sizeBytes?: number;
 }
 
 async function probeOnce(url: URL, method: "HEAD" | "GET", agent: Agent, timeoutMs: number): Promise<Probe & { location?: string }> {
@@ -138,6 +139,7 @@ async function probeOnce(url: URL, method: "HEAD" | "GET", agent: Agent, timeout
     method,
     dispatcher: agent,
     headers: method === "GET" ? { range: "bytes=0-0", "user-agent": "AtlasCloud-MCP-LinkCheck/1.0" } : { "user-agent": "AtlasCloud-MCP-LinkCheck/1.0" },
+    signal: AbortSignal.timeout(timeoutMs),
     headersTimeout: timeoutMs,
     bodyTimeout: timeoutMs,
     maxRedirections: 0,
@@ -149,7 +151,9 @@ async function probeOnce(url: URL, method: "HEAD" | "GET", agent: Agent, timeout
     const v = res.headers[name];
     return Array.isArray(v) ? (v[0] ?? "") : (v ?? "");
   };
-  return { status: res.statusCode, contentType: header("content-type").toLowerCase(), location: header("location") || undefined };
+  const length = res.statusCode === 206 ? header("content-range").split("/")[1] : header("content-length");
+  const size = Number(length);
+  return { status: res.statusCode, ...(Number.isSafeInteger(size) && size > 0 ? { sizeBytes: size } : {}), contentType: header("content-type").toLowerCase(), location: header("location") || undefined };
 }
 
 async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs: number): Promise<Probe | { reason: string }> {
@@ -161,6 +165,7 @@ async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (url.protocol !== "https:" && url.protocol !== "http:") return { reason: "only http and https links can be used" };
+    if (url.username || url.password) return { reason: "links containing credentials cannot be used" };
     const host = url.hostname.replace(/^\[|\]$/g, "");
     if (!allowPrivate && (host === "localhost" || (net.isIP(host) && isBlockedAddress(host)))) {
       return { reason: "it points to a private or local address, which Atlas cannot reach" };
@@ -182,12 +187,41 @@ async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs
       return { reason: "it could not be opened" };
     }
     if (result.status >= 300 && result.status < 400 && result.location) {
-      url = new URL(result.location, url);
+      try { url = new URL(result.location, url); } catch { return { reason: "the redirect is not valid" }; }
       continue;
     }
-    return { status: result.status, contentType: result.contentType };
+    return result;
   }
   return { reason: "it redirects too many times" };
+}
+
+export interface ImportedReference {
+  name: string;
+  host: string;
+  mime: string;
+  size_bytes?: number;
+  url?: string;
+}
+
+export async function inspectReferenceLinks(urls: string[], options: InputLinkCheckOptions = {}): Promise<ImportedReference[]> {
+  const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const privateAllowed = options.allowPrivateAddresses === true;
+  const agent = guardedAgent(privateAllowed, timeout);
+  try {
+    return await Promise.all(urls.slice(0, 10).map(async (raw) => {
+      const url = new URL(raw);
+      const host = url.hostname;
+      const name = url.pathname.split("/").pop()?.slice(0, 200) || host || "Reference link";
+      const found = await probe(raw, privateAllowed, agent, timeout);
+      if ("reason" in found) return { name, host, mime: "" };
+      const mime = found.contentType.split(";")[0]!.trim();
+      const genericModel = mime === "application/octet-stream" && name.toLowerCase().endsWith(".glb");
+      const supported = /^(image|video|audio)\//.test(mime) || mime === "model/gltf-binary" || genericModel;
+      return { name, host, mime, size_bytes: found.sizeBytes, ...(found.status >= 200 && found.status < 300 && supported ? { url: raw } : {}) };
+    }));
+  } finally {
+    await agent.close().catch(() => undefined);
+  }
 }
 
 function judge(field: string, found: Probe): string | undefined {

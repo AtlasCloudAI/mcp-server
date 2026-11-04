@@ -16,6 +16,7 @@ import {
   generationCardEnabled,
   generationCardToolMeta,
   cardMediaKind,
+  type CardMediaKind,
   type QuoteInfo,
 } from "./generation-card.js";
 
@@ -52,10 +53,25 @@ function inputShapeOf(value: unknown): { ratio: string } | undefined {
   return typeof first?.ratio === "string" ? { ratio: first.ratio } : undefined;
 }
 
+/**
+ * 输入素材是什么类型：先看地址，认不出（资产库临时地址没有扩展名，资产又没带 mime）时按参数
+ * 字段名猜，image / product_image / images 是图，video、audio 同理。认不出时报价卡的缩略图是灰的
+ * （11-03 第 9 轮问题 37）。
+ */
+function inputKind(url: string, field: string | undefined): CardMediaKind {
+  const kind = cardMediaKind(url);
+  if (kind !== "other" || !field) return kind;
+  const name = field.toLowerCase();
+  if (/(^|_)(image|images|img|photo|frame)(_|$)|image_url|first_frame|last_frame/.test(name)) return "image";
+  if (/(^|_)(video|videos)(_|$)|video_url/.test(name)) return "video";
+  if (/(^|_)(audio|audios|voice|music)(_|$)|audio_url/.test(name)) return "audio";
+  return kind;
+}
+
 /** 报价卡上的「任务内容」和「输入素材」（需求文档 6.1）。 */
 function quoteTask(params: Record<string, unknown> | undefined): Pick<QuoteInfo, "prompt" | "inputs"> {
   const prompt = promptOf(params);
-  const inputs = inputsOf(params).map((input) => ({ ...input, kind: cardMediaKind(input.url) }));
+  const inputs = inputsOf(params).map(({ field, ...input }) => ({ ...input, kind: inputKind(input.url, field) }));
   return {
     ...(prompt ? { prompt } : {}),
     ...(inputs.length > 0 ? { inputs } : {}),

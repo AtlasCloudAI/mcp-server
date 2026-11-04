@@ -175,7 +175,7 @@ Returns:
                 `${confirmationCostNotice(spend)}\n` +
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],

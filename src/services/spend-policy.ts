@@ -368,10 +368,12 @@ export function confirmationValidSeconds(expiresAt: string, now: number = Date.n
 }
 
 /** 报价里写出这次的幂等键，确认时让模型原样传回（见 GenerationConfirmationQuote）。 */
-export function confirmationReuseNotice(idempotencyKey: string): string {
+export function confirmationReuseNotice(idempotencyKey: string, confirmationToken?: string): string {
   return (
     `- **idempotency_key**: \`${idempotencyKey}\`. When the user confirms, send this exact value back ` +
-    `with the confirmation_token and unchanged arguments; do not generate a new one.`
+    `with the confirmation_token and unchanged arguments; do not generate a new one.` +
+    // 有的客户端只把文字结果交给模型（WorkBuddy 引擎，11-04 问题 46），令牌也写在这里。
+    (confirmationToken ? `\n- **confirmation_token**: \`${confirmationToken}\`` : "")
   );
 }
 

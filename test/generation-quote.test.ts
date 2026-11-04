@@ -563,9 +563,9 @@ test("任务内容和输入素材：提示词截断，参数里的链接不认�
     note: "not a link",
   });
   assert.deepEqual(inputs, [
-    { url: "https://cdn.example/products/front%20shot.jpg", name: "front shot.jpg" },
-    { url: "https://cdn.example/b.png", name: "b.png" },
-    { url: "https://cdn.example/clip.mp4", name: "clip.mp4" },
+    { url: "https://cdn.example/products/front%20shot.jpg", name: "front shot.jpg", field: "image" },
+    { url: "https://cdn.example/b.png", name: "b.png", field: "reference_images" },
+    { url: "https://cdn.example/clip.mp4", name: "clip.mp4", field: "refers" },
   ]);
   const many = inputsOf({ images: Array.from({ length: 12 }, (_, i) => `https://cdn.example/${i}.jpg`) });
   assert.equal(many.length, 8);

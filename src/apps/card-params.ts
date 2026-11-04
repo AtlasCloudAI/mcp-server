@@ -104,6 +104,8 @@ export interface ParamInput {
   url: string;
   /** 链接里的文件名；取不到就是「Input N」。 */
   name: string;
+  /** 参数里的顶层字段名（image、product_image、video_url……），地址认不出类型时据此判断。 */
+  field?: string;
 }
 
 const MAX_INPUTS = 8;
@@ -127,10 +129,15 @@ function fileName(url: string, index: number): string {
 export function inputsOf(params: Record<string, unknown> | undefined): ParamInput[] {
   if (!params) return [];
   const urls: string[] = [];
+  const fields = new Map<string, string>();
+  let field = "";
   const visit = (value: unknown, depth: number): void => {
     if (urls.length >= MAX_INPUTS || depth > 3) return;
     if (typeof value === "string") {
-      if (/^https?:\/\//i.test(value) && !urls.includes(value)) urls.push(value);
+      if (/^https?:\/\//i.test(value) && !urls.includes(value)) {
+        urls.push(value);
+        fields.set(value, field);
+      }
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item, depth + 1);
     } else {
@@ -140,7 +147,8 @@ export function inputsOf(params: Record<string, unknown> | undefined): ParamInpu
   };
   for (const [key, value] of Object.entries(params)) {
     if ((PROMPT_FIELDS as readonly string[]).includes(key) || key === "model") continue;
+    field = key;
     visit(value, 0);
   }
-  return urls.map((url, i) => ({ url, name: fileName(url, i) }));
+  return urls.map((url, i) => ({ url, name: fileName(url, i), ...(fields.get(url) ? { field: fields.get(url) } : {}) }));
 }

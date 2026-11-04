@@ -75,7 +75,7 @@ Rules:
   - Uploads are free; nothing is billed until a generation is submitted with the returned URL.
   - Files larger than max_bytes are rejected with 413; when max_video_bytes is present, it is the limit for videos and 3D files and max_bytes is the limit for images and audio. Ask the user to host larger files elsewhere and give you a public link.
   - Only report a file as uploaded when the response contained "url". If the command fails, say so and offer the public-link fallback.
-  - When saves_to_asset_library is true, uploads are saved in the user's Asset Library and the returned url is temporary (about 15 minutes); if it has expired, call atlas_use_assets with the asset_id. Otherwise uploaded files are temporary inputs for generation, not permanent hosting.
+  - When saves_to_asset_library is true, uploads are saved in the user's Asset Library and the returned url is temporary (about 15 minutes); if it has expired, call atlas_use_assets with the asset_id. For an image the upload response also gives width, height, orientation and ratio, so there is no need to call atlas_use_assets just to learn its shape. Otherwise uploaded files are temporary inputs for generation, not permanent hosting.
 
 Args:
   - filename_hint (string, optional): the file name you intend to upload; only used to fill in curl_example.

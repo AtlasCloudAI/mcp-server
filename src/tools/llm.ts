@@ -249,7 +249,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                   `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
                   `${bound}\n` +
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                  `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                   "Show this to the user and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.",
               }],

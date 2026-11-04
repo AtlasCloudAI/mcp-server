@@ -137,7 +137,7 @@ Returns:
                 `${confirmationCostNotice(spend)}\n` +
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
@@ -301,7 +301,7 @@ Returns:
                 `${confirmationCostNotice(spend)}\n` +
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],

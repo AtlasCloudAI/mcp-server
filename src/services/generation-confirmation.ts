@@ -2,11 +2,12 @@ import {
   createHash,
   createHmac,
   randomBytes,
+  randomUUID,
   timingSafeEqual,
 } from "node:crypto";
 import { z } from "zod";
 import type { ModelPrice } from "../types.js";
-import { idempotencyFingerprint } from "./idempotency.js";
+import { idempotencyFingerprint, peekIdempotent } from "./idempotency.js";
 import { getRequestContext } from "./request-context.js";
 import { InMemoryUploadTicketStore, type UploadTicketStore } from "./upload-ticket-store.js";
 
@@ -98,6 +99,7 @@ export async function issueGenerationConfirmation(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<GenerationConfirmationQuote> {
+  idempotencyKey = await unusedIdempotencyKey(toolName, idempotencyKey, request);
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(
@@ -126,6 +128,22 @@ export async function issueGenerationConfirmation(
     pricing,
     idempotencyKey,
   };
+}
+
+/**
+ * 报价用的幂等键已经提交过另一单（参数不同）时，换一个新键报价。模型常拿示例 UUID 当键，
+ * 和自己以前用过的撞上，确认时才报冲突，用户只好再确认一轮（11-04 问题 51）。换掉的键写进
+ * 报价结果；确认时模型就算还传旧键，也按报价记录找回新键。参数相同的（已提交的单再报一次价）
+ * 照旧用原键，确认时拿回原来那一单，不会重复扣钱。
+ */
+async function unusedIdempotencyKey(
+  toolName: string,
+  idempotencyKey: string,
+  request: Record<string, unknown>
+): Promise<string> {
+  const record = await peekIdempotent(toolName, idempotencyKey).catch(() => undefined);
+  if (!record || record.fingerprint === idempotencyFingerprint(request)) return idempotencyKey;
+  return randomUUID();
 }
 
 // 令牌只带版本、过期时间和一段 128 位的签名，其余（用户、工具、幂等键、请求与价格指纹）

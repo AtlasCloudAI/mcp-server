@@ -6,7 +6,7 @@ export const idempotencyKeySchema = z
   .string()
   .uuid()
   .describe(
-    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new UUID for a new generation. On the call after a quote, send the idempotency_key shown in the quote. If crypto is unavailable (a JavaScript cell may have none), build a random UUID another way, for example from Math.random; never reuse one for a different generation."
+    "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new random UUID for every new generation, never a placeholder or example value such as a1b2c3d4-e5f6-7890-abcd-ef1234567890 (a key already used for another job makes the confirmation fail). On the call after a quote, send the idempotency_key shown in the quote. If crypto is unavailable (a JavaScript cell may have none), build a random UUID another way, for example from Math.random; never reuse one for a different generation."
   );
 
 export const generationConfirmationTokenSchema = z
@@ -136,9 +136,13 @@ export const generationOutputSchema = {
   confirmation_token: z.string().min(32).optional(),
   confirmation_valid_seconds: z.number().int().nonnegative().optional(),
   idempotency_key: z.string().optional(),
-  pricing: generationPricingSchema.optional(),
+  // 目录里的计费单价（按张、按秒、按 token），不是这一单的总价。原来叫 pricing，Claude Code 只看
+  // 结构化结果，把其中的 base_price 当成报价告诉了用户（11-04 问题 50）。
+  catalog_unit_pricing: generationPricingSchema.optional(),
   // 这一单按当前参数的实算报价（/model/calculate），只在需要确认时给出
   estimated_cost_usd: z.number().optional(),
+  // 给用户报价时要说的那句话：总价、要不要按用量结算、单价不是总价
+  price_to_tell_user: z.string().optional(),
   estimate_partial: z.boolean().optional(),
   // 预估的原因（settles_on_usage：按实际用量结算）和不完整预估漏掉的部分
   estimate_reason: z.string().optional(),
@@ -186,7 +190,7 @@ export type GenerationStructuredContent = Record<string, unknown> &
         confirmation_token: string;
         confirmation_valid_seconds: number;
         idempotency_key: string;
-        pricing: z.infer<typeof generationPricingSchema>;
+        catalog_unit_pricing: z.infer<typeof generationPricingSchema>;
       }
   );
 
@@ -223,6 +227,16 @@ export function generationStructuredContent(
   };
 }
 
+/** 报价结果里的总价说法：模型照这句报，不会把单价当总价（问题 50）。 */
+export function priceToTellUser(usd: number, settlesOnUsage: boolean): string {
+  const amount = `$${Number(usd.toFixed(6))}`;
+  return (
+    `This job costs about ${amount} in total (estimated_cost_usd)` +
+    (settlesOnUsage ? ", settled on actual usage" : "") +
+    `. catalog_unit_pricing holds per-unit list prices, not this job's total.`
+  );
+}
+
 export function generationConfirmationStructuredContent(
   model: Model,
   kind: SubmitKind,
@@ -244,10 +258,11 @@ export function generationConfirmationStructuredContent(
     confirmation_token: confirmation.confirmationToken,
     confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
     idempotency_key: confirmation.idempotencyKey,
-    pricing: confirmation.pricing,
+    catalog_unit_pricing: confirmation.pricing,
     ...(estimate && estimate.usd !== null
       ? {
           estimated_cost_usd: estimate.usd,
+          price_to_tell_user: priceToTellUser(estimate.usd, estimate.reason === "settles_on_usage"),
           ...(estimate.partial ? { estimate_partial: true } : {}),
           ...(estimate.reason ? { estimate_reason: estimate.reason } : {}),
           ...(estimate.missing ? { estimate_missing: estimate.missing } : {}),

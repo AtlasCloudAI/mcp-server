@@ -252,7 +252,7 @@ test("卡片打开：资源按 MCP Apps 声明，查结果挂卡片，刷新工�
   }
 });
 
-test("查结果：卡片数据带模型名、类型、价格；工作流的「在 Atlas 打开」去历史页", async () => {
+test("查结果：卡片数据带模型名、类型、价格；「在 Atlas 打开」去使用历史里的这一单", async () => {
   const restore = withEnv({ MCP_UI_CARDS: "1" });
   const { client, close } = await connect({ rendersCards: false });
   try {
@@ -261,13 +261,13 @@ test("查结果：卡片数据带模型名、类型、价格；工作流的「�
     assert.equal(done?.model_name, "Flux Schnell");
     assert.equal(done?.model_type, "Image");
     assert.equal(done?.price_usd, 0.003);
-    assert.equal(done?.open_url, "https://www.atlascloud.ai/models/black-forest-labs/flux-schnell");
+    assert.equal(done?.open_url, "https://www.atlascloud.ai/console/usage-history?sessionID=done");
     assert.deepEqual(done?.media, [{ url: `${origin}/media/done.jpg`, kind: "image" }]);
 
     const workflow = cardOf(
       await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "workflow" } })
     );
-    assert.equal(workflow?.open_url, "https://www.atlascloud.ai/workflow/history");
+    assert.equal(workflow?.open_url, "https://www.atlascloud.ai/console/usage-history?sessionID=workflow");
     assert.equal((workflow?.media as unknown[]).length, 2);
 
     const failed = cardOf(await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "nope" } }));

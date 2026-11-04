@@ -319,7 +319,13 @@ export function cardStateOf(status: string, transferPending: boolean): CardState
   return "failed";
 }
 
-export function openInAtlasUrl(modelId: string | undefined): string {
+/**
+ * 「View request」去哪：有任务号就去官网使用历史里的这一单（/console/usage-history?sessionID=，
+ * 只列这一单，普通模型和工作流都在），原来去模型页、工作流历史页，找不到这一单（验收问题 5）。
+ * 报价卡还没有任务号，照旧去模型页。
+ */
+export function openInAtlasUrl(modelId: string | undefined, predictionId?: string): string {
+  if (predictionId) return `${SITE_URL}/console/usage-history?sessionID=${encodeURIComponent(predictionId)}`;
   if (!modelId) return SITE_URL;
   if (modelId.startsWith("atlascloud/studio/") || modelId.startsWith("atlascloud/workflow/")) {
     return `${SITE_URL}/workflow/history`;
@@ -374,7 +380,7 @@ export function buildGenerationCardData(input: {
     ...(input.settings && input.settings.length > 0 ? { settings: input.settings } : {}),
     media: input.outputs.map((url) => ({ url, kind: cardMediaKind(url) })),
     ...(input.error ? { error: input.error } : {}),
-    open_url: openInAtlasUrl(input.modelId),
+    open_url: openInAtlasUrl(input.modelId, input.predictionId),
     ...(input.createdAt ? { submitted_at: input.createdAt } : {}),
     ...(input.completedAt ? { completed_at: input.completedAt } : {}),
     ...(input.mediaExpired ? { media_expired: true } : {}),

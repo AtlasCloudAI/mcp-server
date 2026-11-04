@@ -145,12 +145,15 @@ test("生成类默认每次确认；对话保留 20 美元的自动上限", (t) 
 });
 
 test("不足一分钱的价格不被四舍五入成 $0.01", () => {
-  assert.equal(formatUsd(0.009), "$0.0090");
+  assert.equal(formatUsd(0.009), "$0.009");
   assert.equal(formatUsd(0.0000221), "$0.000022");
   assert.equal(formatUsd(0.0000058), "$0.0000058");
   assert.equal(formatUsd(0.000001), "$0.0000010");
   assert.equal(formatUsd(0), "$0.00");
-  assert.equal(formatUsd(0.036), "$0.04");
+  // 一美元以下不再四舍五入到分：$0.072 被写成 $0.07，模型照着报给了用户（11-04）。
+  assert.equal(formatUsd(0.036), "$0.036");
+  assert.equal(formatUsd(0.072), "$0.072");
+  assert.equal(formatUsd(0.5), "$0.50");
   assert.equal(formatUsd(20), "$20.00");
 });
 
@@ -161,7 +164,7 @@ test("直接提交时文案给的是预估、不是已扣费，且要求告知�
     thresholdUsd: 20,
     reason: "",
   });
-  assert.match(notice, /\$0\.04/);
+  assert.match(notice, /\$0\.036/);
   assert.match(notice, /\$20\.00/);
   assert.match(notice, /Give the user this estimate/);
   // 异步任务失败不计费，所以这句永远不能说成已经扣掉了。

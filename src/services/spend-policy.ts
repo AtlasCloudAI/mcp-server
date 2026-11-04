@@ -319,8 +319,10 @@ export function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.0001) {
     return `$${amount.toFixed(Math.min(10, 1 - Math.floor(Math.log10(amount))))}`;
   }
-  const decimals = amount > 0 && amount < 0.01 ? 4 : 2;
-  return `$${amount.toFixed(decimals)}`;
+  // 一美元以下保留到 4 位小数再去掉末尾的 0：$0.072 不能写成 $0.07，模型会照着报给用户
+  // （11-04 WorkBuddy 复测）。一美元以上照旧两位。
+  if (amount > 0 && amount < 1) return `$${amount.toFixed(4).replace(/(\.\d\d\d*?)0+$/, "$1")}`;
+  return `$${amount.toFixed(2)}`;
 }
 
 /**

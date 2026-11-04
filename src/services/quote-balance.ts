@@ -3,6 +3,7 @@ import { balanceResponseSchema } from "../response-schemas.js";
 import type { BalanceResponse } from "../types.js";
 import { publicApi } from "./api-client.js";
 import { formatUsd } from "./spend-policy.js";
+import { formatBalanceUsd } from "./billing-account.js";
 
 /**
  * 报价时顺带告诉用户余额够不够。
@@ -61,13 +62,13 @@ export async function quoteBalanceNotice(
   const available = await availableBalanceUsd(fetchBalance);
   if (available === null) return "";
   if (estimateUsd === null) {
-    return `- **Balance**: ${formatUsd(available)} available.`;
+    return `- **Balance**: ${formatBalanceUsd(available)} available.`;
   }
   if (available >= estimateUsd) {
-    return `- **Balance**: ${formatUsd(available)} available, enough for this estimate (about ${formatUsd(Math.max(0, available - estimateUsd))} left afterwards).`;
+    return `- **Balance**: ${formatBalanceUsd(available)} available, enough for this estimate (about ${formatBalanceUsd(Math.max(0, available - estimateUsd))} left afterwards).`;
   }
   return (
-    `- **Balance**: ${formatUsd(available)} available, less than this estimate, so the job would fail for insufficient balance. ` +
+    `- **Balance**: ${formatBalanceUsd(available)} available, less than this estimate, so the job would fail for insufficient balance. ` +
     `Tell the user before they confirm: they can top up at ${BILLING_URL}, or choose a cheaper model or a shorter, lower-resolution output.`
   );
 }

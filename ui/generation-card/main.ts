@@ -22,7 +22,14 @@ import {
   newIdempotencyKey,
 } from "./card.js";
 import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
-import { type QuoteState, createQuoteActions, initialQuoteState, quoteExpired, renderQuoteCard } from "./quote.js";
+import {
+  type QuoteState,
+  createQuoteActions,
+  initialQuoteState,
+  quoteExpired,
+  renderQuoteCard,
+  reopenedOnQuote,
+} from "./quote.js";
 import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
 import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
@@ -730,7 +737,10 @@ app.ontoolresult = (params) => {
     render();
     return;
   }
-  if (accept(params)) void pollLoop();
+  if (!accept(params)) return;
+  // 重新打开对话时报价卡又显示待确认（11-04 问题 39）：先问一次这份报价是不是已经提交过。
+  if (card?.state === "quote" && reopenedOnQuote(card.quote)) quoteActions.resume();
+  void pollLoop();
 };
 
 app.onhostcontextchanged = (params) => {

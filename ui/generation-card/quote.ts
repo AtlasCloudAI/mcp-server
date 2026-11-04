@@ -29,6 +29,8 @@ const CHECK_TOOL = "atlas_card_check_submission";
 /** 核实「到底提交没有」：每 5 秒问一次，两分钟还说不准就交给用户。服务端 90 秒查不到就会说没开始。 */
 const CHECK_GAP_MS = 5_000;
 const CHECK_BUDGET_MS = 120_000;
+/** 报价出来超过这么久卡片才被打开，算「重新打开」：先问一次这份报价提交过没有。 */
+const REOPENED_AFTER_MS = 15_000;
 
 // quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
 // verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
@@ -99,6 +101,8 @@ export interface QuoteActions {
   chooseAnother(missing: string[]): void;
   /** 再核实一次刚才那一单开没开始。 */
   checkAgain(): void;
+  /** 卡片重新打开在一份旧报价上：这份报价已经提交过就直接接着显示进度。 */
+  resume(): void;
   topUp(): void;
   openInAtlas(): void;
 }
@@ -212,6 +216,17 @@ export function initialQuoteState(card: CardData, now = Date.now()): QuoteState 
   return { phase: quoteExpired(quote) ? "expired" : "ready" };
 }
 
+/**
+ * 卡片是不是重新打开在一份旧报价上（ChatGPT 重新渲染对话时只给当初报价那次的工具结果）。
+ * 刚报出来的不用问：那时还没人确认过。
+ */
+export function reopenedOnQuote(quote: QuoteInfo | undefined, now = Date.now()): boolean {
+  if (!quote) return false;
+  const expires = quote.expires_at ? Date.parse(quote.expires_at) : NaN;
+  if (!Number.isFinite(expires) || !quote.valid_seconds) return true;
+  return now - (expires - quote.valid_seconds * 1000) > REOPENED_AFTER_MS;
+}
+
 /** 重新报价拿到的新价格和用户先前同意的不一样（按显示出来的金额比，不比浮点尾数）。 */
 export function priceChanged(approvedUsd: number | undefined, fresh: QuoteInfo | undefined): boolean {
   return (
@@ -231,8 +246,8 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   /** 已经因为「这个键之前被拒过」自动换键重报过的那份报价：只换一次。 */
   let rekeyedQuote: QuoteInfo | undefined;
 
-  /** 服务端核实接口说开始了：接着显示进度。 */
-  function startedFrom(result: unknown, quote: QuoteInfo): boolean {
+  /** 服务端核实接口说开始了：接着显示进度。tell：告诉模型卡片刚提交了这一单（重新打开时不用说）。 */
+  function startedFrom(result: unknown, quote: QuoteInfo, tell = true): boolean {
     const before = deps.card();
     const carry = {
       ...(quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {}),
@@ -242,9 +257,25 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
     const after = deps.card();
     if (!after || after.state === "quote") return false;
     deps.setState({ phase: "ready" });
-    tellModel(deps.app, before, after);
+    if (tell) tellModel(deps.app, before, after);
     deps.startPolling();
     return true;
+  }
+
+  async function resume(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || sample() || checking) return;
+    try {
+      const result = await deps.app.callServerTool({
+        name: CHECK_TOOL,
+        arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
+      });
+      const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
+      // 只认「开始了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
+      if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
+    } catch {
+      // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
+    }
   }
 
   async function verify(): Promise<void> {
@@ -391,6 +422,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       sendForUser(deps.app, say.switchModel(userLang(deps.app), modelLabel(deps.card() ?? {})), deps.notice);
     },
     checkAgain: () => void verify(),
+    resume: () => void resume(),
     chooseAnother(missing) {
       // 打开资产库重选（测试卡片打开样例资产库，选好也不发送）。
       if (deps.chooseReplacement) {

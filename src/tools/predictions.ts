@@ -24,6 +24,7 @@ export interface PredictionSummary {
   outputs: string[];
   error?: string;
   prompt?: string;
+  source?: string;
 }
 
 // 后端给的是秒级时间戳字符串；这里同时容忍毫秒、数字和 ISO 字符串。
@@ -65,6 +66,27 @@ function outputUrls(result: Record<string, unknown> | undefined): string[] {
   );
 }
 
+/**
+ * 这一单从哪儿发起的，写法和控制台使用记录的「来源」一样：MCP · ChatGPT、Website……
+ * 同一个账号常常同时连着好几个应用，模型要靠它分出哪几单是这个对话的（11-04 问题 40）。
+ * 老记录没有来源，就不写。
+ */
+export function sourceLabel(item: HistoryItem): string | undefined {
+  const name = typeof item.sourceName === "string" ? item.sourceName.trim() : "";
+  switch (item.source) {
+    case "mcp":
+      return name ? `MCP · ${name}` : "MCP";
+    case "website":
+      return "Website";
+    case "api":
+      return "API";
+    case "cli":
+      return "Atlas CLI";
+    default:
+      return undefined;
+  }
+}
+
 export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
   const result = asRecord(item.result);
   const request = asRecord(item.requestBody);
@@ -72,6 +94,7 @@ export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
   const error =
     typeof result?.error === "string" && result.error !== "" ? result.error : undefined;
   const createdAt = toIsoTimestamp(item.createdAt);
+  const source = sourceLabel(item);
   return {
     prediction_id: item.ID,
     model: item.model,
@@ -82,6 +105,7 @@ export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
     ...(prompt
       ? { prompt: prompt.length > 160 ? `${prompt.slice(0, 157)}...` : prompt }
       : {}),
+    ...(source ? { source } : {}),
   };
 }
 
@@ -94,7 +118,9 @@ export function registerPredictionTools(server: McpServer): void {
 
 Use this to find a task ID the user lost, to see what was generated earlier in a session, or to review which recent runs failed. It reads history only — nothing is submitted or billed.
 
-Each entry gives prediction_id, model, status, created_at, the output URLs (when finished), the error text (when failed) and a prompt snippet. For the full record of one task, call atlas_get_prediction with its prediction_id.
+Each entry gives prediction_id, model, status, created_at, where it was started (source, e.g. "MCP · ChatGPT", "MCP · Claude Code", "Website", "API"), the output URLs (when finished), the error text (when failed) and a prompt snippet. For the full record of one task, call atlas_get_prediction with its prediction_id.
+
+One account is often used from several apps at the same time, so the list can include tasks started elsewhere. When the user asks what this conversation generated or spent, count the tasks whose source is this app and mention any others separately.
 
 Args:
   - page (integer, optional, default 1): page number, newest first
@@ -149,6 +175,7 @@ Notes:
             outputs: z.array(z.string()),
             error: z.string().optional(),
             prompt: z.string().optional(),
+            source: z.string().optional(),
           })
         ),
       },
@@ -172,7 +199,8 @@ Notes:
         predictions.forEach((prediction, index) => {
           lines.push(
             `${index + 1}. \`${prediction.prediction_id}\` — ${prediction.model} — **${prediction.status}**` +
-              (prediction.created_at ? ` — ${prediction.created_at}` : "")
+              (prediction.created_at ? ` — ${prediction.created_at}` : "") +
+              (prediction.source ? ` — via ${prediction.source}` : "")
           );
           if (prediction.prompt) lines.push(`   prompt: ${prediction.prompt}`);
           if (prediction.outputs.length > 0) {

@@ -20,6 +20,10 @@ import { CARD_GENERATION_TOOLS } from "./generation-quote.js";
 //
 // 先看幂等记录：提交拿到结果的、被上游明确拒收的，记录里就有答案。记录说「不知道」时
 // 再翻这个账号最近的任务：同一个模型、同一段提示词、在提交之后建的，就是它。
+//
+// 卡片重新打开时（ChatGPT 重新渲染对话、换了标签页）也调一次，带 on_load：宿主只给卡片当初
+// 报价那次的结果，卡片不知道后来确认过没有（11-04 第 11 轮问题 39）。这时没有幂等记录就是
+// 没提交过，不去翻任务：同模型同提示词的另一单不能算到这张报价头上。
 
 export const CARD_CHECK_TOOL = "atlas_card_check_submission";
 
@@ -32,7 +36,9 @@ const HISTORY_PAGE_SIZE = 20;
 export type SubmissionOutcome =
   | { outcome: "started"; prediction_id: string }
   | { outcome: "not_started"; message: string }
-  | { outcome: "checking" };
+  | { outcome: "checking" }
+  /** on_load：这张报价没有提交记录。 */
+  | { outcome: "not_submitted" };
 
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
@@ -101,6 +107,7 @@ export async function checkSubmission(input: {
   model?: string;
   arguments?: Record<string, unknown>;
   submitted_at?: string;
+  on_load?: boolean;
   now?: number;
 }): Promise<SubmissionOutcome> {
   const now = input.now ?? Date.now();
@@ -110,6 +117,7 @@ export async function checkSubmission(input: {
   if (record?.state === "rejected") {
     return { outcome: "not_started", message: "Atlas Cloud turned this request down, so it didn't start." };
   }
+  if (input.on_load && !record) return { outcome: "not_submitted" };
 
   // 还在提交、记录说不准、上游收下了却没给任务号，或者没有记录（过期、工具没跑到）：翻最近的任务。
   // 开始时间优先用服务端记下的那一刻。
@@ -154,6 +162,10 @@ export function registerCardCheckTool(server: McpServer): void {
         model: z.string().regex(modelIdPattern).optional().describe("Model ID on the card"),
         arguments: z.record(z.unknown()).optional().describe("Arguments the card sent, for matching the prompt"),
         submitted_at: z.string().datetime().optional().describe("When the card sent the submission"),
+        on_load: z
+          .boolean()
+          .optional()
+          .describe("The card was opened again on an old quote: only report a submission that is on record"),
       },
       annotations: { ...CARD_TOOL_POLICIES.atlas_card_check_submission.annotations },
       // 和 atlas_card_status 一样只给卡片调，不挂 resourceUri。
@@ -172,7 +184,12 @@ export function registerCardCheckTool(server: McpServer): void {
             content: [
               {
                 type: "text",
-                text: result.outcome === "checking" ? "Still checking whether it started." : `Not started: ${result.message}`,
+                text:
+                  result.outcome === "checking"
+                    ? "Still checking whether it started."
+                    : result.outcome === "not_submitted"
+                      ? "This quote hasn't been submitted."
+                      : `Not started: ${result.message}`,
               },
             ],
           };

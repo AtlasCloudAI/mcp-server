@@ -30,10 +30,14 @@ function hostMatches(host: string, domains: string[]): boolean {
   return domains.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
-type KnownClient = "chatgpt" | "codex" | "claude" | "claude-code";
+type KnownClient = "chatgpt" | "codex" | "claude" | "claude-code" | "hermes";
+
+/** Hermes Agent 的元数据文档地址，和后端 authzserver 的 knownClients 一致。 */
+const HERMES_CLIENT_ID = "https://nousresearch.github.io/hermes-agent/docs/oauth/client-metadata.json";
 
 function knownClient(clientId: string | undefined): KnownClient | null {
   if (!clientId) return null;
+  if (clientId === HERMES_CLIENT_ID) return "hermes";
   let url: URL;
   try {
     url = new URL(clientId);
@@ -55,6 +59,7 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
   switch (knownClient(clientId)) {
     case "codex":
     case "claude-code":
+    case "hermes":
       return "shell";
     case "chatgpt":
     case "claude":
@@ -73,6 +78,18 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
 export function passesChatAttachmentLinks(clientId: string | undefined): boolean {
   const client = knownClient(clientId);
   return client === null || client === "chatgpt";
+}
+
+/**
+ * Can this client show the Atlas cards (MCP Apps)? Codex, Claude Code and Hermes
+ * can't: they list the card-only tools (atlas_card_status,
+ * atlas_card_check_submission, atlas_card_selftest) to the model as ordinary
+ * tools instead of hiding them (seen with Hermes on 2026-11-04, issue 48).
+ * Unknown clients keep them: WorkBuddy's engine, for one, does render cards.
+ */
+export function rendersCards(clientId: string | undefined): boolean {
+  const client = knownClient(clientId);
+  return client !== "codex" && client !== "claude-code" && client !== "hermes";
 }
 
 /** The profile of the client behind the request being served, or "other". */

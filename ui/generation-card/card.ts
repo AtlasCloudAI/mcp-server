@@ -245,9 +245,10 @@ export function cardFromToolResult(
   if (typeof structured.prediction_id !== "string" || typeof structured.status !== "string") {
     return undefined;
   }
-  const outputs = Array.isArray(structured.outputs)
-    ? structured.outputs.filter((u): u is string => typeof u === "string")
-    : [];
+  const urls = (value: unknown) =>
+    Array.isArray(value) ? value.filter((u): u is string => typeof u === "string") : [];
+  // 转存中 outputs 是空的，上游临时链接在 temporary_outputs，先拿来显示。
+  const outputs = urls(structured.outputs).length > 0 ? urls(structured.outputs) : urls(structured.temporary_outputs);
   return {
     state: stateOf(structured.status, structured.transfer_pending === true),
     prediction_id: structured.prediction_id,

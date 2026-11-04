@@ -91,6 +91,14 @@ export function chargeLine(status: ChargeStatus | undefined, priceUsd: number | 
   }
 }
 
+
+/** 结果已出、还在转存到 Atlas 存储时，结构化结果里给模型的下一步。 */
+export const TRANSFER_NEXT_STEP =
+  "The file is finished but still being copied to Atlas storage, so outputs is empty for now. " +
+  "Call atlas_get_prediction again with this prediction_id in about 15 seconds and use the Atlas link it returns. " +
+  "temporary_outputs are provider links that are slow from many networks and expire within 24 hours; " +
+  "use them only if no Atlas link has appeared after about 5 minutes.";
+
 export function registerLLMTools(
   server: McpServer,
   options: { includeChat?: boolean } = {}
@@ -365,6 +373,8 @@ Examples:
         status: z.string(),
         outputs: z.array(z.string()),
         transfer_pending: z.boolean().optional(),
+        temporary_outputs: z.array(z.string()).optional(),
+        next_step: z.string().optional(),
         error: z.string().optional(),
         metrics: z.record(z.unknown()).optional(),
         price_usd: z.number().optional(),
@@ -485,8 +495,13 @@ Examples:
           structuredContent: {
             prediction_id,
             status,
-            outputs: outputUrls,
-            ...(transferPending ? { transfer_pending: true } : {}),
+            // 转存还没完成时，上游的临时链接不放进 outputs，另放 temporary_outputs，并在 next_step 里写明
+            // 过一会儿再查：只读结构化结果的客户端（Claude Code）看不到文字里那段，会直接拿上游链接
+            // 去下载（11-04 第 13 轮问题 47）。
+            outputs: transferPending ? [] : outputUrls,
+            ...(transferPending
+              ? { transfer_pending: true, temporary_outputs: outputUrls, next_step: TRANSFER_NEXT_STEP }
+              : {}),
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
             ...(priceUsd !== undefined && chargeStatus !== "pending" ? { price_usd: priceUsd } : {}),

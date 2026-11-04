@@ -22,7 +22,7 @@ import {
 import { registerCardSelftestTool } from "./apps/card-selftest.js";
 import { registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
-import { passesChatAttachmentLinks } from "./services/client-profile.js";
+import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
 
 export type ServerProfile = "stdio" | "remote";
 
@@ -80,12 +80,15 @@ export function createAtlasCloudServer(
 
   if (generationCardEnabled()) {
     registerGenerationCardResource(server);
-    registerCardStatusTool(server);
-    registerCardCheckTool(server);
-    // 测试卡片只在开发环境用，生产永远不注册。
-    const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
-    if (selftest === "1" || selftest === "true" || selftest === "on") {
-      registerCardSelftestTool(server);
+    // 卡片专用工具只给会显示卡片的客户端；不显示卡片的会把它们当普通工具列给模型（问题 48）。
+    if (profile === "stdio" || rendersCards(client.clientId)) {
+      registerCardStatusTool(server);
+      registerCardCheckTool(server);
+      // 测试卡片只在开发环境用，生产永远不注册。
+      const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
+      if (selftest === "1" || selftest === "true" || selftest === "on") {
+        registerCardSelftestTool(server);
+      }
     }
   }
 

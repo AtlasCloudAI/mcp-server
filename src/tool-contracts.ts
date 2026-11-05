@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Model, SubmitKind } from "./types.js";
-import { confirmationValidSeconds } from "./services/spend-policy.js";
+import { confirmationValidSeconds, formatUsd } from "./services/spend-policy.js";
 
 export const idempotencyKeySchema = z
   .string()
@@ -227,9 +227,12 @@ export function generationStructuredContent(
   };
 }
 
-/** 报价结果里的总价说法：模型照这句报，不会把单价当总价（问题 50）。 */
+/**
+ * 报价结果里的总价说法：模型照这句报，不会把单价当总价（问题 50）。金额和卡片同一种写法（$1.52、$0.0455），
+ * 不给 6 位小数：模型会照抄成「US$1.524341」（11-04 设计走查 F3）。
+ */
 export function priceToTellUser(usd: number, settlesOnUsage: boolean): string {
-  const amount = `$${Number(usd.toFixed(6))}`;
+  const amount = formatUsd(usd);
   return (
     `This job costs about ${amount} in total (estimated_cost_usd)` +
     (settlesOnUsage ? ", settled on actual usage" : "") +

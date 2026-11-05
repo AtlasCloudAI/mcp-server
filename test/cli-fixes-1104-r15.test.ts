@@ -48,7 +48,9 @@ test("50：报价的结构化结果里，单价不叫 pricing，总价有一句�
   assert.deepEqual(structured.catalog_unit_pricing, pricing);
   assert.equal(structured.estimated_cost_usd, 0.072);
   assert.match(String(structured.price_to_tell_user), /\$0\.072 in total/);
-  assert.match(priceToTellUser(1.524341, true), /\$1\.524341 in total \(estimated_cost_usd\), settled on actual usage/);
+  // 和卡片同一种写法（设计走查 F3）：一美元以上到分，以下最多 4 位小数。
+  assert.match(priceToTellUser(1.524341, true), /\$1\.52 in total \(estimated_cost_usd\), settled on actual usage/);
+  assert.match(priceToTellUser(0.59746528, false), /\$0\.5975 in total/);
 });
 
 test("51：报价用的键已经提交过另一单，就换新键报价；确认时传旧键也能找回新键", async () => {

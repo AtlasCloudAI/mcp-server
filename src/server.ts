@@ -31,6 +31,9 @@ export interface ServerClient {
   clientId?: string;
 }
 
+const SERVER_ICON_URL =
+  "https://raw.githubusercontent.com/AtlasCloudAI/atlas-cloud-plugin/v0.6.0/plugins/atlas-cloud/assets/app-icon.svg";
+
 export function createAtlasCloudServer(
   profile: ServerProfile = "stdio",
   client: ServerClient = {}
@@ -38,7 +41,11 @@ export function createAtlasCloudServer(
   const server = new McpServer(
     {
       name: "atlascloud-ai-media",
+      title: "Atlas Cloud",
       version: SERVER_VERSION,
+      websiteUrl: "https://www.atlascloud.ai",
+      // 支持 serverInfo 图标的客户端（GrokBot 等）显示 Atlas 标志，而不是字母头像。
+      icons: [{ src: SERVER_ICON_URL, mimeType: "image/svg+xml", sizes: ["any"] }],
     },
     {
       instructions:

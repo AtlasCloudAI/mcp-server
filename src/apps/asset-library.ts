@@ -50,5 +50,5 @@ export interface AssetCardData {
 /** 模型在卡片打开时看到的说明：让用户在卡里挑，挑好的地址会自己回来。 */
 export const ASSETS_CARD_NOTE =
   "An Atlas Asset Library card is now showing these assets in the chat. The user can pick some there; when they press " +
-  "\"Use selected\", temporary URLs for the picked assets arrive in a new message or in your context. If the user " +
+  "\"Use N selected\" (N is how many they picked), temporary URLs for the picked assets arrive in a new message or in your context. If the user " +
   "already named the asset they want, you may call atlas_use_assets with its asset_id instead of waiting.";

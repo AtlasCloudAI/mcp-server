@@ -378,6 +378,7 @@ Examples:
         error: z.string().optional(),
         metrics: z.record(z.unknown()).optional(),
         price_usd: z.number().optional(),
+        price_to_tell_user: z.string().optional(),
         charge_status: z.string().optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
@@ -504,7 +505,10 @@ Examples:
               : {}),
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
-            ...(priceUsd !== undefined && chargeStatus !== "pending" ? { price_usd: priceUsd } : {}),
+            ...(priceUsd !== undefined && chargeStatus !== "pending"
+              ? // 原始金额有 8 位小数，模型会照抄（「$0.59746528 USD」）；另给一个和卡片一样写法的金额让它照着说。
+                { price_usd: priceUsd, price_to_tell_user: chargeUsd(priceUsd) }
+              : {}),
             ...(chargeStatus ? { charge_status: chargeStatus } : {}),
           },
           content: [

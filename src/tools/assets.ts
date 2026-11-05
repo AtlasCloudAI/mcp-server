@@ -109,14 +109,26 @@ function contextOf(item: AssetItem): { model?: string; prompt?: string } {
   };
 }
 
+// 模型路由的任务后缀（bytedance/seedance-2.5/image-to-video 的最后一段）：拿来当名字看不出是哪个模型。
+const TASK_SEGMENT = /^(?:(?:text|image|video|audio|reference|start-end|first-last)-to-(?:image|video|audio|speech|3d)|edit|i2v|t2v|t2i|r2v)$/i;
+
+// 归档进来的标题有时就是模型路由（atlascloud/studio/product-visuals…），用户看不懂，当作没有标题。
+const MODEL_PATH = /^[a-z0-9][\w.-]*\/[\w.-]+\//i;
+
+function modelWord(model: string | undefined): string | undefined {
+  const parts = model?.split("/").filter(Boolean) ?? [];
+  while (parts.length > 1 && TASK_SEGMENT.test(parts[parts.length - 1]!)) parts.pop();
+  return parts.pop();
+}
+
 export function assetLabel(item: AssetItem): string {
   for (const name of [item.title, item.original_filename]) {
     const trimmed = name?.trim();
-    if (trimmed && !PLACEHOLDER_NAMES.has(trimmed.toLowerCase())) return trimmed.slice(0, 80);
+    if (trimmed && !PLACEHOLDER_NAMES.has(trimmed.toLowerCase()) && !MODEL_PATH.test(trimmed)) return trimmed.slice(0, 80);
   }
   const kind = KIND_LABEL[kindOf(item)];
   const origin = ORIGIN_LABEL[originOf(item)];
-  const model = contextOf(item).model?.split("/").filter(Boolean).pop();
+  const model = modelWord(contextOf(item).model);
   return model ? `${kind} · ${model} ${origin}` : `${kind} ${origin}`;
 }
 

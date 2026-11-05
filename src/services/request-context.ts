@@ -28,6 +28,8 @@ export interface AtlasRequestContext {
   quoteStore?: UploadTicketStore;
   /** 素材地址 → 原文件名，报价卡按原名显示输入素材（media-names.ts）。 */
   mediaNameStore?: UploadTicketStore;
+  /** 这个 OAuth 客户端调过卡片专用工具，也就是会显示卡片（card-clients.ts）。 */
+  knownCardClient?: boolean;
 }
 
 /** 上传存进资产库（资产库二期）的限制，默认值跟 AssetD 一致。 */

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { api, generationApi } from "../services/api-client.js";
+import { rememberCardClient } from "../services/card-clients.js";
 import { peekIdempotent } from "../services/idempotency.js";
 import {
   historyResponseSchema,
@@ -176,6 +177,7 @@ export function registerCardCheckTool(server: McpServer): void {
       },
     },
     async (args) => {
+      void rememberCardClient();
       try {
         const result = await checkSubmission(args);
         if (result.outcome !== "started") {

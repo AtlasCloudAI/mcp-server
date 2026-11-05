@@ -94,7 +94,11 @@ export function rendersCards(clientId: string | undefined): boolean {
 
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
-  return clientProfile(getRequestContext()?.authInfo.clientId);
+  const context = getRequestContext();
+  const profile = clientProfile(context?.authInfo.clientId);
+  // 认不出、但显示过卡片的客户端（Cursor）：结果已经在卡片里，按聊天类客户端给指引，
+  // 不让模型再用 curl 下载一遍（问题 58）。
+  return profile === "other" && context?.knownCardClient ? "chat" : profile;
 }
 
 /**

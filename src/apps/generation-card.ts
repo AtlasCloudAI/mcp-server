@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import { generationApi, headStillServes } from "../services/api-client.js";
+import { rememberCardClient } from "../services/card-clients.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
 import type { MediaSource } from "../services/media-names.js";
@@ -494,6 +495,7 @@ export function registerCardStatusTool(server: McpServer): void {
       },
     },
     async ({ prediction_id }) => {
+      void rememberCardClient();
       try {
         const { result } = await waitForPrediction((budget) =>
           generationApi<PredictionResponse>(

@@ -28,7 +28,9 @@ import {
   type UploadTicketStore,
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
-import { prefetchCardCatalog } from "./apps/generation-card.js";
+import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
+import { isKnownCardClient } from "./services/card-clients.js";
+import { clientProfile } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
   JwtAccessTokenVerifier,
@@ -240,6 +242,11 @@ export function createHttpApp(
 
       try {
         await server.connect(transport);
+        // 自行注册的客户端（Cursor）认不出会不会显示卡片，查一下它以前调没调过卡片专用工具。
+        const knownCardClient =
+          generationCardEnabled() && clientProfile(req.auth?.clientId) === "other"
+            ? await isKnownCardClient(req.auth?.clientId, quoteStore)
+            : false;
         await runWithRequestContext(
           {
             authInfo: req.auth,
@@ -260,6 +267,7 @@ export function createHttpApp(
             uploadTicketStore,
             quoteStore,
             mediaNameStore,
+            knownCardClient,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );

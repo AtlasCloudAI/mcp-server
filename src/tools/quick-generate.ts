@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
@@ -34,7 +35,7 @@ import {
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
   generationStructuredContent,
-  idempotencyKeySchema,
+  generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { predictionResponseSchema } from "../response-schemas.js";
@@ -237,7 +238,7 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
         model_keyword: z
@@ -385,7 +386,7 @@ Returns:
           const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_quick_generate",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             foundModel.price
           );
@@ -422,7 +423,7 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_quick_generate", idempotency_key, confirmedRequest, foundModel.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
 
         // Step 5: Submit generation exactly once after confirmation.

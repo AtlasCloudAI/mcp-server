@@ -221,6 +221,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   const selected = new Map<string, AssetCardItem>();
   /** 交给模型的那组编号；选择一变就清掉，按钮恢复。 */
   let handedOff = "";
+  // 宿主交不了选择（Cursor）：卡片上留一句话，教用户在对话里怎么说。
+  let manualHandOff: string | undefined;
   let version = 0;
   const sample = data.sample === true;
   // 测试卡片不调接口：筛选在手上的样例里做。
@@ -357,7 +359,10 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       if (claudeNote) deps.notice(claudeNote);
       else if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
       if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
-      if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat to use them.");
+      if (outcome === "unsupported") {
+        manualHandOff = `This app can't take files straight from the card. In the chat, say: "Use ${labels} from my Asset Library."`;
+        deps.onHandedOff?.();
+      }
     } catch (e) {
       const text = thrownErrorText(e);
       if (isSignedOut(text, true)) reconnect = () => void use();
@@ -554,6 +559,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       body,
       error ? h("p", { class: "note", role: "status" }, error) : null,
       data.items.length > 0 ? footer(opts, shown.length) : null,
+      manualHandOff ? h("p", { class: "note" }, manualHandOff) : null,
       notice ? h("p", { class: "note", role: "status" }, notice) : null
     );
   }

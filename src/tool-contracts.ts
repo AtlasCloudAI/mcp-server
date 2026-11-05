@@ -9,6 +9,18 @@ export const idempotencyKeySchema = z
     "A UUID that identifies this intentional write. Reuse it only when retrying the exact same request; use a new random UUID for every new generation, never a placeholder or example value such as a1b2c3d4-e5f6-7890-abcd-ef1234567890 (a key already used for another job makes the confirmation fail). On the call after a quote, send the idempotency_key shown in the quote. If crypto is unavailable (a JavaScript cell may have none), build a random UUID another way, for example from Math.random; never reuse one for a different generation."
   );
 
+/**
+ * 生成工具的幂等键：报价那次可以不传，服务端生成一个并在报价里返回；确认那次带报价里的那个。
+ * 以前要模型自己造 UUID，Cursor 的 Agent 会去跑 `uuidgen`（验收问题 58）。
+ */
+export const generationIdempotencyKeySchema = z
+  .string()
+  .uuid()
+  .optional()
+  .describe(
+    "Optional on the first call: leave it out and the quote returns a fresh idempotency_key. On the confirming call, send the idempotency_key shown in the quote. Only set one yourself to retry the exact same request; never reuse a key for a different generation."
+  );
+
 export const generationConfirmationTokenSchema = z
   .string()
   // 不设下限：抄短了的令牌要能进到处理函数，按报价记录找回；在参数校验这一层报

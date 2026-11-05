@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
@@ -31,7 +32,7 @@ import {
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
   generationStructuredContent,
-  idempotencyKeySchema,
+  generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
 import {
@@ -70,7 +71,7 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction. The output is an audio file URL.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
         model: z.string().min(1).describe("Audio model ID"),
@@ -116,7 +117,7 @@ Returns:
           const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_generate_audio",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             prepared.model.price
           );
@@ -149,7 +150,7 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_audio", idempotency_key, confirmedRequest, prepared.model.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_generate_audio",
@@ -235,7 +236,7 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction. The output is the transcribed text.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
         model: z.string().min(1).describe("Speech-to-text model ID"),
@@ -280,7 +281,7 @@ Returns:
           const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_transcribe_audio",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             prepared.model.price
           );
@@ -313,7 +314,7 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_transcribe_audio", idempotency_key, confirmedRequest, prepared.model.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_transcribe_audio",

@@ -324,6 +324,8 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   let renewError: string | undefined;
   /** 交给模型之后的那组文件；列表一变就清掉，按钮恢复。 */
   let handedOff = "";
+  // 宿主既不能代发消息、也不能把内容交给模型（Cursor）：卡片上留一句话，教用户在对话里怎么说。
+  let manualHandOff: string | undefined;
   /** 文件多时列表收起，点「+N more files」展开。 */
   let expanded = false;
   /** 上一次选了多少个、超出上限没收进来的有几个（设计稿 v2「超出数量上限」）。 */
@@ -707,7 +709,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (claudeNote) deps.notice(claudeNote);
     else if (outcome === "context") deps.notice("Files are ready. Tell the chat what to make with them.");
     if (outcome === "failed") deps.notice("Couldn't send the files to the chat. Try again.");
-    if (outcome === "unsupported") deps.notice("This app can't take files from the card. Ask in the chat for another way to share them.");
+    if (outcome === "unsupported") {
+      // 存进了资产库的，模型按名字就能找到（atlas_search_assets）；没存进去的只能请用户在对话里重新给。
+      manualHandOff = done.every((i) => i.saved)
+        ? `This app can't take files straight from the card. They're saved in your Asset Library, so in the chat say: "Use ${names} from my Asset Library."`
+        : "This app can't take files straight from the card. Attach them in the chat instead, or paste a link to them.";
+      changed();
+    }
   }
 
   // ---- 视图 ----
@@ -923,7 +931,14 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
                   deps.openLibrary ? button("Asset Library", "secondary", deps.openLibrary) : null,
                 ]
               : [done.length > 0 ? useButton("primary") : null, button("Choose again", "secondary", chooseAgain)];
-      body = [head("Add reference media", status), list(), overflowNote(), libraryFullNote(), h("div", { class: "actions" }, ...actions)];
+      body = [
+        head("Add reference media", status),
+        list(),
+        overflowNote(),
+        libraryFullNote(),
+        h("div", { class: "actions" }, ...actions),
+        manualHandOff && phase === "done" ? h("p", { class: "note" }, manualHandOff) : null,
+      ];
     }
 
     return h("section", { class: "card upload" }, ...body, noticeEl());

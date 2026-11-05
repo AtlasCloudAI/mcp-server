@@ -297,7 +297,7 @@ export interface ConfirmedKey {
 export async function resolveConfirmedIdempotencyKey(
   token: string | undefined,
   toolName: string,
-  idempotencyKey: string,
+  idempotencyKey: string | undefined,
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<ConfirmedKey> {
@@ -308,7 +308,10 @@ export async function resolveConfirmedIdempotencyKey(
     quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint)
   );
   if (record) {
-    if (record.idempotencyKey === idempotencyKey) return { idempotencyKey };
+    // 幂等键现在可以不传（服务端在报价时生成）：没带就用报价记录里那个，不算「换了一单」。
+    if (idempotencyKey === undefined || record.idempotencyKey === idempotencyKey) {
+      return { idempotencyKey: record.idempotencyKey };
+    }
     return {
       idempotencyKey: record.idempotencyKey,
       notice:
@@ -318,7 +321,7 @@ export async function resolveConfirmedIdempotencyKey(
         `confirmed or confirmation_token to get a new quote.`,
     };
   }
-  if (token) {
+  if (token && idempotencyKey !== undefined) {
     verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
     return { idempotencyKey };
   }

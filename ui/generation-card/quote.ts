@@ -31,6 +31,8 @@ const CHECK_GAP_MS = 5_000;
 const CHECK_BUDGET_MS = 120_000;
 /** 报价出来超过这么久卡片才被打开，算「重新打开」：先问一次这份报价提交过没有。 */
 const REOPENED_AFTER_MS = 15_000;
+const RESUME_FAILED =
+  "Couldn't check whether this quote was already submitted. Confirming again won't charge twice: you'd get the same job back.";
 
 // quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
 // verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
@@ -273,6 +275,9 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   async function resume(): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote || sample() || checking) return;
+    // 把「正在查」写出来：有的宿主（Cursor）卡片调工具前要用户先点授权，不写的话用户只看到
+    // 一张又回到待确认的报价卡，不知道卡片在等什么（验收问题 59）。
+    deps.notice("Checking whether this quote was already submitted…");
     try {
       const result = await deps.app.callServerTool({
         name: CHECK_TOOL,
@@ -281,8 +286,10 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
       // 只认「开始了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
       if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
+      else if (result.isError) deps.notice(RESUME_FAILED);
     } catch {
       // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
+      deps.notice(RESUME_FAILED);
     }
   }
 

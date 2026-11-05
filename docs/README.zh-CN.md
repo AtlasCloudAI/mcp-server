@@ -36,7 +36,7 @@
 - 💬 **大语言模型** (83) — DeepSeek V4.1 Flash 1017 · Kimi K3.1 Pro HighSpeed · Kimi K3.1 Pro · Gemini 4 Argon
 - 🔊 **音频（TTS · 音乐 · 语音识别）** (19) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **探索更多** — [全部 504 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **探索更多** — [全部 505 个在线模型 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **最新视频模型** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3。

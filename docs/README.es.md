@@ -36,7 +36,7 @@
 - 💬 **LLM** (83) — DeepSeek V4.1 Flash 1017 · Kimi K3.1 Pro HighSpeed · Kimi K3.1 Pro · Gemini 4 Argon
 - 🔊 **Audio (TTS · Música · ASR)** (19) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **Explora más** — [los 504 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explora más** — [los 505 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **Modelos de vídeo más recientes** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

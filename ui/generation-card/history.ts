@@ -3,7 +3,7 @@
 // 点某一条就在原地显示那条的生成卡（进度或作品），带返回按钮。
 
 import { type CardMediaKind, type CardState, KIND_LABEL, formatUsd, kindOfUrl, modelLabel, shortId } from "./card.js";
-import { badge, button, h } from "./view.js";
+import { ICON_IMAGE, badge, button, h } from "./view.js";
 
 export const HISTORY_META_KEY = "atlascloud/history";
 
@@ -61,6 +61,7 @@ const INLINE_ROWS = 5;
 const ICON_CHEVRON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>';
 const ICON_WAVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const TYPE_ICON: Record<string, string> = { Video: ICON_PLAY, Audio: ICON_WAVE, Image: ICON_IMAGE };
 const ICON_FILE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l5 5v12.4c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1V3.8c0-.6.4-1 1-1zm7.5 1.7V8.3h3.8L13.5 4.5z" fill="currentColor"/></svg>';
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -164,7 +165,8 @@ function thumb(item: HistoryCardItem): HTMLElement {
   } else if (media?.kind === "audio") {
     fallback(ICON_WAVE);
   } else {
-    fallback(ICON_FILE);
+    // 还没有结果（生成中、失败）：按模型类型给图标，和有结果的行一致，不用通用的文件图标。
+    fallback(TYPE_ICON[item.model_type ?? ""] ?? ICON_FILE);
   }
   return box;
 }
@@ -191,8 +193,10 @@ function rowFor(item: HistoryCardItem, opts: HistoryOptions, actions: HistoryAct
     thumb(item),
     h("span", { class: "history-text" }, h("span", { class: "history-title" }, itemTitle(item)), h("span", { class: "history-sub" }, itemSub(item))),
     statusMark(item),
-    // 失败的也能点开看原因：徽标后面同样带箭头。
-    opts.canQuery && item.state === "failed" ? h("span", { class: "history-chevron", html: ICON_CHEVRON }) : null,
+    // 失败的、还在跑的也能点开：徽标后面同样带箭头。
+    opts.canQuery && item.state !== "succeeded" && item.state !== "canceled"
+      ? h("span", { class: "history-chevron", html: ICON_CHEVRON })
+      : null,
   ];
   // 宿主不让卡片调工具时点不开单条，只做展示。
   return opts.canQuery

@@ -884,7 +884,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       // 选过的文件留在卡上：用户要看得出是哪几个文件在等，点「Upload again」会接着传它们。
       body = [
         head("Upload link expired", badge("Expired")),
-        h("p", { class: "desc" }, "Upload links last a few minutes. Get a new one and your files will upload again."),
+        h("p", { class: "desc" }, "We'll get a new link when you try again."),
         items.length > 0 ? list() : null,
         renewError ? h("p", { class: "note" }, `Couldn't get a new link: ${renewError}`) : null,
         h("div", { class: "actions" }, button("Upload again", "primary", uploadAgain)),

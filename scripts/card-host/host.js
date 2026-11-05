@@ -33,6 +33,7 @@ const VARIANTS = [
   "quote_submitting",
   "quote_checking",
   "quote_uncertain",
+  "quote_in_progress",
   "quote_price_changed",
   "quote_settings_changed",
   "quote_rate_limited",

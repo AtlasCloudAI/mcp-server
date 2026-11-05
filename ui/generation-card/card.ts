@@ -59,7 +59,8 @@ export type QuoteProblem =
   // 下面三个只为自测：点了确认之后的几个过渡状态，正常只会在点击后出现，样例里直接摆出来好截图。
   | "submitting"
   | "verifying"
-  | "uncertain";
+  | "uncertain"
+  | "in_progress";
 
 export interface CardData {
   state: CardState;

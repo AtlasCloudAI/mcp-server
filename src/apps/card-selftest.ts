@@ -270,6 +270,8 @@ const QUOTE_VARIANTS = {
   quote_submitting: { estimated: 1.34, partial: false, expired: false, problem: "submitting", balance: undefined, previous: undefined },
   quote_checking: { estimated: 1.34, partial: false, expired: false, problem: "verifying", balance: undefined, previous: undefined },
   quote_uncertain: { estimated: 1.34, partial: false, expired: false, problem: "uncertain", balance: undefined, previous: undefined },
+  // 同一个请求还在处理（设计稿 idempotency_in_progress）：明确在跑，只给 Refresh。
+  quote_in_progress: { estimated: 1.34, partial: false, expired: false, problem: "in_progress", balance: undefined, previous: undefined },
 } as const;
 
 // 模板报价样例：Image ads 出 4 张，素材是上传卡传的耳机图。

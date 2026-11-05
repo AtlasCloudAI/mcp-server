@@ -52,6 +52,7 @@ export type QuotePhase =
   | "rate_limited"
   | "model_unavailable"
   | "uncertain"
+  | "in_progress"
   | "input_missing"
   | "signed_out"
   | "error";
@@ -152,10 +153,12 @@ export function failureState(text: string, now = Date.now()): QuoteState {
     const balance = balanceIn(text);
     return balance === undefined ? { phase: "low_balance" } : { phase: "low_balance", balanceUsd: balance };
   }
-  // 提交没拿到确定的回答（服务端那句 "without a confirmed response"），或者防重复扣费的锁说上一次
-  // 还没完：可能已经开跑，也可能没有。卡片先自己核实。
-  // 上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
-  if (/without a confirmed response|still in progress|did not return a prediction id/i.test(text)) return { phase: "verifying" };
+  // 防重复扣费的锁说同一个请求还在处理（src/services/idempotency.ts）：这一单明确在跑，
+  // 不归到「不确定」那套（设计走查 11-05）。
+  if (/still in progress/i.test(text)) return { phase: "in_progress" };
+  // 提交没拿到确定的回答（服务端那句 "without a confirmed response"）：可能已经开跑，也可能没有。
+  // 卡片先自己核实。上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
+  if (/without a confirmed response|did not return a prediction id/i.test(text)) return { phase: "verifying" };
   // 确认令牌和这次请求对不上（src/services/generation-confirmation.ts）。卡片带的参数不会变，
   // 多半是价格变了：卡片会先按同一个幂等键重新报价，比一比价格（见 createQuoteActions）。
   if (/does not match this request|confirmation is invalid|no quote was found for these exact arguments/i.test(text)) {
@@ -215,6 +218,7 @@ export function initialQuoteState(card: CardData, now = Date.now()): QuoteState 
     case "submitting":
     case "verifying":
     case "uncertain":
+    case "in_progress":
       return { phase: quote.problem };
   }
   return { phase: quoteExpired(quote) ? "expired" : "ready" };
@@ -700,7 +704,7 @@ export function renderQuoteCard(
     return h(
       "section",
       { class: "card" },
-      head("Checking whether it started", badge("Checking", { spinner: true })),
+      head("Checking whether it started", badge("Checking", { spinner: true, warn: true })),
       subtitle,
       h(
         "p",
@@ -720,15 +724,27 @@ export function renderQuoteCard(
       h(
         "p",
         { class: "desc" },
-        "We couldn't confirm whether this job is running. Check again, or look at your generations in Atlas: a new quote starts a separate job."
+        "We couldn't confirm whether this job is running. Check again, or look at your generations in Atlas."
       ),
+      // 不放「Get a new quote」：这时不知道扣没扣钱，重新报价容易让用户再提交一次（设计走查 11-05）。
       h(
         "div",
         { class: "actions" },
         quote ? button("Check again", "primary", actions.checkAgain) : null,
-        button("Open in Atlas", quote ? "secondary" : "primary", actions.openInAtlas),
-        quote ? button("Get a new quote", "secondary", actions.requoteFresh) : null
+        button("Open in Atlas", quote ? "secondary" : "primary", actions.openInAtlas)
       ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "in_progress") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Generation in progress", badge("Already running", { spinner: true })),
+      subtitle,
+      h("p", { class: "desc" }, "The same request is already being processed."),
+      quote ? h("div", { class: "actions" }, button("Refresh", "primary", actions.checkAgain)) : null,
       notice(opts)
     );
   }

@@ -253,7 +253,8 @@ export interface QuoteInfo {
     | "signed_out"
     | "submitting"
     | "verifying"
-    | "uncertain";
+    | "uncertain"
+    | "in_progress";
   /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
   sample_balance_usd?: number;
   sample_previous_usd?: number;

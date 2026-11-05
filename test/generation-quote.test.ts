@@ -267,6 +267,8 @@ test("卡片前端：ChatGPT 把工具报错变成调用失败时，取出原文
   );
   // 上一次没拿到确定回答：卡片先自己核实，不直接把「不确定」丢给用户。
   assert.deepEqual(failureState(uncertain), { phase: "verifying" });
+  // 幂等锁说同一个请求还在处理：明确在跑，单独一张「Already running」卡，不进核实流程。
+  assert.deepEqual(failureState("A request with this idempotency key is still in progress"), { phase: "in_progress" });
 
   assert.deepEqual(
     failureState(thrownErrorText(wrap("Generation confirmation expired. Request a new quote. No billable request was submitted."))),

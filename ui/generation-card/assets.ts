@@ -372,7 +372,11 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
 
   function media(item: AssetCardItem): HTMLElement {
     const box = h("span", { class: "asset-media" });
-    const icon = () => box.replaceChildren(h("span", { class: "asset-icon", html: ICONS[item.kind] }));
+    // 没有缩略图（音频、3D、缩略图坏了）：图标下面写文件名，不然几个灰格子分不清。
+    const icon = () =>
+      box.replaceChildren(
+        h("span", { class: "asset-icon" }, h("span", { html: ICONS[item.kind], style: "display:contents" }), h("span", { class: "asset-name" }, item.label))
+      );
     if (item.thumb_url) {
       // 不带 Referer：存储的防盗链会拦卡片沙箱的来源（生成卡同一个坑）。
       const img = h("img", { src: item.thumb_url, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
@@ -516,7 +520,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       return h(
         "section",
         { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
-        head("Asset Library", badge("Signed out", { warn: true }), opts.fullscreen),
+        head("Asset Library", badge("Sign in required", { danger: true }), opts.fullscreen),
         emptyState(ICON_LINK, "Reconnect Atlas Cloud", "Your Atlas Cloud sign-in expired. Reconnect to keep using your Asset Library.", actions),
         h("p", { class: "note" }, RECONNECT_NOTE),
         notice ? h("p", { class: "note", role: "status" }, notice) : null
@@ -545,7 +549,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
             h("button", { type: "button", class: "asset-clear", onclick: () => void query({ filter, append: false, clearQuery: true }) }, "Show all")
           )
         : null,
-      tabs(),
+      // 库里一个文件都没有时不放筛选（设计稿「资产库为空」）。
+      data.items.length === 0 && !filter && !data.query && !loading ? null : tabs(),
       body,
       error ? h("p", { class: "note", role: "status" }, error) : null,
       data.items.length > 0 ? footer(opts, shown.length) : null,

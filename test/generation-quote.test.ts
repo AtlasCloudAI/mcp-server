@@ -176,7 +176,7 @@ test("包装层：卡片关着原样返回；打开时挂卡片，客户端能�
 
     const rich = await withGenerationCard(fakeServer(true), "atlas_generate_video", handler)(VIDEO_ARGS, {});
     assert.equal(rich.content.length, 2);
-    assert.match((rich.content[1] as { text: string }).text, /Generate button/);
+    assert.match((rich.content[1] as { text: string }).text, /"Confirm and generate" button/);
 
     const failed = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
       isError: true,
@@ -471,7 +471,7 @@ test("报价补上主要参数和扣费账户：文字和结构化结果都有�
     const quote = (card._meta?.["atlascloud/card"] as { quote: Record<string, unknown> }).quote;
     // 参数标签按实际提交的参数，不按调用方给的（这里调用方没给分辨率）。
     assert.deepEqual(quote.settings, ["720p", "5 s", "16:9"]);
-    assert.deepEqual(quote.account, { name: "Ada Lovelace", email: "ada@example.com", balance_usd: 8.5 });
+    assert.deepEqual(quote.account, { name: "Ada Lovelace", email: "ada@example.com", type: "personal", balance_usd: 8.5 });
     assert.equal(quote.settles_on_usage, true);
   } finally {
     restore();

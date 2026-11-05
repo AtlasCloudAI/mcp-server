@@ -137,6 +137,7 @@ export function generationResultCard(
               account: {
                 name: account.name,
                 ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
+                ...(typeof account.type === "string" ? { type: account.type } : {}),
                 ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
               },
             }
@@ -211,7 +212,9 @@ export async function withAvailableBalance(
 }
 
 const QUOTE_CARD_NOTE =
-  "The Atlas card shows this quote with a Generate button. If the user approves it there, the " +
+  "The Atlas card already shows this quote (model, settings, price and billing account) with a " +
+  "\"Confirm and generate\" button, so a single short sentence pointing the user to the card is " +
+  "enough: repeating the price or settings as a list duplicates the card. If the user approves it there, the " +
   "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
   "they confirm in the chat instead, call again as described above; the same idempotency_key " +
   "returns the job the card already started rather than a second one. Some apps don't tell you " +

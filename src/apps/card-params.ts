@@ -37,7 +37,8 @@ export function settingsChips(
   if (!params) return [];
   const chips: string[] = [];
   const resolution = params.resolution;
-  if (typeof resolution === "string" && resolution.trim()) chips.push(resolution.trim());
+  // 「2k」「4k」统一写成「2K」「4K」，和 1080p、720p 这类写法并列时不显得乱。
+  if (typeof resolution === "string" && resolution.trim()) chips.push(resolution.trim().replace(/^(\d+(?:\.\d+)?)k$/i, "$1K"));
   else if (typeof resolution === "number") chips.push(`${resolution}p`);
 
   for (const key of ["size", "image_size"]) {

@@ -142,6 +142,9 @@ function itemSub(item: HistoryCardItem): string {
   const parts = [whenLabel(item.created_at)];
   if (item.outputs > 1) parts.push(`${item.outputs} files`);
   if (item.price_usd !== undefined && item.state === "succeeded") parts.push(formatUsd(item.price_usd));
+  // 设计稿：失败的写清楚扣没扣钱，还在跑的写费用待定。
+  if (item.state === "failed" || item.state === "canceled") parts.push(item.price_usd ? formatUsd(item.price_usd) : "Not charged");
+  if (item.state === "queued" || item.state === "running" || item.state === "transfer_pending") parts.push("Cost pending");
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -188,6 +191,8 @@ function rowFor(item: HistoryCardItem, opts: HistoryOptions, actions: HistoryAct
     thumb(item),
     h("span", { class: "history-text" }, h("span", { class: "history-title" }, itemTitle(item)), h("span", { class: "history-sub" }, itemSub(item))),
     statusMark(item),
+    // 失败的也能点开看原因：徽标后面同样带箭头。
+    opts.canQuery && item.state === "failed" ? h("span", { class: "history-chevron", html: ICON_CHEVRON }) : null,
   ];
   // 宿主不让卡片调工具时点不开单条，只做展示。
   return opts.canQuery

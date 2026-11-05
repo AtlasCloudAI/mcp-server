@@ -31,7 +31,7 @@ export interface QuoteInfo {
   /** 不完整的预估漏掉了什么（服务端给的说法）。 */
   estimate_missing?: string[];
   /** 扣费账户和可用余额；查不到就没有。 */
-  account?: { name: string; email?: string; balance_usd?: number };
+  account?: { name: string; email?: string; type?: string; balance_usd?: number };
   /** 这一单要生成什么（提示词，截断过）。 */
   prompt?: string;
   /** 这一单引用的素材：缩略图、名称和来源（资产库 / 上传卡 / 对话附件，查不到就没有）。 */
@@ -55,7 +55,11 @@ export type QuoteProblem =
   | "rate_limited"
   | "model_unavailable"
   | "input_missing"
-  | "signed_out";
+  | "signed_out"
+  // 下面三个只为自测：点了确认之后的几个过渡状态，正常只会在点击后出现，样例里直接摆出来好截图。
+  | "submitting"
+  | "verifying"
+  | "uncertain";
 
 export interface CardData {
   state: CardState;
@@ -77,6 +81,8 @@ export interface CardData {
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
   sample_signed_out?: boolean;
+  /** 测试卡片：显示「Still generating」（卡片自己等太久之后的样子）。 */
+  sample_stalled?: boolean;
   quote?: QuoteInfo;
   retry?: { tool: string; arguments: Record<string, unknown> };
 }
@@ -216,13 +222,14 @@ function quoteFromStructured(
   };
 }
 
-function billingAccountOf(raw: unknown): { account?: { name: string; email?: string; balance_usd?: number } } {
+function billingAccountOf(raw: unknown): { account?: { name: string; email?: string; type?: string; balance_usd?: number } } {
   const account = record(raw);
   if (!account || typeof account.name !== "string") return {};
   return {
     account: {
       name: account.name,
       ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
+      ...(typeof account.type === "string" ? { type: account.type } : {}),
       ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
     },
   };

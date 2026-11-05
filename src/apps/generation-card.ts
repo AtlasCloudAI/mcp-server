@@ -233,7 +233,7 @@ export interface QuoteInfo {
   /** 不完整的预估漏掉了什么（给人看的说法，如 the reference videos' length）。 */
   estimate_missing?: string[];
   /** 扣费账户和可用余额（需求文档 6.1）；查不到就没有。 */
-  account?: { name: string; email?: string; balance_usd?: number };
+  account?: { name: string; email?: string; type?: string; balance_usd?: number };
   /** 这一单要生成什么：提示词（截断过）。 */
   prompt?: string;
   /** 这一单引用的素材，报价卡上显示缩略图和名称。 */
@@ -250,7 +250,10 @@ export interface QuoteInfo {
     | "rate_limited"
     | "model_unavailable"
     | "input_missing"
-    | "signed_out";
+    | "signed_out"
+    | "submitting"
+    | "verifying"
+    | "uncertain";
   /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
   sample_balance_usd?: number;
   sample_previous_usd?: number;
@@ -286,6 +289,7 @@ export interface GenerationCardData {
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
   sample_signed_out?: boolean;
+  sample_stalled?: boolean;
   /** 只在 state = "quote" 时有。 */
   quote?: QuoteInfo;
   /** 由生成工具提交的任务：失败后卡片用它重新报价（Try again），不必替用户发消息。 */

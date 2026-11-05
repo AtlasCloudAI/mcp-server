@@ -717,6 +717,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const size = formatBytes(item.size);
     if (item.saved && item.status === "done") return `${size} · Saved to Asset Library`;
     if (linkExpired && (item.status === "queued" || item.status === "uploading")) {
+      if (gaveUp) return `${size} · Not uploaded yet`;
       return `${size} · ${signedOut ? "Waiting to reconnect" : "Waiting for a new link"}`;
     }
     switch (item.status) {
@@ -758,6 +759,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   function mark(item: UploadItem): HTMLElement {
+    // 已经停下来等用户点「Upload again / Reconnect」：不转圈，免得看起来像在自动处理。
+    if (gaveUp && (item.status === "uploading" || item.status === "queued")) {
+      return h("span", { class: "upload-mark", html: ICON_WAITING, "aria-label": "Not uploaded yet" });
+    }
     if (item.status === "uploading" || item.status === "saving" || item.status === "queued") {
       return h("span", { class: "upload-mark", html: ICON_SPINNER, "aria-label": "Uploading" });
     }
@@ -816,13 +821,13 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     );
   }
 
-  // 设计稿 v2：不做拖拽（拖进卡片会被宿主当成聊天附件），点开选文件；只写大小上限，格式传完再查。
+  // 设计稿 v2：不做拖拽（拖进卡片会被宿主当成聊天附件），灰底不画虚线，点开选文件；只写大小上限，格式传完再查。
   function chooser(): HTMLElement {
     return h(
       "button",
       { type: "button", class: "upload-drop", onclick: pick },
       h("span", { class: "upload-drop-icon", html: ICON_UPLOAD }),
-      h("span", { class: "upload-drop-title" }, "Choose images or videos from your device"),
+      h("span", { class: "upload-drop-title" }, "Choose images, videos or audio from your device"),
       h(
         "span",
         { class: "upload-drop-hint" },
@@ -837,7 +842,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (!overflow) return null;
     return h(
       "p",
-      { class: "note danger" },
+      { class: "note" },
       `You picked ${overflow.picked} files. Only the first ${overflow.added} were added — you can add up to ${data.max_files} at a time.`
     );
   }
@@ -869,7 +874,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (phase === "expired" && signedOut) {
       // 选过的文件留在卡上，重新连上后接着传。
       body = [
-        head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+        head("Reconnect Atlas Cloud", badge("Sign in required", { danger: true })),
         h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so these files haven't finished uploading. Reconnect and they'll upload again."),
         items.length > 0 ? list() : null,
         h("div", { class: "actions" }, button("Reconnect", "primary", uploadAgain)),
@@ -888,7 +893,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       body = [
         head("Add reference media", null),
         chooser(),
-        h("p", { class: "note" }, "Have a link? Paste it in the chat."),
+        h("p", { class: "note" }, "Files are saved to your Asset Library. Have a link? Paste it in the chat."),
         h(
           "div",
           { class: "actions" },
@@ -939,6 +944,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 }
 
 const ICON_SPINNER = '<svg class="spin" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/></svg>';
+const ICON_WAITING = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="m5 8.2 2 2 4-4.2" fill="none" style="stroke:var(--ac-card-bg,#fff)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_REMOVE = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="m5.8 5.8 4.4 4.4m0-4.4-4.4 4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
 const ICON_UPLOAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5V4.5m0 0-4 4m4-4 4 4M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';

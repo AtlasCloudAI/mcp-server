@@ -72,7 +72,7 @@ const VARIANTS = {
     model: "bytedance/seedance-2.5/text-to-video",
     name: "Dreamina Seedance 2.5",
     type: "Video",
-    price: undefined,
+    price: "1.34",
     outputs: [],
   },
   failed: {
@@ -179,6 +179,24 @@ const VARIANTS = {
     outputs: [],
   },
   // Marketing Studio 模板跑着：进度卡标题写模板名（设计稿 v2「模板执行中」）。
+  // 卡片自己等太久还没结果（设计稿 wait_timeout）：「Still generating」+ Keep waiting。
+  running_stalled: {
+    status: "processing",
+    model: "bytedance/seedance-2.5/text-to-video",
+    name: "Dreamina Seedance 2.5",
+    type: "Video",
+    price: "1.34",
+    outputs: [],
+  },
+  // 任务完成但预览加载不出来（设计稿 preview blocked）：Retry preview + Download。地址故意指向不存在的文件。
+  preview_failed: {
+    status: "completed",
+    model: "bytedance/seedream-v4.7",
+    name: "Seedream v4.7",
+    type: "Image",
+    price: "0.03",
+    outputs: [`${STATIC}/model/example/material/selftest-missing-preview.jpg`],
+  },
   template_running: {
     status: "processing",
     model: "atlascloud/studio/product-visuals",
@@ -208,12 +226,13 @@ const CHARGE_SAMPLES: Partial<Record<string, string>> = {
 // 结果卡、进度卡上的主要参数（示例）。
 const SETTINGS_SAMPLES: Record<string, string[]> = {
   Image: ["2048 × 2048"],
-  Video: ["1080p", "10 s", "16:9", "Audio"],
-  Audio: ["30 s"],
+  // 和样例媒体一致：样例视频是竖版，样例音频 1:41。
+  Video: ["1080p", "10 s", "9:16", "Audio"],
+  Audio: ["101 s"],
 };
 
 // 报价卡上的扣费账户和余额（需求文档 6.1），示例数字。
-const QUOTE_ACCOUNT = { name: "Ada Lovelace", email: "ada@example.com", balance_usd: 24.6 } as const;
+const QUOTE_ACCOUNT = { name: "Ada Lovelace", email: "ada@example.com", type: "personal", balance_usd: 24.6 } as const;
 
 // 报价卡样例：参数照一单 Seedance 2.5 文生视频填，价格是示例数字。
 const QUOTE_SAMPLE = {
@@ -247,6 +266,10 @@ const QUOTE_VARIANTS = {
   quote_input_missing: { estimated: 1.34, partial: false, expired: false, problem: "input_missing", balance: undefined, previous: undefined },
   // 确认时 Atlas 登录失效了（设计稿 v2「需要重新连接」）。
   quote_signed_out: { estimated: 1.34, partial: false, expired: false, problem: "signed_out", balance: undefined, previous: undefined },
+  // 点了确认之后的过渡状态（设计稿 submitting / submission_unknown）：提交中、核实有没有开始、核实不出来。
+  quote_submitting: { estimated: 1.34, partial: false, expired: false, problem: "submitting", balance: undefined, previous: undefined },
+  quote_checking: { estimated: 1.34, partial: false, expired: false, problem: "verifying", balance: undefined, previous: undefined },
+  quote_uncertain: { estimated: 1.34, partial: false, expired: false, problem: "uncertain", balance: undefined, previous: undefined },
 } as const;
 
 // 模板报价样例：Image ads 出 4 张，素材是上传卡传的耳机图。
@@ -399,7 +422,7 @@ function assetsSample(variant: string): AssetCardData {
 
 function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
   const sample = QUOTE_VARIANTS[variant];
-  const validMs = sample.expired ? -60_000 : 10 * 60_000;
+  const validMs = sample.expired ? -60_000 : 60 * 60_000;
   const template = variant === "quote_template";
   const missing = variant === "quote_input_missing";
   const base = template
@@ -435,7 +458,8 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       prompt: promptOf(base.params),
       inputs: inputsOf(base.params).map((input) => ({ ...input, kind: cardMediaKind(input.url), source })),
       settings: settingsChips(base.params),
-      valid_seconds: 600,
+      // 和真实报价一致：确认令牌 1 小时有效。
+      valid_seconds: 3600,
       ...(sample.problem ? { problem: sample.problem } : {}),
       ...(sample.balance !== undefined ? { sample_balance_usd: sample.balance } : {}),
       ...(sample.previous !== undefined ? { sample_previous_usd: sample.previous } : {}),
@@ -512,7 +536,14 @@ export function registerCardSelftestTool(server: McpServer): void {
         mediaExpired: variant === "expired",
       });
       return {
-        _meta: { [CARD_META_KEY]: { ...card, sample: true, ...(variant === "signed_out" ? { sample_signed_out: true } : {}) } },
+        _meta: {
+          [CARD_META_KEY]: {
+            ...card,
+            sample: true,
+            ...(variant === "signed_out" ? { sample_signed_out: true } : {}),
+            ...(variant === "running_stalled" ? { sample_stalled: true } : {}),
+          },
+        },
         structuredContent: { prediction_id: predictionId, status: sample.status, outputs: [...sample.outputs] },
         content: [
           {

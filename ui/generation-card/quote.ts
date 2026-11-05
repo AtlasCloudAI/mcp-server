@@ -212,6 +212,10 @@ export function initialQuoteState(card: CardData, now = Date.now()): QuoteState 
       return { phase: "input_missing", missing: quote.sample_missing ?? [] };
     case "signed_out":
       return { phase: "signed_out" };
+    case "submitting":
+    case "verifying":
+    case "uncertain":
+      return { phase: quote.problem };
   }
   return { phase: quoteExpired(quote) ? "expired" : "ready" };
 }
@@ -759,7 +763,7 @@ export function renderQuoteCard(
     return h(
       "section",
       { class: "card" },
-      head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+      head("Reconnect Atlas Cloud", badge("Sign in required", { danger: true })),
       subtitle,
       h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect to get the quote again."),
       quote ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.requoteFresh)) : null,
@@ -852,17 +856,30 @@ function estimateNote(quote: QuoteInfo | undefined, template = false): string {
   return quote?.settles_on_usage ? "Estimated · settles on actual use" : "Estimated";
 }
 
+const ACCOUNT_TYPE_LABEL: Record<string, string> = { personal: "Personal", team: "Team", organization: "Team" };
+
 /**
- * 底部一行「Billed to Ada Lovelace · ada@example.com      Balance $24.60」。
+ * 底部一行「Billed to Ada Lovelace · ada@example.com · Personal      Balance $24.60」。
+ * 账户类型要写出来：授权页和控制台都说费用从个人账户扣、和官网当前选的团队无关，确认扣费的地方也要看得到。
  * short：余额不够这一单时余额标红（余额不足卡）。没有账户、也没有余额就不画。
  */
 function billingLine(account: QuoteInfo["account"], balance: number | undefined, short = false): HTMLElement | null {
   if (!account && balance === undefined) return null;
+  const kind = account?.type ? ACCOUNT_TYPE_LABEL[account.type.toLowerCase()] ?? account.type : null;
   const label = account ? (account.email ? `${account.name} · ${account.email}` : account.name) : null;
   return h(
     "div",
     { class: "billing" },
-    label ? h("span", { class: "billing-to", title: label }, "Billed to ", h("strong", {}, label)) : h("span"),
+    // 账户类型单独一段、不参与截断：地方不够时只截邮箱，「Personal」总能看到。
+    label
+      ? h(
+          "span",
+          { class: "billing-to", title: kind ? `${label} · ${kind}` : label },
+          h("span", { class: "billing-prefix" }, "Billed to "),
+          h("strong", {}, label),
+          kind ? h("span", { class: "billing-kind" }, ` · ${kind}`) : null
+        )
+      : h("span"),
     balance !== undefined
       ? h("span", { class: "billing-balance" }, "Balance ", h("strong", { class: short ? "danger" : "" }, formatBalance(balance)))
       : null

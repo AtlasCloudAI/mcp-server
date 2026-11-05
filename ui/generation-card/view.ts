@@ -296,15 +296,21 @@ function progressCard(card: CardData, opts: ViewOptions, actions: CardActions): 
  * 这一条。「Reconnect」就是再查一次：ChatGPT 见到这次调用被 401 挡下会自己弹出连接（11-02 实测），
  * 连上之后卡片接着刷新。
  */
+/** 「Your video is」「Your task is」：不把「类型 · 模型名」标题拼进句子里。 */
+function signedOutSubject(card: CardData): string {
+  const kind = typeLabel(card).toLowerCase();
+  return isTemplate(card) || kind === "generation" ? "Your task is" : `Your ${kind} is`;
+}
+
 function signedOutCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
   return h(
     "section",
     { class: "card" },
-    head("Reconnect Atlas Cloud", badge("Signed out", { warn: true })),
+    head("Reconnect Atlas Cloud", badge("Sign in required", { danger: true })),
     h(
       "p",
       { class: "desc" },
-      `Your Atlas Cloud sign-in expired. ${progressTitle(card)} keeps running, and nothing was lost. Reconnect to keep checking it.`
+      `Your Atlas Cloud sign-in expired. ${signedOutSubject(card)} still running, and nothing was lost. Reconnect to check on it.`
     ),
     h("div", { class: "rows" }, row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })),
     opts.canRefresh ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.refresh, { disabled: opts.refreshing })) : null,
@@ -349,12 +355,13 @@ function failureRows(card: CardData): HTMLElement[] {
 
 /** 设计稿「模型暂时不可用」：重试或换模型。 */
 function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions, canRetry: boolean): HTMLElement {
-  const rows = failureRows(card);
+  // 上游原话（ServerOverloaded、router not found）用户看不懂，正文已经说清楚，不再单列原因行；原话留在悬停提示里。
+  const rows = card.prediction_id ? [row("Task", shortId(card.prediction_id), { mono: true, title: card.prediction_id })] : [];
   return h(
     "section",
     { class: "card" },
     head("Model unavailable", badge("Unavailable", { danger: true })),
-    h("p", { class: "desc" }, `${modelLabel(card)} is temporarily unavailable. ${chargeSentence(card)}`),
+    h("p", { class: "desc", title: card.error }, `${modelLabel(card)} is temporarily unavailable. ${chargeSentence(card)}`),
     rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
     canRetry
       ? h(
@@ -475,7 +482,13 @@ function videoCard(card: CardData, media: CardMedia, actions: CardActions, fail:
       void video.play().catch(() => undefined);
     },
   });
+  const frame = h("div", { class: "media" }, video, play);
   video.addEventListener("loadedmetadata", () => {
+    // 竖版视频不塞进横版框：框收窄到视频本身的宽度（高度上限见样式），两侧不留黑边。
+    if (video.videoWidth > 0 && video.videoHeight > video.videoWidth) {
+      frame.classList.add("portrait");
+      frame.style.setProperty("--media-ratio", String(video.videoWidth / video.videoHeight));
+    }
     if (!hasDuration(card) && Number.isFinite(video.duration) && video.duration > 0) {
       const next = caption(card, media, { extra: [`${Math.round(video.duration)} s`] });
       line.replaceWith(next);
@@ -483,7 +496,7 @@ function videoCard(card: CardData, media: CardMedia, actions: CardActions, fail:
     }
   });
   video.addEventListener("error", fail, { once: true });
-  return h("section", { class: "card" }, h("div", { class: "media" }, video, play), line, resultActions(media, actions));
+  return h("section", { class: "card" }, frame, line, resultActions(media, actions));
 }
 
 /** 装饰性波形：按链接算出固定的高低，不解码音频（跨域读不到数据，也没必要）。 */

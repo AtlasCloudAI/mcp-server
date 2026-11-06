@@ -15,6 +15,8 @@ const SEARCH_TOOL = "atlas_search_assets";
 const USE_TOOL = "atlas_use_assets";
 /** 卡片自己翻页时一页取几个：全屏 6 列，4 行。 */
 const PAGE_SIZE = 24;
+/** 缩略图过期换地址时最多往下翻几页（每页 50 个）。 */
+const REFRESH_PAGES = 6;
 /** 对话里（非全屏）最多显示两行：平时一行 4 个，窄屏一行 3 个（和 styles.css 的断点一致）。 */
 function inlineTiles(): number {
   return window.matchMedia?.("(max-width: 420px)").matches ? 6 : 8;
@@ -270,8 +272,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
 
   /**
    * 缩略图换新地址。缩略图是约 1 小时有效的签名地址，宿主重开旧对话时给卡片的还是当时的工具结果，
-   * 地址早过期了，每格只剩图标（11-06 ChatGPT 里重开 11-04 的对话）。按原来的条件再搜一次，
-   * 只换手上这些素材的地址，列表和选中的不动。每张卡只换一次，换完还坏就留图标，不来回重试。
+   * 地址早过期了，每格只剩图标（11-06 ChatGPT 里重开 11-04 的对话）。按原来的条件重新搜，一页页往下找，
+   * 直到手上这些素材都找到（搜的词没搜到时列的是「当时最近的」，过几天就排到后面去了），最多翻
+   * REFRESH_PAGES 页。只换地址，列表和选中的不动。每张卡只换一次，换完还坏就留图标，不来回重试。
    */
   let thumbs: "fresh" | "refreshing" | "refreshed" = "fresh";
   async function refreshThumbs(): Promise<void> {
@@ -279,16 +282,28 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     thumbs = "refreshing";
     changed();
     try {
-      const result = await deps.app.callServerTool({
-        name: SEARCH_TOOL,
-        arguments: {
-          limit: Math.min(50, Math.max(data.items.length, PAGE_SIZE)),
-          ...(filter ? { media_type: filter } : {}),
-          ...(data.query && !data.unmatched_query ? { query: data.query } : {}),
-        },
-      });
-      const page = result.isError ? undefined : assetsFromToolResult(result);
-      const fresh = new Map((page?.items ?? []).map((item) => [item.asset_id, item]));
+      const wanted = new Set(data.items.map((item) => item.asset_id));
+      const oldest = Math.min(...data.items.map((item) => Date.parse(item.created_at ?? "") || Infinity));
+      const fresh = new Map<string, AssetCardItem>();
+      let cursor: string | undefined;
+      for (let pageNo = 0; pageNo < REFRESH_PAGES; pageNo++) {
+        const result = await deps.app.callServerTool({
+          name: SEARCH_TOOL,
+          arguments: {
+            limit: 50,
+            ...(filter ? { media_type: filter } : {}),
+            ...(data.query && !data.unmatched_query ? { query: data.query } : {}),
+            ...(cursor ? { cursor } : {}),
+          },
+        });
+        const page = result.isError ? undefined : assetsFromToolResult(result);
+        if (!page) break;
+        for (const item of page.items) if (wanted.has(item.asset_id)) fresh.set(item.asset_id, item);
+        cursor = page.next_cursor;
+        // 都找到了、没有下一页、或这一页已经比手上最早的素材还早（按时间倒序），就不用再翻。
+        const pageOldest = Math.min(...page.items.map((item) => Date.parse(item.created_at ?? "") || Infinity));
+        if (fresh.size === wanted.size || !cursor || (Number.isFinite(oldest) && pageOldest < oldest)) break;
+      }
       const renew = (item: AssetCardItem): AssetCardItem => {
         const next = fresh.get(item.asset_id);
         if (!next) return item;

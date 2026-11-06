@@ -93,6 +93,7 @@ export type CredentialMode =
    */
   | "oauth-exchange";
 export type IdempotencyBackend = "memory" | "redis";
+export type AnalyticsEnvironment = "production" | "test" | "dev";
 
 export interface HttpServerConfig {
   nodeEnv: "development" | "test" | "production";
@@ -141,6 +142,12 @@ export interface HttpServerConfig {
   /** 上传中转端点的公网前缀，以 / 结尾；票据直接拼在后面。 */
   publicUploadBaseUrl: URL;
   redisUrl?: string;
+  /** 工具调用埋点（PostHog）。没配 POSTHOG_KEY 时为空，整套不启用。 */
+  analytics?: {
+    key: string;
+    host: string;
+    environment: AnalyticsEnvironment;
+  };
 }
 
 const envSchema = z.object({
@@ -221,6 +228,11 @@ const envSchema = z.object({
   MCP_LIBRARY_UPLOAD_QUOTA_BYTES: z.coerce.number().int().min(1_048_576).default(2_147_483_648),
   MCP_UPLOAD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(30),
   MCP_REDIS_URL: z.string().url().optional(),
+  // 工具调用埋点。项目令牌从 Secret 注入，代码里不写任何 key；不设就不发事件。
+  POSTHOG_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().default("https://us.i.posthog.com"),
+  // 事件里的 environment。不设则按部署推断，见 analyticsEnvironment。
+  MCP_ANALYTICS_ENVIRONMENT: z.enum(["production", "test", "dev"]).optional(),
 });
 
 function commaList(raw: string | undefined): string[] {
@@ -287,6 +299,23 @@ function isPlainHostname(host: string): boolean {
 function isDevelopmentOrStagingHostname(hostname: string): boolean {
   const labels = hostname.toLowerCase().split(".");
   return labels.some((label) => ["dev", "development", "stage", "staging", "test"].includes(label));
+}
+
+/**
+ * 埋点里的 environment，取值与 CLI 的 cli_command 一致，看板按 environment='production' 过滤。
+ *
+ * 生产发布档（PLUGIN_RELEASE_TIER=production）只能是生产：配置校验已经禁止它用带
+ * dev/test/staging 的主机名。test 环境的域名带 test 段（mcp.test.atlascloud.ai），
+ * 其余一律算 dev。推断不对的部署显式设 MCP_ANALYTICS_ENVIRONMENT。
+ */
+export function analyticsEnvironment(
+  releaseTier: ReleaseTier,
+  publicMcpUrl: URL,
+  explicit?: AnalyticsEnvironment
+): AnalyticsEnvironment {
+  if (explicit) return explicit;
+  if (releaseTier === "production") return "production";
+  return publicMcpUrl.hostname.toLowerCase().split(".").includes("test") ? "test" : "dev";
 }
 
 export function loadHttpServerConfig(
@@ -565,5 +594,16 @@ export function loadHttpServerConfig(
     // 安全头、CORS 全部复用；挂在子路径下部署时也跟着 MCP 的前缀走。
     publicUploadBaseUrl: new URL("upload/", publicMcpUrl),
     redisUrl: env.MCP_REDIS_URL,
+    analytics: env.POSTHOG_KEY?.trim()
+      ? {
+          key: env.POSTHOG_KEY.trim(),
+          host: env.POSTHOG_HOST.replace(/\/+$/, ""),
+          environment: analyticsEnvironment(
+            env.PLUGIN_RELEASE_TIER,
+            publicMcpUrl,
+            env.MCP_ANALYTICS_ENVIRONMENT
+          ),
+        }
+      : undefined,
   };
 }

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { publicApi } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
+import { recordToolCallError } from "../services/tool-call-telemetry.js";
 import { truncate } from "../utils/formatter.js";
 import type { BalanceResponse, UsageListResponse } from "../types.js";
 import { toolAnnotations } from "../tool-policy.js";
@@ -260,6 +261,7 @@ Examples:
       try {
         const rangeError = validateDateRange(args.start_date, args.end_date);
         if (rangeError) {
+          recordToolCallError({ code: "invalid_param" });
           return {
             isError: true,
             content: [{ type: "text", text: rangeError }],
@@ -330,6 +332,7 @@ Examples:
       try {
         const rangeError = validateDateRange(args.start_date, args.end_date);
         if (rangeError) {
+          recordToolCallError({ code: "invalid_param" });
           return {
             isError: true,
             content: [{ type: "text", text: rangeError }],

@@ -36,6 +36,12 @@ import {
   JwtAccessTokenVerifier,
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
+import {
+  createPostHogSink,
+  toolCallOf,
+  trackToolCalls,
+  type AnalyticsSink,
+} from "./http/tool-call-analytics.js";
 import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
 import { MEDIA_NAME_REDIS_PREFIX } from "./services/media-names.js";
 import {
@@ -71,6 +77,8 @@ export interface HttpAppDependencies {
   uploadTicketStore?: UploadTicketStore;
   quoteStore?: UploadTicketStore;
   mediaNameStore?: UploadTicketStore;
+  /** 工具调用埋点的发送器。省略即不发（没配 POSTHOG_KEY、测试）。 */
+  analytics?: AnalyticsSink;
 }
 
 /**
@@ -192,6 +200,8 @@ export function createHttpApp(
       verifier: dependencies.verifier,
       resourceMetadataUrl,
     }),
+    // 认证之后才知道是谁、哪个客户端；限流之前，被限流的调用也算一次调用。
+    trackToolCalls(config, dependencies.analytics),
     createSubjectRateLimiter(config),
     enforceToolScopes(config, resourceMetadataUrl),
     async (req, res) => {
@@ -230,7 +240,11 @@ export function createHttpApp(
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const transport = new OpenAIToolMetadataTransport(baseTransport);
+      const toolCall = toolCallOf(res);
+      const transport = new OpenAIToolMetadataTransport(
+        baseTransport,
+        toolCall ? (message) => toolCall.observeResponse(message) : undefined
+      );
       let closed = false;
       const close = (): void => {
         if (closed) return;
@@ -268,6 +282,7 @@ export function createHttpApp(
             quoteStore,
             mediaNameStore,
             knownCardClient,
+            toolCall,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -386,9 +401,11 @@ export async function startHttpServer(
       ? await createRedisUploadTicketStore(config.redisUrl!, MEDIA_NAME_REDIS_PREFIX)
       : new InMemoryUploadTicketStore();
   let credentialResolver: AtlasCredentialResolver | undefined;
+  let analytics: AnalyticsSink | undefined;
   let server: NodeHttpServer;
   try {
     credentialResolver = await createConfiguredCredentialResolver(config);
+    analytics = await createPostHogSink(config.analytics);
     const dependencies: HttpAppDependencies = {
       readiness,
       verifier: new JwtAccessTokenVerifier(config),
@@ -397,6 +414,7 @@ export async function startHttpServer(
       uploadTicketStore,
       quoteStore,
       mediaNameStore,
+      analytics,
     };
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
@@ -415,11 +433,15 @@ export async function startHttpServer(
       quoteStore.close(),
       mediaNameStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
+      analytics?.shutdown() ?? Promise.resolve(),
     ]);
     throw error;
   }
   console.error(
-    `Atlas Cloud MCP HTTPS backend listening on ${config.listenHost}:${config.port} for ${config.publicMcpUrl.toString()}`
+    `Atlas Cloud MCP HTTPS backend listening on ${config.listenHost}:${config.port} for ${config.publicMcpUrl.toString()}` +
+      (config.analytics
+        ? `; tool-call analytics on (environment=${config.analytics.environment})`
+        : "; tool-call analytics off (POSTHOG_KEY not set)")
   );
 
   const close = async (): Promise<void> => {
@@ -432,6 +454,8 @@ export async function startHttpServer(
     await quoteStore.close();
     await mediaNameStore.close();
     await credentialResolver?.close?.();
+    // 最后冲一次队列：滚动发布时 pod 退出前还没发出去的事件不丢。
+    await analytics?.shutdown().catch(() => undefined);
   };
   return { server, close };
 }

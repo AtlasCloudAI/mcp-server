@@ -46,6 +46,13 @@ import {
   type ChargeStatus,
 } from "../apps/generation-card.js";
 import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  sanitizeModel,
+  taskHash,
+} from "../services/tool-call-telemetry.js";
+import {
   completedAtOf,
   createdAtOf,
   hasUntransferredMedia,
@@ -53,6 +60,7 @@ import {
   isFinished,
   secondsSince,
   predictionOutputUrls,
+  predictionWaitSeconds,
   probeSizes,
   waitForPrediction,
 } from "../services/prediction-wait.js";
@@ -192,8 +200,10 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         top_p,
       }) => {
         try {
+          annotateToolCall({ stage: "prepare" });
           const found = await findModelByExactId(model);
           if (!found || found.type !== "Text") {
+            recordToolCallError({ code: found ? "invalid_param" : "model_not_found" });
             return {
               isError: true,
               content: [{
@@ -205,6 +215,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
 
+          annotateToolCall({ model: found.model });
           const body: Record<string, unknown> = {
             model: found.model,
             messages,
@@ -385,6 +396,13 @@ Examples:
       ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ prediction_id }) => {
+      // 与 CLI 的 get / wait 对应：服务端会不会替调用方等一会儿，看部署配置。
+      const waits = predictionWaitSeconds() > 0;
+      annotateToolCall({
+        execution_mode: waits ? "wait" : "get",
+        stage: waits ? "wait" : "fetch",
+        task_hash: taskHash(prediction_id),
+      });
       try {
         const fetchOnce = (budget: { timeoutMs: number; maxRetries: number }) =>
           generationApi<PredictionResponse>(
@@ -399,6 +417,12 @@ Examples:
           );
         const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
         const status = result.data?.status || "unknown";
+        annotateToolCall({
+          model: sanitizeModel((result.data as Record<string, unknown> | undefined)?.model),
+          generation_status: normalizeGenerationStatus(result.data?.status),
+          // 等满预算还在跑就是 timed_out：服务端任务没停，调用方该接着查。
+          ...(waits ? { wait_outcome: isActive(status) ? "timed_out" : "completed" } : {}),
+        });
 
         const lines = [`# Prediction Result\n`];
         lines.push(`- **ID**: \`${prediction_id}\``);
@@ -519,6 +543,7 @@ Examples:
           ],
         };
       } catch (error) {
+        if (waits) annotateToolCall({ wait_outcome: "error" });
         return {
           isError: true,
           content: [{ type: "text", text: handleError(error) }],

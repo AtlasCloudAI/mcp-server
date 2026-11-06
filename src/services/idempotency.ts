@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createClient, type RedisClientType } from "redis";
 import { ApiRequestError } from "./api-client.js";
 import { getRequestContext } from "./request-context.js";
+import { annotateToolCall } from "./tool-call-telemetry.js";
 
 export type StoredRecord<T> =
   | { fingerprint: string; state: "pending"; createdAt: number }
@@ -268,6 +269,9 @@ export async function executeIdempotently<T>(
 ): Promise<T> {
   const context = getRequestContext();
   const ttlSeconds = context?.idempotencyTtlSeconds ?? 86400;
+  // 走到这里的都是计费提交（生成、对话；上传只在 stdio 下有）。重放已完成的结果也记
+  // submit：对调用方来说这就是那次提交的答复。
+  annotateToolCall({ execution_mode: "submit", stage: "submit" });
   return currentStore().execute(
     namespacedKey(toolName, idempotencyKey),
     idempotencyFingerprint(args),

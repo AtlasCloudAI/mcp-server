@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { IdempotencyStore } from "./idempotency.js";
+import type { ToolCallTelemetry } from "./tool-call-telemetry.js";
 import type { UploadTicketStore } from "./upload-ticket-store.js";
 
 export interface AtlasRequestContext {
@@ -30,6 +31,8 @@ export interface AtlasRequestContext {
   mediaNameStore?: UploadTicketStore;
   /** 这个 OAuth 客户端调过卡片专用工具，也就是会显示卡片（card-clients.ts）。 */
   knownCardClient?: boolean;
+  /** 本次工具调用的统计对象。只有开了埋点、且这是一次 tools/call 时才有。 */
+  toolCall?: ToolCallTelemetry;
 }
 
 /** 上传存进资产库（资产库二期）的限制，默认值跟 AssetD 一致。 */

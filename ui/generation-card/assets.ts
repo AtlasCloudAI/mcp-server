@@ -8,6 +8,7 @@ import { handOff } from "./handoff.js";
 import { prefillNote, say, userLang } from "./voice.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { thrownErrorText } from "./quote.js";
+import { type UploadItem, type UploadKind, type Uploader, ICON_SPINNER, ICON_UPLOAD, createUploader } from "./upload.js";
 import { badge, button, h, head } from "./view.js";
 
 export const ASSETS_META_KEY = "atlascloud/assets";
@@ -269,6 +270,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     deps.render();
   };
   const selectionKey = () => [...selected.keys()].join(",");
+  /** 「Added to chat」之后：格子（含上传格）都不能再点。 */
+  const handedOffNow = () => handedOff !== "" && handedOff === selectionKey();
 
   /**
    * 缩略图换新地址。缩略图是约 1 小时有效的签名地址，宿主重开旧对话时给卡片的还是当时的工具结果，
@@ -323,6 +326,107 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   }
   if (!sample && data.items.some((item) => signedUrlExpired(item.thumb_url ?? item.preview_url))) {
     setTimeout(() => void refreshThumbs(), 0);
+  }
+
+  // ---- 上传格 ----
+  // 找不到想要的图，最自然的是传一张新的：网格第一格是上传格（设计稿 11-06）。点它打开本地文件选择，
+  // 不做拖拽（拖进卡片会被 ChatGPT 接成附件）；传进资产库后排在第一个并自动选中，仍受最多 10 个的限制。
+  // 传文件的那套（取地址、传、进度）用上传卡的 Uploader，只是不画它的卡。
+
+  /** 筛选到哪一类就只收哪一类。3D 传不了（上传只收图片、视频、音频），不放上传格。 */
+  const UPLOAD_KIND: Partial<Record<AssetFilter, UploadKind>> = { image: "image", video: "video", audio: "audio" };
+  let uploader: Uploader | undefined;
+  /** 从没有地址开始：选完文件再去换地址。上限先按资产库的写（和服务端默认一致），换到地址后以服务端给的为准。 */
+  const LIBRARY_UPLOAD = {
+    view: "upload" as const,
+    upload_url: "",
+    expires_at: new Date(0).toISOString(),
+    max_bytes: 50 * 1_048_576,
+    max_video_bytes: 100 * 1_048_576,
+    max_image_pixels: 24_000_000,
+    library: true,
+    lazy_url: true,
+  };
+
+  function canUpload(): boolean {
+    return (filter === undefined || filter in UPLOAD_KIND) && (sample || caps().serverTools !== undefined);
+  }
+
+  /** 正在传的（排队、传、转存）。 */
+  function uploading(): UploadItem[] {
+    return (uploader?.items ?? []).filter((i) => i.status === "queued" || i.status === "uploading" || i.status === "saving");
+  }
+
+  function startUpload(): void {
+    if (using || handedOffNow() || uploading().length > 0) return;
+    uploader ??= createUploader(
+      { ...LIBRARY_UPLOAD, max_files: data.max_pick, ...(sample ? { sample: true } : {}) },
+      { app: deps.app, render: settleUploads, notice: deps.notice, noticeText: deps.noticeText, onProgress: showProgress }
+    );
+    uploader.pickOnly(filter ? UPLOAD_KIND[filter] : undefined);
+  }
+
+  function progressText(): string {
+    const active = uploading();
+    if (active.length === 0) return "";
+    if (active.every((i) => i.status === "saving")) return "Saving…";
+    const percent = Math.round((active.reduce((sum, i) => sum + i.progress, 0) / active.length) * 100);
+    return active.length > 1 ? `${active.length} files · ${percent}%` : `${percent}%`;
+  }
+
+  /** 进度只改上传格上的字，不重画整张卡（缩略图会闪）。 */
+  function showProgress(): void {
+    const el = document.querySelector<HTMLElement>("[data-upload-progress]");
+    if (el) el.textContent = progressText();
+    else changed();
+  }
+
+  /** 传完的进网格第一个并选中；传不了的说明原因。上传器每次状态变化都来这里清点一遍。 */
+  function settleUploads(): void {
+    if (!uploader) return;
+    const gone: string[] = [];
+    const problems: string[] = [];
+    const unsaved: string[] = [];
+    let crowded = false;
+    for (const item of uploader.items) {
+      if (item.status === "done") {
+        gone.push(item.id);
+        if (!item.asset_id) {
+          unsaved.push(item.name);
+          continue;
+        }
+        const asset: AssetCardItem = {
+          asset_id: item.asset_id,
+          label: item.name,
+          kind: item.kind,
+          origin: "upload",
+          ...(item.thumb ? { thumb_url: item.thumb } : {}),
+          created_at: new Date().toISOString(),
+        };
+        data = { ...data, items: [asset, ...data.items.filter((i) => i.asset_id !== asset.asset_id)] };
+        if (selected.size < data.max_pick) selected.set(asset.asset_id, asset);
+        else crowded = true;
+      } else if (item.status === "invalid" || item.status === "failed") {
+        gone.push(item.id);
+        problems.push(`${item.name}: ${item.error ?? "Upload failed"}`);
+      }
+    }
+    if (uploader.stalled && uploader.signedOut) {
+      // 文件留着，重新连上后接着传。
+      reconnect = () => {
+        reconnect = undefined;
+        uploader?.resume();
+        changed();
+      };
+    } else if (uploader.stalled) {
+      for (const item of uploading()) gone.push(item.id);
+      problems.push(`Couldn't get an upload link${uploader.error ? `: ${uploader.error}` : ""}. Try again in a moment.`);
+    }
+    if (gone.length > 0) uploader.release(gone);
+    if (unsaved.length > 0) problems.push("Your upload space is full, so the file wasn't saved to your Asset Library.");
+    if (crowded) problems.push(`Saved to your Asset Library. Pick up to ${data.max_pick} files at a time, so it isn't selected.`);
+    if (problems.length > 0) deps.notice(problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more)` : (problems[0] ?? ""));
+    changed();
   }
 
   /** text：全屏搜索框里搜的词（空串等于不搜）；不给就沿用手上的。 */
@@ -384,6 +488,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   }
 
   function toggle(item: AssetCardItem): void {
+    if (handedOffNow()) return;
     if (selected.has(item.asset_id)) {
       selected.delete(item.asset_id);
     } else {
@@ -490,7 +595,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     return box;
   }
 
-  function tile(item: AssetCardItem): HTMLElement {
+  function tile(item: AssetCardItem, frozen: boolean): HTMLElement {
     const on = selected.has(item.asset_id);
     return h(
       "li",
@@ -503,11 +608,38 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
           "aria-pressed": String(on),
           "aria-label": item.label,
           title: item.label,
+          disabled: frozen,
           onclick: () => toggle(item),
         },
         media(item),
         item.kind === "video" ? h("span", { class: "asset-play", html: ICONS.video }) : null,
         on ? h("span", { class: "asset-check", html: ICON_CHECK }) : null
+      )
+    );
+  }
+
+  /** 网格第一格：和缩略图同尺寸，浅灰底，上传图标加「Upload a file」；传的时候显示进度。 */
+  function uploadTile(frozen: boolean): HTMLElement {
+    const busy = uploading().length > 0;
+    return h(
+      "li",
+      {},
+      h(
+        "button",
+        {
+          type: "button",
+          class: "asset-tile asset-upload",
+          "aria-label": busy ? "Uploading" : "Upload a file",
+          disabled: frozen || busy,
+          onclick: startUpload,
+        },
+        h(
+          "span",
+          { class: "asset-upload-body" },
+          h("span", { class: "asset-upload-icon", html: busy ? ICON_SPINNER : ICON_UPLOAD }),
+          h("span", { class: "asset-upload-label" }, busy ? "Uploading" : "Upload a file"),
+          busy ? h("span", { class: "asset-upload-sub", "data-upload-progress": "" }, progressText()) : null
+        )
       )
     );
   }
@@ -551,7 +683,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     if (data.query) {
       return emptyState(ICONS.image, `No matches for “${data.query}”`, "Try different words, or upload a new file.", [upload("primary"), showAll()]);
     }
-    if (filter) return emptyState(ICONS[filter], `No ${FILTER_WORD[filter]} yet`, "Files you upload or generate will appear here.", [showAll(), upload("secondary")]);
+    if (filter) return emptyState(ICONS[filter], `No ${FILTER_WORD[filter]} yet`, "Files you upload or generate will appear here.", [upload("primary"), showAll()]);
     return emptyState(ICONS.image, "Your Asset Library is empty", "Files you upload or generate will appear here.", [upload("primary")]);
   }
 
@@ -587,9 +719,20 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     );
   }
 
+  /** 全屏：搜索框右边一个次按钮「Upload a file」，和网格里的上传格走同一条路。 */
+  function searchRow(): HTMLElement {
+    const busy = uploading().length > 0;
+    return h(
+      "div",
+      { class: "asset-search-row" },
+      searchBox(),
+      canUpload() ? button(busy ? "Uploading…" : "Upload a file", "secondary", startUpload, { small: true, disabled: busy || handedOffNow() }) : null
+    );
+  }
+
   function footer(opts: LibraryViewOptions, shown: number): HTMLElement | null {
     const n = selected.size;
-    const handed = handedOff !== "" && handedOff === selectionKey();
+    const handed = handedOffNow();
     const more = data.items.length - shown;
     const left = h("span", { class: "asset-count" }, n > 0 ? `${n} selected` : `Pick up to ${data.max_pick}`);
     const buttons: (HTMLElement | null)[] = [];
@@ -606,7 +749,10 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   function view(opts: LibraryViewOptions): HTMLElement {
     // 选择变了（或换了一页）就不再是交给模型的那一组。
     if (handedOff !== "" && handedOff !== selectionKey()) handedOff = "";
-    const shown = opts.fullscreen || !opts.canExpand ? data.items : data.items.slice(0, inlineTiles());
+    const frozen = handedOffNow();
+    // 上传格占网格的第一格：对话里还是两行，资产少露一个。
+    const withUpload = canUpload() && data.items.length > 0;
+    const shown = opts.fullscreen || !opts.canExpand ? data.items : data.items.slice(0, inlineTiles() - (withUpload ? 1 : 0));
     const notice = deps.noticeText();
     const title = h("div", { class: "head" }, h("p", { class: opts.fullscreen ? "title-lg" : "title" }, "Asset Library"));
     if (locked) {
@@ -626,7 +772,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     }
     const body =
       data.items.length > 0
-        ? h("ul", { class: "asset-grid" }, ...shown.map(tile))
+        ? h("ul", { class: "asset-grid" }, withUpload ? uploadTile(frozen) : null, ...shown.map((item) => tile(item, frozen)))
         : loading
           ? h("p", { class: "desc" }, "Loading your assets…")
           : error
@@ -636,7 +782,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       "section",
       { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
       title,
-      opts.fullscreen ? searchBox() : null,
+      opts.fullscreen ? searchRow() : null,
       data.unmatched_query && data.items.length > 0
         ? h("p", { class: "desc asset-query" }, `Nothing matched “${data.unmatched_query}”, so these are your latest files.`)
         : data.query && !opts.fullscreen

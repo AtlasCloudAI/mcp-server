@@ -48,6 +48,11 @@ export interface UploadCardData {
   sample_signed_out?: boolean;
   /** 测试卡片：资产库上传空间已满（设计稿 06 页 11/02「上传空间已满」）。 */
   sample_library_full?: { quota_bytes: number };
+  /**
+   * 手上还没有上传地址：选完文件再去换（资产库卡里的上传格——选文件框要在点击当下打开，
+   * 来不及先调一次工具）。文件先按资产库的上限查，换到地址后上限以服务端给的为准。
+   */
+  lazy_url?: boolean;
 }
 
 export interface UploadItem {
@@ -240,15 +245,31 @@ export interface UploaderDeps {
   noticeText(): string | undefined;
   /** 打开资产库选择（设计稿：上传卡里「Choose from Asset Library」，全屏选）。宿主不让卡片调工具时没有它。 */
   openLibrary?(): void;
+  /** 只给了它时，上传进度只通知这里，不重画整张卡（资产库卡的上传格自己改那一格的字）。 */
+  onProgress?(item: UploadItem): void;
 }
 
 export interface Uploader {
   readonly data: UploadCardData;
   /** 每次状态变化加一，main.ts 据此判断要不要重画。 */
   readonly version: number;
+  /** 手上的文件，按选的顺序。 */
+  readonly items: readonly UploadItem[];
+  /** 自动换地址没换成，停下来等用户处理（掉线或换不到）。 */
+  readonly stalled: boolean;
+  /** 停下来时是 Atlas 登录失效了。 */
+  readonly signedOut: boolean;
+  /** 最近一次换地址失败的原因。 */
+  readonly error: string | undefined;
   view(): HTMLElement;
   /** 打开文件选择框。 */
   pick(): void;
+  /** 打开文件选择框，只收这一类（选择框按它过滤，选进来别的类型的文件标成不能传）。 */
+  pickOnly(kind: UploadKind | undefined): void;
+  /** 不要这几个文件了（停掉在传的），换地址的重试次数也清零。不通知重画，调用的人自己处理。 */
+  release(ids: string[]): void;
+  /** 停下来之后再换一次地址、接着传（掉线后的「Reconnect」）。 */
+  resume(): void;
   /** 资产库里选好的素材：作为已经传好的文件放进列表。 */
   addPicked(picked: PickedAsset[]): void;
   /** 把传好的文件交给模型（「Use files」）。 */
@@ -274,6 +295,8 @@ const PROACTIVE_RENEW_GAP_MS = 60_000;
 // 紧接着手动点「Upload again」就成功了，原因没抓到，先按偶发处理。
 const RENEW_RETRY_DELAY_MS = 1_500;
 const THUMB_PX = 96;
+const ACCEPT_ALL = "image/*,video/*,audio/*";
+const ONLY_WORD: Record<UploadKind, string> = { image: "images", video: "videos", audio: "audio", other: "files" };
 
 let nextId = 0;
 
@@ -310,8 +333,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }));
   // linkExpired：手上的地址不能用了，要换；gaveUp：自动换了几次都没换到，显示「过期」等用户点。
   // 分开是为了自动重试那一两秒里卡片照常显示上传中，不闪一下「过期」。
-  let linkExpired = initial.sample_expired === true || initial.sample_signed_out === true;
-  let gaveUp = linkExpired;
+  const forcedExpired = initial.sample_expired === true || initial.sample_signed_out === true;
+  let linkExpired = forcedExpired || initial.lazy_url === true;
+  let gaveUp = forcedExpired;
   /**
    * 换地址时 Atlas 登录失效了（设计稿 v2「需要重新连接」）。中转回 401 时卡片去换地址，换地址的
    * 工具也被拒，就是用户掉线了；「Reconnect」再换一次，ChatGPT 会自己弹出连接（11-02 实测）。
@@ -348,20 +372,34 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
-  input.accept = "image/*,video/*,audio/*";
+  input.accept = ACCEPT_ALL;
   input.hidden = true;
   input.addEventListener("change", () => {
     addFiles([...(input.files ?? [])]);
     input.value = "";
   });
   document.body.append(input);
+  /** 只收这一类（资产库卡筛选到图片时，上传格只收图片）。 */
+  let only: UploadKind | undefined;
 
-  function pick(): void {
+  function openPicker(): void {
     if (sample) {
       deps.notice("This is a sample card, so nothing is uploaded.");
       return;
     }
     input.click();
+  }
+
+  function pick(): void {
+    only = undefined;
+    input.accept = ACCEPT_ALL;
+    openPicker();
+  }
+
+  function pickOnly(kind: UploadKind | undefined): void {
+    only = kind;
+    input.accept = kind && kind !== "other" ? `${kind}/*` : ACCEPT_ALL;
+    openPicker();
   }
 
   function addFiles(files: File[]): void {
@@ -375,7 +413,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     overflow = files.length > room ? { picked: files.length, added: room } : undefined;
     for (const file of files.slice(0, room)) {
       const kind = fileKind(file.name, file.type);
-      const error = validateFile(file, limitFor(kind, data));
+      const error = only && kind !== only ? `This view only takes ${ONLY_WORD[only]}` : validateFile(file, limitFor(kind, data));
       const item: UploadItem = {
         id: `f${nextId++}`,
         name: file.name,
@@ -496,6 +534,12 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       const next = items.find((i) => i.status === "queued" && !i.checking);
       if (!next) return;
       if (linkExpired) {
+        // 别的文件已经在换地址了：等它的结果，不算成又换了一次。选 3 个以上文件时每个文件各调一次 pump，
+        // 不这样的话还没等到新地址就当成连着换了两次都不成，停下来了。
+        if (renewing) {
+          if (!(await renewing)) return;
+          continue;
+        }
         // 中转说地址过期了（或卡片按时钟判断）：换新地址；连着换了几次都不成就停下，等用户点「Upload again」。
         if (renewals >= MAX_AUTO_RENEWALS) {
           gaveUp = true;
@@ -602,6 +646,20 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     items = items.filter((i) => i !== item);
     changed();
     void pump();
+  }
+
+  function release(ids: string[]): void {
+    for (const id of ids) {
+      inflight.get(id)?.abort();
+      inflight.delete(id);
+    }
+    items = items.filter((i) => !ids.includes(i.id));
+    // 没有文件了：上次没换成地址的账一笔勾销，下次选文件从头来。
+    if (items.length === 0 && !forcedExpired) {
+      renewals = 0;
+      gaveUp = false;
+      renewError = undefined;
+    }
   }
 
   function cancel(): void {
@@ -748,6 +806,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
 
   /** 进度只改那一行的字，不重画整张卡（缩略图会闪）。 */
   function updateSub(item: UploadItem): void {
+    if (deps.onProgress) {
+      deps.onProgress(item);
+      return;
+    }
     const el = document.querySelector<HTMLElement>(`[data-upload-sub="${item.id}"]`);
     if (el) el.textContent = subText(item);
     else changed();
@@ -951,18 +1013,33 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     get version() {
       return version;
     },
+    get items() {
+      return items;
+    },
+    get stalled() {
+      return gaveUp;
+    },
+    get signedOut() {
+      return signedOut;
+    },
+    get error() {
+      return renewError;
+    },
     view,
     pick,
+    pickOnly,
+    release,
+    resume: uploadAgain,
     addPicked,
     useFiles,
   };
 }
 
-const ICON_SPINNER = '<svg class="spin" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/></svg>';
+export const ICON_SPINNER = '<svg class="spin" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/></svg>';
 const ICON_WAITING = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="m5 8.2 2 2 4-4.2" fill="none" style="stroke:var(--ac-card-bg,#fff)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_REMOVE = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="m5.8 5.8 4.4 4.4m0-4.4-4.4 4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
-const ICON_UPLOAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5V4.5m0 0-4 4m4-4 4 4M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+export const ICON_UPLOAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5V4.5m0 0-4 4m4-4 4 4M5 14.5v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICONS: Record<UploadKind, string> = {
   image: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h14c.8 0 1.5.7 1.5 1.5v14c0 .8-.7 1.5-1.5 1.5H5c-.8 0-1.5-.7-1.5-1.5V5c0-.8.7-1.5 1.5-1.5zm0 1.5v10.4l4.2-4.2c.4-.4 1-.4 1.4 0l2.3 2.3 1.8-1.8c.4-.4 1-.4 1.4 0L19 14.6V5H5zm9.5 1.5a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="currentColor"/></svg>',
   video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',

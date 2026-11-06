@@ -965,6 +965,53 @@ button.history-row:focus-visible {
   outline-offset: 2px;
 }
 
+.asset-tile:disabled {
+  cursor: default;
+}
+
+/* 网格第一格「Upload a file」：和缩略图同尺寸，浅灰底，不画虚线（不做拖拽） */
+.asset-upload {
+  color: var(--ac-text-2);
+  font: inherit;
+}
+
+.asset-upload:hover:not(:disabled) {
+  background: var(--ac-badge-bg);
+}
+
+.asset-upload-body {
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.asset-upload-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  color: var(--ac-text-2);
+}
+
+.asset-upload-label {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--ac-text);
+}
+
+.asset-upload-sub {
+  margin-top: -4px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ac-text-3);
+}
+
 .asset-tile.selected {
   box-shadow: 0 0 0 2px var(--ac-card-bg), 0 0 0 4px var(--ac-text);
 }
@@ -1366,6 +1413,24 @@ button.history-row:focus-visible {
   height: 14px;
   color: var(--ac-text-3);
   display: block;
+}
+
+/* 全屏：搜索框和右边的「Upload a file」一行 */
+.asset-search-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-search-row .asset-search {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.asset-search-row .btn {
+  flex: none;
 }
 
 .asset-search-input {

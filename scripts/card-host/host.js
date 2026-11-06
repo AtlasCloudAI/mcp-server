@@ -118,7 +118,8 @@ const ASSET_MOCKS = {
 };
 
 function mockAssetsCaller(empty, signedOut = false) {
-  const upload = mockUploadCaller("ok");
+  // 存进资产库的上传（带资产编号）：资产库卡里的上传格传完要选中新素材，得有编号。
+  const upload = mockUploadCaller("library");
   let calls = 0;
   return async (name, args) => {
     // 第一次是宿主把卡片打开那次调用；卡片自己的第一次调用被挡下。

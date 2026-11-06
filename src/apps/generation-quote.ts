@@ -226,6 +226,19 @@ const QUOTE_CARD_NOTE =
   "check atlas_list_predictions first: it also lists confirms that did not start, and why. A confirm " +
   "the card could not start (for example, not enough balance) charged nothing.";
 
+// 报价正文和 withQuoteDetails 都叫模型「把模型、费用、参数展示给用户」，那是给没有卡片的客户端写的。
+// 卡片已经画出来时还这么说，ChatGPT 会在卡片下面再列一张参数表、写「等待确认」，用户在卡上确认后
+// 那张表还停在旧状态（11-06 showcase 实测）。这时改成指向卡片的一句话。
+const SHOW_QUOTE_ASK = /Show the user[^.]*?estimated cost above,? (?:then|and) stop\./;
+const SHOW_QUOTE_ON_CARD =
+  "The Atlas card in this reply already shows the model, the estimated cost and a confirm button: point the user to it in one short sentence, then stop.";
+const INCLUDE_SETTINGS_ASK = /\nInclude these settings[^.]*when showing the quote\./;
+
+function withoutShowQuoteAsk(block: CallToolResult["content"][number]): CallToolResult["content"][number] {
+  if (block.type !== "text") return block;
+  return { ...block, text: block.text.replace(SHOW_QUOTE_ASK, SHOW_QUOTE_ON_CARD).replace(INCLUDE_SETTINGS_ASK, "") };
+}
+
 /**
  * 报价结果补上「主要参数」和扣费账户（需求文档 6.1）。不管卡片开没开都补：Codex、
  * Claude Code 这类只看文字的客户端也要能告诉用户从哪个账户扣。查不到账户就只补参数。
@@ -299,14 +312,13 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
         };
       });
     }
-    const note =
-      card.state === "quote" && clientRendersCards(server)
-        ? [{ type: "text" as const, text: QUOTE_CARD_NOTE }]
-        : [];
+    const onCard = card.state === "quote" && clientRendersCards(server);
     return {
       ...result,
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
-      content: [...result.content, ...note],
+      content: onCard
+        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: QUOTE_CARD_NOTE }]
+        : result.content,
     };
   };
 }

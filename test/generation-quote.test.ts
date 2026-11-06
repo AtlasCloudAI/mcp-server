@@ -180,6 +180,20 @@ test("包装层：卡片关着原样返回；打开时挂卡片，客户端能�
     // ChatGPT 会自己再画一张报价卡（带它自己的确认按钮），说明里要讲清楚别画（11-06 showcase 实测）。
     assert.match((rich.content[1] as { text: string }).text, /confirm button\s+outside the Atlas card does not reach Atlas/);
 
+    // 卡片画出来时，正文里「把模型和费用展示给用户」换成指向卡片的一句话，「带上参数」那句去掉。
+    const asked = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
+      ...QUOTE_RESULT,
+      content: [
+        { type: "text" as const, text: "Confirmation required.\n\nShow the user this model and the estimated cost above, then stop. Do not call this tool again." },
+        { type: "text" as const, text: "- **Settings**: 720p\nInclude these settings and the billing account the charge goes to when showing the quote." },
+      ],
+    }))(VIDEO_ARGS, {});
+    const askedText = asked.content.map((block) => (block as { text: string }).text).join("\n");
+    assert.doesNotMatch(askedText, /Show the user this model/);
+    assert.doesNotMatch(askedText, /Include these settings/);
+    assert.match(askedText, /point the user to it in one short sentence, then stop\. Do not call this tool again\./);
+    assert.match(askedText, /- \*\*Settings\*\*: 720p/);
+
     const failed = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
       isError: true,
       content: [{ type: "text" as const, text: "Error" }],

@@ -8,6 +8,7 @@ import {
 } from "../services/idempotency.js";
 import {
   errorCodeForHttpStatus,
+  errorCodeForMessage,
   recordToolCallError,
   type ToolCallError,
 } from "../services/tool-call-telemetry.js";
@@ -37,6 +38,9 @@ export function classifyToolError(error: unknown): ToolCallError {
   if (error instanceof IdempotencyUncertainError) return { code: "submission_unknown" };
   if (error instanceof ApiRequestError) {
     const status = error.statusCode;
+    // 上游厂商那一侧的失败按文案先分（CLI 同序，先于下面按余额和状态码的兜底）。
+    const byMessage = errorCodeForMessage(error.message);
+    if (byMessage) return { code: byMessage, ...(status ? { httpStatus: status } : {}) };
     if (status === 402 || mentionsBalance(error.message)) {
       return { code: "quota_exceeded", ...(status ? { httpStatus: status } : {}) };
     }
@@ -48,7 +52,8 @@ export function classifyToolError(error: unknown): ToolCallError {
   }
   if (error instanceof Error) {
     if (error.name === "AbortError" || error.name === "TimeoutError") {
-      return { code: "network_error", cause: "deadline_exceeded" };
+      // CLI 11-05 起所有超时的原因都写 timeout。
+      return { code: "network_error", cause: "timeout" };
     }
     if (error instanceof TypeError && error.message.includes("fetch failed")) {
       return { code: "network_error" };

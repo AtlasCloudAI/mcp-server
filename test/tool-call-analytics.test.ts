@@ -65,6 +65,7 @@ test("a successful call carries the CLI fields and no error fields", () => {
     command: "atlas_generate_image",
     duration_ms: 234,
     is_error: false,
+    exit_class: "ok",
     model: "bytedance/seedream-v4",
     execution_mode: "submit",
     stage: "submit",
@@ -237,8 +238,87 @@ test("tool exceptions map to the CLI error codes", () => {
   });
   const aborted = new Error("aborted");
   aborted.name = "AbortError";
-  assert.deepEqual(classifyToolError(aborted), { code: "network_error", cause: "deadline_exceeded" });
+  assert.deepEqual(classifyToolError(aborted), { code: "network_error", cause: "timeout" });
   assert.deepEqual(classifyToolError(new Error("weird")), { code: "upstream_failure" });
+});
+
+// ---- 和 CLI 11-05 之后的约定对齐（AtlasCloudTeam/cli #105） ----
+
+test("upstream provider failures are told apart by message, in the CLI order", () => {
+  const code = (message: string, status = 502) => classifyToolError(new ApiRequestError(message, status)).code;
+  assert.equal(code("router not found for model x"), "router_not_found");
+  assert.equal(code("Provider account has insufficient balance"), "provider_insufficient_balance");
+  assert.equal(code("no available compatible accounts"), "provider_no_compatible_account");
+  assert.equal(code("ServerOverloaded: try later"), "model_overloaded");
+  assert.equal(code("provider access was denied", 403), "provider_access_denied");
+  // 平台自己的余额不足（402）仍是 quota_exceeded，不算厂商那边的
+  assert.equal(code("Insufficient balance", 402), "quota_exceeded");
+  // 认不出的照旧按状态码
+  assert.equal(code("bad gateway", 502), "upstream_failure");
+});
+
+test("exit_class buckets follow the CLI exit classes", () => {
+  const props = (build: (call: ToolCallTelemetry) => void, status = 200, options = {}) => {
+    const call = new ToolCallTelemetry("atlas_get_prediction", 0);
+    build(call);
+    return call.properties({}, status, { now: 10, ...options });
+  };
+  const error = { jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "x" }] } };
+  assert.equal(props((c) => c.observeResponse({ jsonrpc: "2.0", id: 1, result: { content: [] } })).exit_class, "ok");
+  assert.equal(
+    props((c) => {
+      c.annotate({ generation_status: "failed" });
+      c.observeResponse({ jsonrpc: "2.0", id: 1, result: { content: [] } });
+    }).exit_class,
+    "generation_failed"
+  );
+  assert.equal(
+    props((c) => {
+      c.recordError({ code: "invalid_param" });
+      c.observeResponse(error);
+    }).exit_class,
+    "user"
+  );
+  assert.equal(
+    props((c) => {
+      c.recordError({ code: "upstream_failure", httpStatus: 502 });
+      c.observeResponse(error);
+    }).exit_class,
+    "network_5xx"
+  );
+  assert.equal(
+    props((c) => {
+      c.recordError({ code: "resource_not_found", httpStatus: 404 });
+      c.observeResponse(error);
+    }).exit_class,
+    "api_4xx"
+  );
+  assert.equal(props(() => {}, 200, { disconnected: true }).exit_class, "interrupted");
+  assert.equal(
+    props((c) => {
+      c.annotate({ execution_mode: "wait", wait_outcome: "timed_out" });
+      c.recordError({ code: "upstream_failure" });
+      c.observeResponse(error);
+    }).exit_class,
+    "wait_timeout"
+  );
+});
+
+test("a 400 on a status query is not blamed on the task's parameters", () => {
+  const call = new ToolCallTelemetry("atlas_get_prediction", 0);
+  call.annotate({ execution_mode: "get" });
+  call.recordError({ code: "invalid_param", httpStatus: 400 });
+  call.observeResponse({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "x" }] } });
+  const props = call.properties({}, 200, { now: 1 });
+  assert.equal(props.error_code, "prediction_status_rejected");
+  assert.equal(props.error_category, "wait");
+  assert.equal(props.retryable, false);
+  // 提交时的 400 仍是参数问题
+  const submit = new ToolCallTelemetry("atlas_generate_image", 0);
+  submit.annotate({ execution_mode: "submit" });
+  submit.recordError({ code: "invalid_param", httpStatus: 400 });
+  submit.observeResponse({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "x" }] } });
+  assert.equal(submit.properties({}, 200, { now: 1 }).error_code, "invalid_param");
 });
 
 // ---- 平台归一 ----

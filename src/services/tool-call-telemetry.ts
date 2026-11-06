@@ -67,6 +67,21 @@ const ERROR_CODES = {
   network_error: ["network", true],
   upstream_failure: ["internal", false],
   client_disconnected: ["network", true],
+  // 下面这组是 CLI 11-05 之后分出来的（internal/client/errors.go classifyError）：上游厂商那一侧的
+  // 失败，不再和平台自己的错混成 upstream_failure，看板才能分出「是我们的问题还是厂商的」。
+  provider_auth_required: ["provider_auth", false],
+  provider_insufficient_balance: ["provider_account", false],
+  provider_account_blocked: ["provider_account", false],
+  provider_access_denied: ["provider_access", false],
+  provider_model_unavailable: ["provider_access", false],
+  provider_no_compatible_account: ["provider_account", false],
+  router_not_found: ["router", false],
+  model_overloaded: ["model", true],
+  content_policy_violation: ["provider_policy", false],
+  prediction_not_found: ["prediction", false],
+  budget_exceeded: ["quota", false],
+  // 状态查询被 400 拒绝：说明任务 ID 不对，和任务自己的参数无关，任务可能还在跑（CLI 同码同类）。
+  prediction_status_rejected: ["wait", false],
 } as const satisfies Record<string, readonly [string, boolean]>;
 
 export type ToolErrorCode = keyof typeof ERROR_CODES;
@@ -127,6 +142,33 @@ export function normalizeGenerationStatus(status: unknown): GenerationStatus | u
   return ACTIVE.has(value) ? "processing" : "unknown";
 }
 
+/**
+ * 上游返回的错误文案 → 错误码，判据照抄 CLI classifyError 里按文案分的那几支，顺序也一样：
+ * 厂商侧的先于按 HTTP 状态兜底的。认不出的返回 undefined，让调用方继续按状态码分。
+ */
+export function errorCodeForMessage(message: string): ToolErrorCode | undefined {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("you must log in first") ||
+    lower.includes("no api-key provided") ||
+    lower.includes("provider account authentication failed")
+  ) {
+    return "provider_auth_required";
+  }
+  if (lower.includes("insufficient account balance") || lower.includes("provider account has insufficient balance")) {
+    return "provider_insufficient_balance";
+  }
+  if (lower.includes("user has been banned") || lower.includes("provider account is blocked")) {
+    return "provider_account_blocked";
+  }
+  if (lower.includes("provider access was denied")) return "provider_access_denied";
+  if (lower.includes("provider model is unavailable for this account")) return "provider_model_unavailable";
+  if (lower.includes("no available compatible accounts")) return "provider_no_compatible_account";
+  if (lower.includes("router not found")) return "router_not_found";
+  if (lower.includes("serveroverloaded") || lower.includes("model_overloaded")) return "model_overloaded";
+  return undefined;
+}
+
 /** HTTP 状态 → 错误码，与 CLI classifyError 的状态码兜底分支一致。 */
 export function errorCodeForHttpStatus(status: number): ToolErrorCode {
   switch (status) {
@@ -148,6 +190,40 @@ export function errorCodeForHttpStatus(status: number): ToolErrorCode {
     default:
       return "upstream_failure";
   }
+}
+
+/**
+ * CLI 的 exit_class：把一次调用的结果归到几个固定的桶里，看板上「成功率」「用户错误」
+ * 「接口 4xx」「网络或 5xx」「生成失败」「等待超时」「被打断」按它分。MCP 没有进程退出码，
+ * 按错误本身推：和 CLI ExitCodeFor 的对应关系是 0→ok、1→user、2→api_4xx、3→network_5xx、
+ * 5→generation_failed、7→wait_timeout、130/143→interrupted，其余 unknown / internal。
+ */
+export type ExitClass =
+  | "ok"
+  | "user"
+  | "api_4xx"
+  | "network_5xx"
+  | "generation_failed"
+  | "wait_timeout"
+  | "interrupted"
+  | "unknown"
+  | "internal";
+
+export function exitClassOf(
+  error: { code: ToolErrorCode; httpStatus?: number } | undefined,
+  fields: Pick<ToolCallFields, "generation_status" | "wait_outcome">
+): ExitClass {
+  if (!error) return fields.generation_status === "failed" ? "generation_failed" : "ok";
+  if (error.code === "client_disconnected" || fields.wait_outcome === "interrupted") return "interrupted";
+  if (fields.wait_outcome === "timed_out") return "wait_timeout";
+  const status = error.httpStatus;
+  if (status !== undefined && status >= 500) return "network_5xx";
+  const [category] = ERROR_CODES[error.code];
+  if (category === "network") return "network_5xx";
+  if (status !== undefined && status >= 400) return "api_4xx";
+  if (["invalid_request", "auth", "quota", "billing", "idempotency", "submission"].includes(category)) return "user";
+  if (category === "internal") return "internal";
+  return "unknown";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -230,12 +306,21 @@ export class ToolCallTelemetry {
     } else if (this.responseIsError) {
       error = this.error ?? { code: this.responseFallback ?? "upstream_failure" };
     }
+    // 查任务时上游回 400：不是任务参数有问题，CLI 11-05 起单列一个码（见 ERROR_CODES）。
+    if (
+      error?.code === "invalid_param" &&
+      error.httpStatus === 400 &&
+      (fields.execution_mode === "get" || fields.execution_mode === "wait")
+    ) {
+      error = { ...error, code: "prediction_status_rejected" };
+    }
     fields.stage ??= "command";
     const props: Record<string, unknown> = {
       ...base,
       command: this.command,
       duration_ms: Math.max(0, Math.round(now - this.startedAt)),
       is_error: error !== undefined,
+      exit_class: exitClassOf(error, fields),
       ...fields,
     };
     if (error) {

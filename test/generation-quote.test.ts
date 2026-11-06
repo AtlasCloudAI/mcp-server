@@ -177,6 +177,8 @@ test("包装层：卡片关着原样返回；打开时挂卡片，客户端能�
     const rich = await withGenerationCard(fakeServer(true), "atlas_generate_video", handler)(VIDEO_ARGS, {});
     assert.equal(rich.content.length, 2);
     assert.match((rich.content[1] as { text: string }).text, /"Confirm and generate" button/);
+    // ChatGPT 会自己再画一张报价卡（带它自己的确认按钮），说明里要讲清楚别画（11-06 showcase 实测）。
+    assert.match((rich.content[1] as { text: string }).text, /confirm button\s+outside the Atlas card does not reach Atlas/);
 
     const failed = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
       isError: true,

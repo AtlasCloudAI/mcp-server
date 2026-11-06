@@ -214,7 +214,11 @@ export async function withAvailableBalance(
 const QUOTE_CARD_NOTE =
   "The Atlas card already shows this quote (model, settings, price and billing account) with a " +
   "\"Confirm and generate\" button, so a single short sentence pointing the user to the card is " +
-  "enough: repeating the price or settings as a list duplicates the card. If the user approves it there, the " +
+  "enough: repeating the price or settings as a list duplicates the card. The settings and billing " +
+  "account lines above are for apps without a card; here the card already shows them. This card is " +
+  "the confirmation step, so a quote card, table, summary widget or confirm button drawn in your own " +
+  "reply would be a second copy that does not update after the user confirms, and a confirm button " +
+  "outside the Atlas card does not reach Atlas. If the user approves it there, the " +
   "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
   "they confirm in the chat instead, call again as described above; the same idempotency_key " +
   "returns the job the card already started rather than a second one. Some apps don't tell you " +

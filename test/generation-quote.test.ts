@@ -180,6 +180,24 @@ test("包装层：卡片关着原样返回；打开时挂卡片，客户端能�
     // ChatGPT 会自己再画一张报价卡（带它自己的确认按钮），说明里要讲清楚别画（11-06 showcase 实测）。
     assert.match((rich.content[1] as { text: string }).text, /confirm button\s+outside the Atlas card does not reach Atlas/);
 
+    // api_tool.call_tool 路径模型只看结构化结果：同样的话要在 card_note 里，价格那句也指向卡片（11-06 实测）。
+    const structured = rich.structuredContent as Record<string, unknown>;
+    assert.equal(Object.keys(structured)[0], "status");
+    assert.equal(Object.keys(structured)[1], "card_note");
+    assert.match(String(structured.card_note), /Do not\s+draw your own quote card, table, summary widget or confirm button/);
+    assert.match(String(structured.card_note), /does not reach Atlas/);
+    assert.equal(structured.confirmation_token, (QUOTE_RESULT.structuredContent as Record<string, unknown>).confirmation_token);
+    const priced = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
+      ...QUOTE_RESULT,
+      structuredContent: { ...QUOTE_RESULT.structuredContent, price_to_tell_user: "This job costs about $1.51 in total." },
+    }))(VIDEO_ARGS, {});
+    assert.match(
+      String((priced.structuredContent as Record<string, unknown>).price_to_tell_user),
+      /^This job costs about \$1\.51 in total\. The Atlas card already shows the price: point the user to the card/
+    );
+    // 不会显示卡片的客户端：结构化结果原样，没有 card_note。
+    assert.equal((plain.structuredContent as Record<string, unknown>).card_note, undefined);
+
     // 卡片画出来时，正文里「把模型和费用展示给用户」换成指向卡片的一句话，「带上参数」那句去掉。
     const asked = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
       ...QUOTE_RESULT,

@@ -234,6 +234,31 @@ const SHOW_QUOTE_ON_CARD =
   "The Atlas card in this reply already shows the model, the estimated cost and a confirm button: point the user to it in one short sentence, then stop.";
 const INCLUDE_SETTINGS_ASK = /\nInclude these settings[^.]*when showing the quote\./;
 
+// ChatGPT 有时走 api_tool.call_tool（把工具当代码里的函数调用），这条路径上模型只拿到结构化结果，
+// content 里的文字块（上面的 QUOTE_CARD_NOTE）它看不到，照样自己画一张带「确认」按钮的报价卡，
+// 价格还按 estimated_cost_usd 的精度写成 US$0.000420（11-06 实测：content 里写的是 $0.0004）。
+// 同样的话再放进结构化结果的 card_note，价格那句也改成指向卡片。
+const QUOTE_CARD_NOTE_STRUCTURED =
+  "The Atlas card in this reply is the quote and the confirmation step: it shows the model, settings, price and " +
+  "billing account with a \"Confirm and generate\" button. Point the user to it in one short sentence. Do not " +
+  "draw your own quote card, table, summary widget or confirm button: it would be a second copy that does not " +
+  "update after the user confirms, and a confirm button outside the Atlas card does not reach Atlas. If the " +
+  "user confirms on the card, do not call a generation tool again; if they confirm in the chat instead, call " +
+  "again with the same idempotency_key.";
+
+function withCardNote(structured: CallToolResult["structuredContent"]): CallToolResult["structuredContent"] {
+  const content = record(structured);
+  if (!content) return structured;
+  const price = content.price_to_tell_user;
+  return {
+    // status 和 card_note 排在最前面，模型读结构化结果时先看到。
+    status: content.status,
+    card_note: QUOTE_CARD_NOTE_STRUCTURED,
+    ...content,
+    ...(typeof price === "string" ? { price_to_tell_user: `${price} The Atlas card already shows the price: point the user to the card instead of repeating it.` } : {}),
+  };
+}
+
 function withoutShowQuoteAsk(block: CallToolResult["content"][number]): CallToolResult["content"][number] {
   if (block.type !== "text") return block;
   return { ...block, text: block.text.replace(SHOW_QUOTE_ASK, SHOW_QUOTE_ON_CARD).replace(INCLUDE_SETTINGS_ASK, "") };
@@ -316,6 +341,7 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
     return {
       ...result,
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
+      ...(onCard ? { structuredContent: withCardNote(result.structuredContent) } : {}),
       content: onCard
         ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: QUOTE_CARD_NOTE }]
         : result.content,

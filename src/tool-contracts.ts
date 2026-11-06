@@ -173,6 +173,8 @@ export const generationOutputSchema = {
       })
     )
     .optional(),
+  // 客户端会渲染卡片时的一句话：卡片就是确认这一步，别自己再画报价卡（只走结构化结果的 ChatGPT 路径也能看到）
+  card_note: z.string().optional(),
   // 扣费账户（需求文档 6.1）：查不到就不给
   billing_account: z
     .object({

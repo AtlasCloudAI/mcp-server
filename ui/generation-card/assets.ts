@@ -109,6 +109,33 @@ export function assetsFromToolResult(result: unknown): AssetCardData | undefined
   };
 }
 
+/**
+ * 签名地址什么时候过期（毫秒时间戳）。资产库的缩略图是 OSS 签名地址，约 1 小时有效：OSS v4 写成
+ * x-oss-date + x-oss-expires（秒），v1 写成 Expires（秒级时间戳）。不是签名地址就返回 undefined。
+ */
+export function signedUrlExpiry(url: string): number | undefined {
+  let params: URLSearchParams;
+  try {
+    params = new URL(url).searchParams;
+  } catch {
+    return undefined;
+  }
+  const date = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(params.get("x-oss-date") ?? "");
+  const ttl = params.get("x-oss-expires");
+  if (date && ttl && /^\d+$/.test(ttl)) {
+    const [, y, mo, d, hh, mm, ss] = date.map(Number);
+    return Date.UTC(y, mo - 1, d, hh, mm, ss) + Number(ttl) * 1000;
+  }
+  const expires = params.get("Expires");
+  return expires && /^\d+$/.test(expires) ? Number(expires) * 1000 : undefined;
+}
+
+/** 地址已经过期，或不到半分钟就过期（来不及加载完）。 */
+export function signedUrlExpired(url: string | undefined, now = Date.now()): boolean {
+  const expiry = url ? signedUrlExpiry(url) : undefined;
+  return expiry !== undefined && expiry - 30_000 <= now;
+}
+
 /** 图片尺寸写给模型看的样子，和服务端一致：「1600×1200, landscape (4:3)」；没有比例就只写横竖。 */
 export function shapeText(width: number, height: number, ratio?: string): string {
   const value = width / height;
@@ -240,6 +267,48 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     deps.render();
   };
   const selectionKey = () => [...selected.keys()].join(",");
+
+  /**
+   * 缩略图换新地址。缩略图是约 1 小时有效的签名地址，宿主重开旧对话时给卡片的还是当时的工具结果，
+   * 地址早过期了，每格只剩图标（11-06 ChatGPT 里重开 11-04 的对话）。按原来的条件再搜一次，
+   * 只换手上这些素材的地址，列表和选中的不动。每张卡只换一次，换完还坏就留图标，不来回重试。
+   */
+  let thumbs: "fresh" | "refreshing" | "refreshed" = "fresh";
+  async function refreshThumbs(): Promise<void> {
+    if (sample || thumbs !== "fresh" || data.items.length === 0 || caps().serverTools === undefined) return;
+    thumbs = "refreshing";
+    changed();
+    try {
+      const result = await deps.app.callServerTool({
+        name: SEARCH_TOOL,
+        arguments: {
+          limit: Math.min(50, Math.max(data.items.length, PAGE_SIZE)),
+          ...(filter ? { media_type: filter } : {}),
+          ...(data.query && !data.unmatched_query ? { query: data.query } : {}),
+        },
+      });
+      const page = result.isError ? undefined : assetsFromToolResult(result);
+      const fresh = new Map((page?.items ?? []).map((item) => [item.asset_id, item]));
+      const renew = (item: AssetCardItem): AssetCardItem => {
+        const next = fresh.get(item.asset_id);
+        if (!next) return item;
+        const renewed = { ...item };
+        if (next.thumb_url) renewed.thumb_url = next.thumb_url;
+        if (next.preview_url) renewed.preview_url = next.preview_url;
+        return renewed;
+      };
+      data = { ...data, items: data.items.map(renew) };
+      for (const [id, item] of selected) selected.set(id, renew(item));
+    } catch {
+      // 换不到就留图标；选素材、用素材照常。
+    } finally {
+      thumbs = "refreshed";
+      changed();
+    }
+  }
+  if (!sample && data.items.some((item) => signedUrlExpired(item.thumb_url ?? item.preview_url))) {
+    setTimeout(() => void refreshThumbs(), 0);
+  }
 
   /** text：全屏搜索框里搜的词（空串等于不搜）；不给就沿用手上的。 */
   async function query(next: { filter: AssetFilter | undefined; append: boolean; clearQuery?: boolean; text?: string }): Promise<void> {
@@ -382,14 +451,23 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       box.replaceChildren(
         h("span", { class: "asset-icon" }, h("span", { html: ICONS[item.kind], style: "display:contents" }), h("span", { class: "asset-name" }, item.label))
       );
-    if (item.thumb_url) {
+    // 加载失败先当成地址过期，换一次新地址（refreshThumbs）；换过还坏才是真没有缩略图。
+    const broken = () => {
+      icon();
+      void refreshThumbs();
+    };
+    const url = item.thumb_url ?? (item.kind === "video" ? item.preview_url : undefined);
+    if (url && thumbs !== "refreshed" && signedUrlExpired(url)) {
+      // 过期的地址不去加载：灰格子等新地址，免得先闪一下图标。
+      if (thumbs === "fresh") void refreshThumbs();
+    } else if (item.thumb_url) {
       // 不带 Referer：存储的防盗链会拦卡片沙箱的来源（生成卡同一个坑）。
       const img = h("img", { src: item.thumb_url, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
-      img.addEventListener("error", icon, { once: true });
+      img.addEventListener("error", broken, { once: true });
       box.append(img);
     } else if (item.kind === "video" && item.preview_url) {
       const video = h("video", { src: `${item.preview_url}#t=0.1`, preload: "metadata", muted: true, playsinline: "", referrerpolicy: "no-referrer" });
-      video.addEventListener("error", icon, { once: true });
+      video.addEventListener("error", broken, { once: true });
       box.append(video);
     } else {
       icon();

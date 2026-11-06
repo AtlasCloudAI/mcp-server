@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { assetsForModel, assetsFromToolResult, usedFromToolResult } from "../ui/generation-card/assets.js";
+import { assetsForModel, assetsFromToolResult, signedUrlExpired, signedUrlExpiry, usedFromToolResult } from "../ui/generation-card/assets.js";
 import { filesForModel } from "../ui/generation-card/upload.js";
 
 let fake: Server;
@@ -366,4 +366,23 @@ test("中文词搜不到：改列最近的素材并写明没搜到，卡片标�
   listQueries.length = 0;
   await callTool(false, "atlas_search_assets", { query: "耳机", cursor: "cursor-2" });
   assert.equal(listQueries.length, 1);
+});
+
+test("缩略图签名地址：读出到期时刻，过期（或不到半分钟就过期）的要换新地址", () => {
+  // 11-06 test 上 atlas_search_assets 实际给的缩略图地址（签名换成了假的）。
+  const v4 =
+    "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/assetd/test/30d/asset_47f8/thumbnail.png" +
+    "?response-cache-control=private%2C%20max-age%3D3600%2C%20immutable&x-oss-credential=LTAI%2F20261106%2Fus-west-1%2Foss%2Faliyun_v4_request" +
+    "&x-oss-date=20261106T060302Z&x-oss-expires=3418&x-oss-signature=abc&x-oss-signature-version=OSS4-HMAC-SHA256";
+  const expiry = Date.UTC(2026, 10, 6, 6, 3, 2) + 3418 * 1000;
+  assert.equal(signedUrlExpiry(v4), expiry);
+  assert.equal(signedUrlExpired(v4, expiry - 60_000), false);
+  assert.equal(signedUrlExpired(v4, expiry - 10_000), true);
+  assert.equal(signedUrlExpired(v4, Date.UTC(2026, 10, 8)), true);
+  assert.equal(signedUrlExpiry("https://atlas-media.oss-us-west-1.aliyuncs.com/a.jpg?OSSAccessKeyId=x&Expires=1793900000&Signature=y"), 1793900000 * 1000);
+  // 不签名的地址（生成结果）和坏地址都不算过期。
+  assert.equal(signedUrlExpiry("https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a.jpg"), undefined);
+  assert.equal(signedUrlExpired("https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a.jpg"), false);
+  assert.equal(signedUrlExpired("not a url"), false);
+  assert.equal(signedUrlExpired(undefined), false);
 });

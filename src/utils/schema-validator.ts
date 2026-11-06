@@ -47,6 +47,9 @@ export interface ValidationResult {
   errors: string[];
   // Allowed-parameter list (Markdown), returned with errors so the AI can fix
   summary: string;
+  // First failing parameter that the schema declares, for usage analytics.
+  // Unknown keys are left out: a name the caller made up may carry user text.
+  errorParam?: string;
 }
 
 // Pull the Input definition out of a full OpenAPI schema
@@ -87,8 +90,11 @@ function isMultiSelect(prop: SchemaProperty | undefined): prop is MultiSelectPro
   );
 }
 
-function multiSelectErrors(input: InputSchema, params: Record<string, unknown>): string[] {
-  const errors: string[] = [];
+function multiSelectErrors(
+  input: InputSchema,
+  params: Record<string, unknown>
+): Array<{ field: string; message: string }> {
+  const errors: Array<{ field: string; message: string }> = [];
   for (const [key, prop] of Object.entries(input.properties ?? {})) {
     const value = params[key];
     if (!isMultiSelect(prop) || typeof value !== "string") continue;
@@ -99,10 +105,12 @@ function multiSelectErrors(input: InputSchema, params: Record<string, unknown>):
     if (bad.length === 0) continue;
     const allowed = prop.enum.map((v) => JSON.stringify(v)).join(" | ");
     const got = bad.map((item) => (item ? JSON.stringify(item) : "an empty item")).join(", ");
-    errors.push(
-      `Parameter \`${key}\` takes one or more of: ${allowed}, joined with commas ` +
-        `(e.g. ${JSON.stringify(prop.enum.slice(0, 2).join(", "))}); ${got} is not one of them.`
-    );
+    errors.push({
+      field: key,
+      message:
+        `Parameter \`${key}\` takes one or more of: ${allowed}, joined with commas ` +
+        `(e.g. ${JSON.stringify(prop.enum.slice(0, 2).join(", "))}); ${got} is not one of them.`,
+    });
   }
   return errors;
 }
@@ -159,6 +167,14 @@ function validatorForSchema(
   const validate = ajv.compile(validationRoot);
   validatorCache.set(originalSchema, validate);
   return validate;
+}
+
+// The top-level parameter an ajv error is about, or undefined for unknown keys.
+function ajvErrorField(error: ErrorObject): string | undefined {
+  if (error.keyword === "required") return String(error.params.missingProperty ?? "");
+  if (error.keyword === "additionalProperties") return undefined;
+  const first = error.instancePath.split("/").filter(Boolean)[0];
+  return first === undefined ? undefined : decodeURIComponent(first);
 }
 
 function formatAjvError(error: ErrorObject): string {
@@ -308,15 +324,19 @@ export function validateModelParams(
     };
   }
   const valid = validate({ model: modelId, ...params });
-  const errors = [
-    ...(valid ? [] : (validate.errors ?? []).map(formatAjvError)),
-    ...multiSelectErrors(input, params),
-  ];
+  const ajvErrors = valid ? [] : (validate.errors ?? []);
+  const multiSelect = multiSelectErrors(input, params);
+  const errors = [...ajvErrors.map(formatAjvError), ...multiSelect.map((e) => e.message)];
+  const declared = new Set(Object.keys(input.properties ?? {}));
+  const errorParam = [...ajvErrors.map(ajvErrorField), ...multiSelect.map((e) => e.field)].find(
+    (field): field is string => field !== undefined && declared.has(field)
+  );
 
   return {
     ok: errors.length === 0,
     errors,
     summary: summarizeInputSchema(input, modelId),
+    ...(errorParam ? { errorParam } : {}),
   };
 }
 

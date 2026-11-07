@@ -896,8 +896,14 @@ button.history-row:focus-visible {
   cursor: pointer;
 }
 
-.upload-remove:hover {
-  color: var(--ac-danger-text);
+/* 悬停用深灰，不用红色：红色像警告（设计 11-07） */
+.upload-remove:hover:not(:disabled) {
+  color: var(--ac-text-2);
+}
+
+.upload-remove:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ---- 资产库卡（设计稿「全屏视图」：从资产库选取 / 资产库为空）---- */
@@ -1413,24 +1419,6 @@ button.history-row:focus-visible {
   height: 14px;
   color: var(--ac-text-3);
   display: block;
-}
-
-/* 全屏：搜索框和右边的「Upload a file」一行 */
-.asset-search-row {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.asset-search-row .asset-search {
-  margin-top: 0;
-  flex: 1;
-  min-width: 0;
-}
-
-.asset-search-row .btn {
-  flex: none;
 }
 
 .asset-search-input {

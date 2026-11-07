@@ -706,8 +706,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   function addPicked(picked: PickedAsset[]): void {
-    for (const asset of picked) {
-      if (items.some((i) => i.asset_id === asset.asset_id)) continue;
+    const fresh = picked.filter((asset) => !items.some((i) => i.asset_id === asset.asset_id));
+    const room = Math.max(0, data.max_files - items.filter((i) => i.status !== "invalid").length);
+    if (fresh.length > room) deps.notice(`Only the first ${room} were added — you can add up to ${data.max_files} at a time.`);
+    for (const asset of fresh.slice(0, room)) {
       items.push({
         id: `a${nextId++}`,
         name: asset.label,
@@ -828,7 +830,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     return box;
   }
 
-  function mark(item: UploadItem): HTMLElement {
+  function mark(item: UploadItem, frozen: boolean): HTMLElement {
     // 已经停下来等用户点「Upload again / Reconnect」：不转圈，免得看起来像在自动处理。
     if (gaveUp && (item.status === "uploading" || item.status === "queued")) {
       return h("span", { class: "upload-mark", html: ICON_WAITING, "aria-label": "Not uploaded yet" });
@@ -836,7 +838,18 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (item.status === "uploading" || item.status === "saving" || item.status === "queued") {
       return h("span", { class: "upload-mark", html: ICON_SPINNER, "aria-label": "Uploading" });
     }
-    if (item.status === "done") return h("span", { class: "upload-mark ok", html: ICON_CHECK, "aria-label": "Uploaded" });
+    // 传好的也能拿掉：只是不放进这次请求，存进资产库的文件还在资产库里。已经交给模型的收不回来，按钮置灰。
+    if (item.status === "done") {
+      return h("button", {
+        type: "button",
+        class: "upload-mark upload-remove",
+        html: ICON_REMOVE,
+        title: frozen ? "Already added to the chat" : "Remove from this request",
+        "aria-label": `Remove ${item.name}`,
+        disabled: frozen,
+        onclick: () => remove(item),
+      });
+    }
     return h("button", {
       type: "button",
       class: "upload-mark upload-remove",
@@ -853,6 +866,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       ? items.filter((item, i) => i < COLLAPSE_SHOWN || item.status === "invalid" || item.status === "failed")
       : items;
     const hidden = items.length - shown.length;
+    const frozen = handedOff !== "" && handedOff === doneKey();
     return h(
       "ul",
       { class: "upload-list" },
@@ -867,7 +881,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
             h("span", { class: "upload-name", title: item.name }, item.name),
             h("span", { class: "upload-sub", "data-upload-sub": item.id }, subText(item))
           ),
-          mark(item)
+          mark(item, frozen)
         )
       ),
       hidden > 0
@@ -984,7 +998,12 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         phase === "uploading"
           ? [button("Cancel", "secondary", cancel)]
           : phase === "done"
-            ? [useButton("primary"), overflow ? button("Change files", "secondary", changeFiles) : button("Add more", "secondary", pick)]
+            ? [
+                useButton("primary"),
+                // 「Add more」打开资产库：第一格是上传格，传新文件和从资产库选都在那一处（设计 11-07）。
+                // 宿主不让卡片调工具、打不开资产库时，还是直接选本地文件。
+                overflow ? button("Change files", "secondary", changeFiles) : button("Add more", "secondary", deps.openLibrary ?? pick),
+              ]
             : phase === "failed"
               ? // 设计稿 v2「网络失败」：重传，或者改从资产库选。
                 [

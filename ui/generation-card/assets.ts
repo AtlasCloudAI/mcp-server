@@ -203,6 +203,8 @@ export interface LibraryDeps {
   onPicked?(picked: PickedAsset[]): void;
   /** 从上传卡打开：「Cancel」回到上传卡。 */
   onCancel?(): void;
+  /** 上传卡上已经有文件：选的是往里加，主按钮写「Add N selected」，不写「Use」。 */
+  addToRequest?: boolean;
   /** 自己交给模型之后（全屏时退回对话里，用户才看得到对话）。 */
   onHandedOff?(): void;
 }
@@ -719,17 +721,6 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     );
   }
 
-  /** 全屏：搜索框右边一个次按钮「Upload a file」，和网格里的上传格走同一条路。 */
-  function searchRow(): HTMLElement {
-    const busy = uploading().length > 0;
-    return h(
-      "div",
-      { class: "asset-search-row" },
-      searchBox(),
-      canUpload() ? button(busy ? "Uploading…" : "Upload a file", "secondary", startUpload, { small: true, disabled: busy || handedOffNow() }) : null
-    );
-  }
-
   function footer(opts: LibraryViewOptions, shown: number): HTMLElement | null {
     const n = selected.size;
     const handed = handedOffNow();
@@ -741,7 +732,10 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       buttons.push(button(loading ? "Loading…" : "Load more", "secondary", () => void query({ filter, append: true }), { disabled: loading }));
     }
     if (handed) buttons.push(button("Added to chat", "primary", () => undefined, { disabled: true }));
-    else buttons.push(button(using ? "Getting files…" : n > 0 ? `Use ${n} selected` : "Use selected", "primary", () => void use(), { disabled: n === 0 || using }));
+    else {
+      const verb = deps.addToRequest ? "Add" : "Use";
+      buttons.push(button(using ? "Getting files…" : n > 0 ? `${verb} ${n} selected` : `${verb} selected`, "primary", () => void use(), { disabled: n === 0 || using }));
+    }
     if (deps.onCancel) buttons.push(button("Cancel", "secondary", deps.onCancel));
     return h("div", { class: "asset-foot" }, left, h("div", { class: "asset-foot-actions" }, ...buttons));
   }
@@ -782,7 +776,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       "section",
       { class: `card assets${opts.fullscreen ? " fullscreen" : ""}` },
       title,
-      opts.fullscreen ? searchRow() : null,
+      opts.fullscreen ? searchBox() : null,
       data.unmatched_query && data.items.length > 0
         ? h("p", { class: "desc asset-query" }, `Nothing matched “${data.unmatched_query}”, so these are your latest files.`)
         : data.query && !opts.fullscreen

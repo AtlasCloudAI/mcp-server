@@ -632,6 +632,9 @@ function closeLibrary(): void {
 async function openLibraryFromUpload(): Promise<void> {
   const from = uploader;
   if (!from) return;
+  // 上传卡上已经有文件：用户在凑一组素材，选好的加进去回到上传卡，由「Use N files」一起交给模型；
+  // 卡上还是空的，选好直接交给模型（原来的做法）。
+  const building = from.items.length > 0;
   let initial: AssetCardData | undefined;
   if (from.data.sample) {
     // 测试卡片：拿测试工具的样例资产库，不调真实接口。
@@ -649,10 +652,11 @@ async function openLibraryFromUpload(): Promise<void> {
     initial,
     libraryDeps({
       onCancel: closeLibrary,
+      addToRequest: building,
       onPicked(picked) {
         closeLibrary();
         from.addPicked(picked);
-        void from.useFiles();
+        if (!building) void from.useFiles();
       },
       uploadInstead() {
         closeLibrary();

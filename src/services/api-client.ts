@@ -100,6 +100,12 @@ function isRetryable(error: unknown): boolean {
   return false;
 }
 
+// Sent with every request that carries the user's API key, so Atlas can tell
+// usage that came through this MCP server from other API-key traffic. Atlas
+// records it as the request's source; a server that does not know the tag
+// records the request as a plain API-key call, as before.
+const SOURCE_HEADERS: Record<string, string> = { "X-Source-From": "atlas-mcp" };
+
 // Sleep with exponential backoff
 function backoff(attempt: number): Promise<void> {
   const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
@@ -150,6 +156,7 @@ async function request<T>(
 
   if (requireAuth) {
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
+    Object.assign(finalHeaders, SOURCE_HEADERS);
   }
 
   // POST requests should not retry - they may create billable tasks (image/video generation)
@@ -331,6 +338,7 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        ...SOURCE_HEADERS,
       },
       body: formData,
       signal: controller.signal,

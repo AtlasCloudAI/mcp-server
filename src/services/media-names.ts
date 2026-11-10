@@ -147,9 +147,41 @@ export async function rememberAssetUrls(assets: Array<{ asset_id: string; url: s
   const names = await rememberedMediaNames(assets.map((asset) => assetKey(asset.asset_id)));
   await Promise.all(
     assets.map(async (asset) => {
+      await rememberAssetIdOfUrl(asset.url, asset.asset_id);
       const name = names.get(assetKey(asset.asset_id));
       const kind = kindOfMime(asset.mime_type);
       if (name) await rememberMediaName(asset.url, name, undefined, { source: "library", assetId: asset.asset_id, ...(kind ? { kind } : {}) });
     })
   );
+}
+
+// 资产库临时地址 → 资产编号。上面那条只在知道文件名时才记（报价卡要显示名字）；提交前把地址换成
+// assetd:// 引用不需要名字，所以另记一份，模型直接写 asset://asset_… 或没搜索就取用时也认得出来。
+const assetUrlKey = (url: string): string => `asset-url:${keyOf(url)}`;
+
+async function rememberAssetIdOfUrl(url: string, assetId: string, store?: UploadTicketStore): Promise<void> {
+  if (!url || !assetId) return;
+  try {
+    await withTimeout(storeFor(store).put(assetUrlKey(url), assetId, TTL_SECONDS));
+  } catch {
+    // 记不下来就照原地址提交，只是使用历史里没有输入预览
+  }
+}
+
+/** 这些地址里哪些是资产库的临时地址，对应哪个资产编号；查不到的不在结果里。 */
+export async function assetIdsOfUrls(urls: string[], store?: UploadTicketStore): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const named = await rememberedMedia(urls, store);
+  for (const [url, media] of named) if (media.assetId) out.set(url, media.assetId);
+  await Promise.all(
+    [...new Set(urls)].filter((url) => !out.has(url)).map(async (url) => {
+      try {
+        const assetId = await withTimeout(storeFor(store).get(assetUrlKey(url)));
+        if (assetId) out.set(url, assetId);
+      } catch {
+        // 照原地址提交
+      }
+    })
+  );
+  return out;
 }

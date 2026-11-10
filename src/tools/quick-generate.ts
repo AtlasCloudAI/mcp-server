@@ -5,6 +5,7 @@ import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
 import { generationApi } from "../services/api-client.js";
 import { idempotencyHeaders, prepareWithSchema } from "../services/generation.js";
+import { withAssetLibraryReferences } from "../services/library-references.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { resolveDefaultModel, routeDefaultParams } from "../services/default-models.js";
 import {
@@ -450,10 +451,11 @@ Returns:
           // 和 atlas_generate_image/video/audio 一样直接提交给生成网关：直连 kubedl 时
           // （test 的 ATLASCLOUD_API_BASE_URL）/model/generate* 不放行插件令牌，只有
           // 生产网关会把它转给 aiproxy。
-          () =>
+          async () =>
             generationApi<PredictionResponse>(endpoint, {
               method: "POST",
-              body: submitBody,
+              // 资产库素材交 assetd:// 引用，和网站一样（library-references.ts）。
+              body: await withAssetLibraryReferences(submitBody),
               responseSchema: predictionResponseSchema,
               ...idempotencyHeaders(submitKey),
             })

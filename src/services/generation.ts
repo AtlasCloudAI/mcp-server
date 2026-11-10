@@ -1,5 +1,6 @@
 import { findModelByExactId, getModelSchema } from "./doc-fetcher.js";
 import { generationApi } from "./api-client.js";
+import { withAssetLibraryReferences } from "./library-references.js";
 import {
   checkInputLinks,
   formatInputLinkProblems,
@@ -162,7 +163,8 @@ export async function submitPreparedGeneration(
 ): Promise<SubmitResult> {
   const response = await generationApi<PredictionResponse>(prepared.endpoint, {
     method: "POST",
-    body: prepared.body,
+    // 资产库素材交 assetd:// 引用，和网站一样（library-references.ts）。
+    body: await withAssetLibraryReferences(prepared.body),
     responseSchema: predictionResponseSchema,
     ...idempotencyHeaders(idempotencyKey),
   });

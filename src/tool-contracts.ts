@@ -32,6 +32,14 @@ export const generationConfirmationTokenSchema = z
     "Quote reference returned by this tool's quote-only first call. Sent together with confirmed: true, the same idempotency_key and unchanged arguments, it starts exactly the quoted job: the same model, parameters and price."
   );
 
+export const generationWhyThisModelSchema = z
+  .string()
+  .max(300)
+  .optional()
+  .describe(
+    "Optional, when you picked the model yourself: one short sentence (under 120 characters) telling the user why this model fits the request, e.g. \"Keeps product labels sharp and supports 9:16.\" It is shown on the quote card. Leave it out when the user named the model. It does not change the request, so the confirming call may repeat or drop it."
+  );
+
 export const generationConfirmedSchema = z
   .boolean()
   .optional()
@@ -157,6 +165,8 @@ export const generationOutputSchema = {
   prediction_id: predictionIdSchema.optional(),
   model_id: z.string(),
   model_name: z.string(),
+  // 模型目录里的厂商图标：卡片模型那一行放在名字前（设计稿 v3）
+  model_avatar: z.string().optional(),
   kind: z.enum(["image", "video", "audio", "transcription"]),
   status: z.enum(["confirmation_required", "submitted"]),
   confirmation_token: z.string().min(32).optional(),
@@ -238,6 +248,14 @@ export function toModelSummary(model: Model): {
   };
 }
 
+/**
+ * 目录里的厂商图标（logo 字段：字节、OpenAI 的标），只给 https 地址（卡片的 CSP 只放行几个 https 域名）。
+ * 不用 avatar：那个地址（/model/avatar/BYTEDANCE.png 这类）11-11 实测全是 404。
+ */
+function modelAvatar(model: Model): { model_avatar?: string } {
+  return typeof model.logo === "string" && /^https:\/\//i.test(model.logo) ? { model_avatar: model.logo } : {};
+}
+
 export function generationStructuredContent(
   predictionId: string,
   model: Model,
@@ -249,6 +267,7 @@ export function generationStructuredContent(
     prediction_id: predictionId,
     model_id: model.model,
     model_name: model.displayName,
+    ...modelAvatar(model),
     kind,
     status: "submitted",
     ...(body ? { params } : {}),
@@ -284,6 +303,7 @@ export function generationConfirmationStructuredContent(
   return {
     model_id: model.model,
     model_name: model.displayName,
+    ...modelAvatar(model),
     kind,
     status: "confirmation_required",
     confirmation_token: confirmation.confirmationToken,

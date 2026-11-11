@@ -601,11 +601,7 @@ export function renderQuoteCard(
   const quote = card.quote;
   const price = priceLabel(quote);
   const template = isTemplate(card);
-  const subtitle = h(
-    "p",
-    { class: "desc", style: "margin-top:2px" },
-    `${modelLabel(card)} · ${template ? "Marketing Studio template" : typeLabel(card)}`
-  );
+  const subtitle = modelLine(card, template);
 
   if (state.phase === "expired") {
     const duration = validFor(quote?.valid_seconds);
@@ -875,6 +871,8 @@ export function renderQuoteCard(
     { class: "card" },
     head("Confirm this generation", status),
     subtitle,
+    // 设计稿 v3：模型那一行下面写选它的理由。模型自己挑的才有；用户点名的模型不写。
+    card.model_reason ? h("p", { class: "desc quote-why" }, `Why this model: ${card.model_reason}`) : null,
     ...task(quote),
     chips(quote?.settings ?? []),
     ...amount,
@@ -890,6 +888,24 @@ export function renderQuoteCard(
         )
       : h("p", { class: "note" }, "Reply in the chat to confirm or change this."),
     notice(opts)
+  );
+}
+
+/**
+ * 模型那一行（设计稿 v3）：厂商图标 + 模型名 + 灰色类型。图标加载失败就去掉，只留文字，
+ * 不留破图框；没有图标的老结果、目录里查不到的模型也是只有文字。
+ */
+function modelLine(card: CardData, template: boolean): HTMLElement {
+  const icon = card.model_icon
+    ? h("img", { class: "model-icon", src: card.model_icon, alt: "", referrerpolicy: "no-referrer", decoding: "async" })
+    : null;
+  icon?.addEventListener("error", () => icon.remove(), { once: true });
+  return h(
+    "div",
+    { class: "model-line" },
+    icon,
+    h("span", { class: "model-name" }, modelLabel(card)),
+    h("span", { class: "model-kind" }, template ? "Marketing Studio template" : typeLabel(card))
   );
 }
 

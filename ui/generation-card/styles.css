@@ -1499,3 +1499,51 @@ button.history-row:focus-visible {
 .quote-input.gone .quote-input-source {
   color: var(--ac-danger-text);
 }
+
+/* 报价卡、进度卡的模型那一行（设计稿 v3）：厂商图标 + 模型名 + 灰色类型 */
+.model-line {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* 厂商 logo 有黑色透明底的（OpenAI），深色主题下会看不见：一律垫一块白底。 */
+.model-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  box-sizing: border-box;
+  padding: 2px;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  object-fit: contain;
+}
+
+.model-name {
+  color: var(--ac-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-kind {
+  flex: none;
+  color: var(--ac-text-3);
+}
+
+.quote-why {
+  margin-top: 4px;
+}
+
+/* 长宽比差得多的图（长条图、竖版海报、带字的横幅）铺满方格只剩中间一截，像半个字母（11-11 Claude E1）：
+   这种图整张放进格子里，四周留底色。接近方形的照旧铺满。 */
+.asset-media img.asset-fit {
+  object-fit: contain;
+  background: var(--ac-badge-bg);
+}

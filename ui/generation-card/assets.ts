@@ -4,6 +4,7 @@
 // 选好后卡片调 atlas_use_assets 换临时原图地址，交给模型（或交回上传卡）。服务端数据见 src/apps/asset-library.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { isLopsided } from "../../src/apps/card-params.js";
 import { handOff } from "./handoff.js";
 import { prefillNote, say, userLang } from "./voice.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
@@ -234,6 +235,10 @@ const FILTER_WORD: Record<AssetFilter, string> = { image: "images", video: "vide
 /** 资产库没开通（AssetD 回 asset_library_not_activated，服务端换成这句话）。 */
 function lockedError(text: string): boolean {
   return /asset_library_not_activated|asset library isn't activated/i.test(text);
+}
+
+function fitIfLopsided(img: HTMLImageElement): void {
+  if (isLopsided(img.naturalWidth, img.naturalHeight)) img.classList.add("asset-fit");
 }
 
 /** initial 为空时（从上传卡打开）先显示加载中，自己去取第一页。 */
@@ -590,6 +595,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       // 不带 Referer：存储的防盗链会拦卡片沙箱的来源（生成卡同一个坑）。
       const img = h("img", { src: item.thumb_url, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
       img.addEventListener("error", broken, { once: true });
+      img.addEventListener("load", () => fitIfLopsided(img), { once: true });
       box.append(img);
     } else if (item.kind === "video" && item.preview_url) {
       const video = h("video", { src: `${item.preview_url}#t=0.1`, preload: "metadata", muted: true, playsinline: "", referrerpolicy: "no-referrer" });

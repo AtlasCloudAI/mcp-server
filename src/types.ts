@@ -38,6 +38,8 @@ export interface Model {
   displayName: string;
   profile: string;
   avatar: string;
+  /** 厂商图标地址；卡片模型那一行用它（avatar 的地址打不开）。老数据可能没有。 */
+  logo?: string;
   readme: string;
   schema?: string;
   tags: string[];

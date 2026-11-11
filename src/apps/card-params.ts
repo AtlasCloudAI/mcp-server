@@ -185,3 +185,33 @@ export function kindFromField(field: string | undefined): "image" | "video" | "a
   if (/(^|_)(audio|audios|voice|music)(_|$)|audio_url/.test(name)) return "audio";
   return undefined;
 }
+
+/** 报价卡上「Why this model」最多显示多少字：一句话，长了截断（卡片窄，两行以内）。 */
+export const MODEL_REASON_MAX = 160;
+
+/**
+ * 卡片模型那一行要的东西（设计稿 v3：图标 + 模型名 + 灰色类型，报价卡下面再一行选它的理由）：
+ * - model_icon：模型目录里的厂商图标（avatar），工具结果里的 model_avatar；只收 https 地址。
+ * - model_reason：模型调用生成工具时自己写的一句 why_this_model。
+ * 服务端拼卡片数据和 Cursor 这类不转 _meta 的宿主（卡片自己从结构化结果拼）共用这一套。
+ */
+export function modelCardExtras(
+  structured: Record<string, unknown> | undefined,
+  args: Record<string, unknown> | undefined
+): { model_icon?: string; model_reason?: string } {
+  const icon = typeof structured?.model_avatar === "string" ? structured.model_avatar.trim() : "";
+  const raw = typeof args?.why_this_model === "string" ? args.why_this_model.replace(/\s+/g, " ").trim() : "";
+  const reason = raw.length > MODEL_REASON_MAX ? `${raw.slice(0, MODEL_REASON_MAX - 1).trimEnd()}…` : raw;
+  return {
+    ...(/^https:\/\//i.test(icon) ? { model_icon: icon } : {}),
+    ...(reason ? { model_reason: reason } : {}),
+  };
+}
+
+/** 方格缩略图最多裁掉多少还算铺满：长边是短边的这么多倍及以上就整张显示（资产库卡 .asset-fit）。 */
+export const LOPSIDED_RATIO = 1.5;
+
+export function isLopsided(width: number, height: number): boolean {
+  if (!(width > 0 && height > 0)) return false;
+  return Math.max(width, height) / Math.min(width, height) >= LOPSIDED_RATIO;
+}

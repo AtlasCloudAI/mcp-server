@@ -446,6 +446,13 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       modelName: base.name,
       modelType: template ? "Image" : "Video",
     }),
+    // 设计稿 v3 的模型行：厂商图标 + 选模型的理由（模板没有理由：是用户点的模板）。
+    ...(template
+      ? {}
+      : {
+          model_icon: `${STATIC}/model/logo/bytedance-seedance-2.5-image-to-video.png`,
+          model_reason: "Keeps the product sharp while animating it, and follows the photo's framing.",
+        }),
     state: "quote",
     quote: {
       tool: base.tool,

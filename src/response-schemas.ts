@@ -38,6 +38,8 @@ export const modelResponseSchema = z
     displayName: z.string().min(1),
     profile: z.string().default(""),
     avatar: z.string().default(""),
+    // 厂商图标（字节、OpenAI 的标）。avatar 那个地址 11-11 实测全是 404，卡片用 logo。
+    logo: z.string().default(""),
     readme: z.string().default(""),
     schema: z.string().optional(),
     tags: z.array(z.string()).default([]),

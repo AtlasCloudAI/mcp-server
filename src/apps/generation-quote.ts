@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { balanceResponseSchema } from "../response-schemas.js";
 import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
-import { inputsOf, kindFromField, positiveNumber, promptOf, settingsChips } from "./card-params.js";
+import { inputsOf, kindFromField, modelCardExtras, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
 import { rememberedMedia } from "../services/media-names.js";
@@ -113,6 +113,7 @@ export function generationResultCard(
         modelName,
         modelType,
       }),
+      ...modelCardExtras(content, args),
       state: "quote",
       quote: {
         tool,
@@ -166,6 +167,7 @@ export function generationResultCard(
         createdAt: new Date().toISOString(),
         settings: settingsChips(submittedParams, inputShapeOf(content.input_images)),
       }),
+      ...modelCardExtras(content, args),
       retry: { tool, arguments: callArgs },
     };
   }

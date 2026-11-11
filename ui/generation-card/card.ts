@@ -1,7 +1,7 @@
 // 卡片数据：服务端放在工具结果 _meta["atlascloud/card"] 里（见 src/apps/generation-card.ts）。
 // 宿主没把 _meta 转过来时，从 structuredContent 推一份够用的。这里只放纯函数，测试直接引。
 
-import { inputsOf, kindFromField, promptOf, settingsChips } from "../../src/apps/card-params.js";
+import { inputsOf, kindFromField, modelCardExtras, promptOf, settingsChips } from "../../src/apps/card-params.js";
 
 export type CardMediaKind = "image" | "video" | "audio" | "3d" | "other";
 
@@ -70,6 +70,10 @@ export interface CardData {
   model_id?: string;
   model_name?: string;
   model_type?: string;
+  /** 模型目录里的厂商图标（https 地址）；模型那一行放在名字前面。 */
+  model_icon?: string;
+  /** 模型自己写的一句选这个模型的理由（why_this_model）；报价卡上显示「Why this model: …」。 */
+  model_reason?: string;
   price_usd?: number;
   /** 主要参数小标签（1080p · 10 s · 16:9）。 */
   settings?: string[];
@@ -218,6 +222,7 @@ function quoteFromStructured(
     ...(typeof structured.model_id === "string" ? { model_id: structured.model_id } : {}),
     ...(typeof structured.model_name === "string" ? { model_name: structured.model_name } : {}),
     ...(typeof structured.kind === "string" && KIND_TYPE[structured.kind] ? { model_type: KIND_TYPE[structured.kind] } : {}),
+    ...modelCardExtras(structured, args),
     open_url: SITE_URL,
     // 没有工具名就没法在卡里确认，只显示报价、请用户在对话里回复。
     ...(call.tool && typeof token === "string" && typeof key === "string"

@@ -32,6 +32,7 @@ import {
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
+  generationWhyThisModelSchema,
   generationStructuredContent,
   generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
@@ -102,6 +103,7 @@ Returns:
         idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
+        why_this_model: generationWhyThisModelSchema,
         model: z.string().min(1).describe("Video model ID"),
         params: z
           .record(z.unknown())

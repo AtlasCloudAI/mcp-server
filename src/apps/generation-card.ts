@@ -270,6 +270,10 @@ export interface GenerationCardData {
   model_name?: string;
   /** Image / Video / Audio，取模型目录里的类型；进度卡标题开头用它。 */
   model_type?: string;
+  /** 模型目录里的厂商图标（https 地址）；模型那一行放在名字前面。 */
+  model_icon?: string;
+  /** 模型自己写的一句选这个模型的理由（why_this_model）；报价卡上显示「Why this model: …」。 */
+  model_reason?: string;
   /** 实际扣费（美元），来自查结果接口的 price；拿不到就不显示。 */
   price_usd?: number;
   /** 主要参数小标签（1080p · 10 s · 16:9），来自提交的参数或查结果带回的原始请求。 */

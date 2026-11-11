@@ -222,7 +222,8 @@ function stripMarkdown(text: string): string {
 }
 
 /** 正文里命中查询词最多的一段（按空行分段），截到 SNIPPET_CHARS。 */
-export function bestSnippet(body: string, terms: string[]): string {
+export function bestSnippet(body: string, terms: string[], description = ""): string {
+  const summary = description.replace(/\s+/g, " ").trim().toLowerCase();
   let best = "";
   let bestHits = 0;
   for (const block of body.split(/\n\s*\n/)) {
@@ -232,6 +233,8 @@ export function bestSnippet(body: string, terms: string[]): string {
     const plain = stripMarkdown(block).replace(/\s+/g, " ").trim();
     if (plain.length < 20) continue;
     const lower = plain.toLowerCase();
+    // 每篇开头都有一段和索引简介相同的导语，结果里已经带了简介，片段要给正文。
+    if (summary && lower === summary) continue;
     const hits = terms.reduce((sum, term) => sum + (countTerm(lower, term) > 0 ? 1 : 0), 0);
     if (hits > bestHits) {
       best = plain;
@@ -286,7 +289,7 @@ export async function searchDocs(
     title: page.title,
     url: page.url,
     description: page.description,
-    snippet: body ? bestSnippet(body, terms) : "",
+    snippet: body ? bestSnippet(body, terms, page.description) : "",
     score: Math.round(score * 10) / 10,
   }));
 }

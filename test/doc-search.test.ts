@@ -31,7 +31,7 @@ const INDEX = `# Atlas Cloud
 const BODIES: Record<string, string> = {
   "https://www.atlascloud.ai/docs/en.md": "# Overview\n\nAtlas Cloud gives one API key for 400+ models.",
   "https://www.atlascloud.ai/docs/upload-files.md":
-    "# Upload Files\n\nSource: https://atlascloud.ai/docs/en/upload-files\n\n" +
+    "# Upload Files\n\nUpload local files to Atlas Cloud for image-to-video, image editing, and other workflows\n\nSource: https://atlascloud.ai/docs/en/upload-files\n\n" +
     "## Upload a local file\n\nCall POST /api/v1/model/uploadMedia with the file. The response gives a temporary URL you pass to image-to-video.",
   "https://www.atlascloud.ai/docs/billing/refunds.md":
     "# Refunds & Failed Tasks\n\nIf a generation task fails, the reserved amount is returned to your balance automatically.",

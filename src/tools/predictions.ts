@@ -12,6 +12,7 @@ import { generationCardEnabled } from "../apps/generation-card.js";
 import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
 import { describeNotStarted, recentNotStarted } from "../services/not-started.js";
+import { formatUsd } from "../services/spend-policy.js";
 
 // 和目录里的模型 ID 同形：厂商/名字/变体，只放这几类字符。
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
@@ -25,6 +26,16 @@ export interface PredictionSummary {
   error?: string;
   prompt?: string;
   source?: string;
+  /** 这一单实际扣了多少（历史接口的 billing.amount）；还没结算或没扣时没有。 */
+  charged_usd?: number;
+}
+
+/** 历史接口的 billing.amount：字符串或数字，读不出就当没有。 */
+function chargedUsd(item: HistoryItem): number | undefined {
+  const billing = asRecord((item as Record<string, unknown>).billing);
+  const raw = billing?.amount;
+  const value = typeof raw === "string" ? Number.parseFloat(raw) : typeof raw === "number" ? raw : NaN;
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 // 后端给的是秒级时间戳字符串；这里同时容忍毫秒、数字和 ISO 字符串。
@@ -95,6 +106,7 @@ export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
     typeof result?.error === "string" && result.error !== "" ? result.error : undefined;
   const createdAt = toIsoTimestamp(item.createdAt);
   const source = sourceLabel(item);
+  const charged = chargedUsd(item);
   return {
     prediction_id: item.ID,
     model: item.model,
@@ -106,6 +118,7 @@ export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
       ? { prompt: prompt.length > 160 ? `${prompt.slice(0, 157)}...` : prompt }
       : {}),
     ...(source ? { source } : {}),
+    ...(charged !== undefined ? { charged_usd: charged } : {}),
   };
 }
 
@@ -118,7 +131,7 @@ export function registerPredictionTools(server: McpServer): void {
 
 Use this to find a task ID the user lost, to see what was generated earlier in a session, or to review which recent runs failed. It reads history only — nothing is submitted or billed.
 
-Each entry gives prediction_id, model, status, created_at, where it was started (source, e.g. "MCP · ChatGPT", "MCP · Claude Code", "Website", "API"), the output URLs (when finished), the error text (when failed) and a prompt snippet. For the full record of one task, call atlas_get_prediction with its prediction_id.
+Each entry gives prediction_id, model, status, created_at, where it was started (source, e.g. "MCP · ChatGPT", "MCP · Claude Code", "Website", "API"), the amount actually charged (charged_usd, once the task is billed), the output URLs (when finished), the error text (when failed) and a prompt snippet. When the user asks what a task cost, answer from charged_usd, not from the earlier quote. For the full record of one task, call atlas_get_prediction with its prediction_id.
 
 One account is often used from several apps at the same time, so the list can include tasks started elsewhere. When the user asks what this conversation generated or spent, count the tasks whose source is this app and mention any others separately.
 
@@ -176,6 +189,7 @@ Notes:
             error: z.string().optional(),
             prompt: z.string().optional(),
             source: z.string().optional(),
+            charged_usd: z.number().optional(),
           })
         ),
       },
@@ -202,6 +216,7 @@ Notes:
               (prediction.created_at ? ` — ${prediction.created_at}` : "") +
               (prediction.source ? ` — via ${prediction.source}` : "")
           );
+          if (prediction.charged_usd !== undefined) lines.push(`   charged: ${formatUsd(prediction.charged_usd)}`);
           if (prediction.prompt) lines.push(`   prompt: ${prediction.prompt}`);
           if (prediction.outputs.length > 0) {
             lines.push(

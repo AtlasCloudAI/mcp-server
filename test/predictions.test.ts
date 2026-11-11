@@ -88,3 +88,16 @@ test("摘要容忍缺失字段：没有 result / requestBody / createdAt 也不�
     outputs: [],
   });
 });
+
+test("摘要带实扣：历史接口的 billing.amount 写成 charged_usd；没有结算的不带（11-11 Claude C7）", () => {
+  const billed = summarizeHistoryItem({
+    ID: "6032bfc4f8c34174aa04655fca175b7c",
+    model: "bytedance/seedream-v5.0-flash/text-to-image",
+    status: "completed",
+    createdAt: "1794375392",
+    billing: { amount: "0.018000" },
+  } as never);
+  assert.equal(billed.charged_usd, 0.018);
+  const pending = summarizeHistoryItem({ ID: "x", model: "m", status: "processing", createdAt: "1794375392" } as never);
+  assert.equal(pending.charged_usd, undefined);
+});

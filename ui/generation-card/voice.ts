@@ -20,12 +20,14 @@ export function hostPrefills(app: App): boolean {
   return (app.getHostVersion()?.name?.toLowerCase() ?? "").includes("claude");
 }
 
-export const PREFILLED_NOTE = "It's in your message box. Press send to continue.";
+// 卡片看不到输入框后来被清空（11-11 Claude C3：清空了卡上还写着「It's in your message box」），
+// 所以说成已经发生的事，用户删了也不算说错。
+export const PREFILLED_NOTE = "Added to your message box. Send it when you're ready.";
 /** 输入框里已经有字时，Claude 先问要不要替换，卡片这边拿到的是「没放进去」（11-03 实测）。 */
 export const PREFILL_ASK_NOTE = "Your message box already has text. If Claude asks to replace it, accept, then press send.";
 export const SEND_FAILED_NOTE = "Couldn't send that. Type it in the chat instead.";
-/** 这两句要用户去输入框里动手，停久一点（别的提示 4 秒）。 */
-export const PREFILL_NOTE_MS = 15_000;
+/** 这两句要用户去输入框里动手，停久一点（别的提示 4 秒），但别一直挂着。 */
+export const PREFILL_NOTE_MS = 8_000;
 export function isPrefillNote(text: string | undefined): boolean {
   return text === PREFILLED_NOTE || text === PREFILL_ASK_NOTE;
 }

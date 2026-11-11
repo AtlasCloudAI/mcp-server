@@ -215,6 +215,13 @@ export async function withAvailableBalance(
   return { ...result, content };
 }
 
+// 提交后（模型在对话里确认的，11-11 Claude D2）卡片已经在跟这一单、会自己变成结果；模型再调
+// atlas_get_prediction 只会多出一张卡，文字里又贴一遍图。
+const TRACKING_CARD_NOTE =
+  "The Atlas card above already tracks this task and turns into the result by itself, so don't call " +
+  "atlas_get_prediction for it: tell the user it's generating and the card will show the result. " +
+  "Check it only if the user asks about it later.";
+
 const QUOTE_CARD_NOTE =
   "The Atlas card already shows this quote (model, settings, price and billing account) with a " +
   "\"Confirm and generate\" button, so a single short sentence pointing the user to the card is " +
@@ -341,14 +348,18 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
         };
       });
     }
-    const onCard = card.state === "quote" && clientRendersCards(server);
+    const rendersCards = clientRendersCards(server);
+    const onCard = card.state === "quote" && rendersCards;
+    const tracking = rendersCards && (card.state === "queued" || card.state === "running");
     return {
       ...result,
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
       ...(onCard ? { structuredContent: withCardNote(result.structuredContent) } : {}),
       content: onCard
         ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: QUOTE_CARD_NOTE }]
-        : result.content,
+        : tracking
+          ? [...result.content, { type: "text" as const, text: TRACKING_CARD_NOTE }]
+          : result.content,
     };
   };
 }

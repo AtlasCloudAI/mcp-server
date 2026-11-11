@@ -43,6 +43,8 @@ const RESUME_FAILED =
 // input_missing：确认时发现引用的资产库素材被删了（设计稿 v2「素材失效」），什么都没提交。
 // signed_out：Atlas 登录失效了（设计稿 v2「需要重新连接」），什么都没提交。
 export type QuotePhase =
+  // 重新打开对话、正在问这份报价交没交过：先不画报价，免得闪一下「Needs confirmation」（11-11 Claude H）。
+  | "resuming"
   | "ready"
   | "quoting"
   | "submitting"
@@ -275,9 +277,16 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   async function resume(): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote || sample() || checking) return;
-    // 把「正在查」写出来：有的宿主（Cursor）卡片调工具前要用户先点授权，不写的话用户只看到
-    // 一张又回到待确认的报价卡，不知道卡片在等什么（验收问题 59）。
-    deps.notice("Checking whether this quote was already submitted…");
+    // 问的这段时间画一张中性的「加载中」，不先画报价：已经出过图的对话重开时，报价卡和 Checking
+    // 会先闪一下再变成结果（11-11 Claude H）。有的宿主（Cursor）卡片调工具前要用户先点授权，
+    // 加载卡上写着在查什么，用户不至于看着一张待确认的报价不知道卡片在等什么（验收问题 59）。
+    deps.setState({ phase: "resuming" });
+    const backToQuote = (failed: boolean): void => {
+      const card = deps.card();
+      if (card?.quote !== quote) return;
+      deps.setState(initialQuoteState(card));
+      if (failed) deps.notice(RESUME_FAILED);
+    };
     try {
       const result = await deps.app.callServerTool({
         name: CHECK_TOOL,
@@ -286,10 +295,10 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
       // 只认「开始了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
       if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
-      else if (result.isError) deps.notice(RESUME_FAILED);
+      else backToQuote(Boolean(result.isError));
     } catch {
       // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
-      deps.notice(RESUME_FAILED);
+      backToQuote(true);
     }
   }
 
@@ -617,12 +626,22 @@ export function renderQuoteCard(
   if (state.phase === "low_balance") {
     // 报错里带回的余额最新；没有时用报价时查到的。
     const balance = state.balanceUsd ?? quote?.account?.balance_usd;
+    // 写出还差多少（11-11 Claude B1）：报价和余额都知道、余额确实不够时才写。
+    const estimate = quote?.estimated_usd;
+    const shortBy = estimate !== undefined && balance !== undefined && estimate > balance ? estimate - balance : undefined;
     return h(
       "section",
       { class: "card" },
       head("Not enough balance", badge("Low balance", { danger: true })),
       subtitle,
-      price ? h("div", { class: "rows" }, row("Estimated cost", price)) : null,
+      price
+        ? h(
+            "div",
+            { class: "rows" },
+            row("Estimated cost", price),
+            shortBy !== undefined ? row("You need", `${formatUsd(Math.ceil(shortBy * 100 - 1e-6) / 100)} more`) : null
+          )
+        : null,
       billingLine(quote?.account, balance, true),
       h("p", { class: "note" }, "After you top up, refresh to check your balance and the quote again. Nothing was charged."),
       h(
@@ -703,6 +722,17 @@ export function renderQuoteCard(
         quote ? button("Retry", "primary", actions.requoteFresh) : null,
         opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
       ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "resuming") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Loading this generation", badge("Loading", { spinner: true })),
+      subtitle,
+      h("p", { class: "note" }, "Looking up whether it was already submitted."),
       notice(opts)
     );
   }

@@ -133,11 +133,12 @@ function buildQuery(
   return qs ? `?${qs}` : "";
 }
 
-// Render a MoneyValue like "125.500000 usd" -> "$125.50"
+// Render a MoneyValue like "125.509000 usd" -> "$125.50". 截断到分、不四舍五入，和官网、卡片一致：
+// 余额 199.676 四舍五入会写成 $199.68，比官网的 $199.67 多出 1 分（11-11 Claude G1）。
 function money(m?: { value: string; currency: string }): string {
   if (!m) return "-";
   const n = Number(m.value);
-  const amount = Number.isFinite(n) ? n.toFixed(2) : m.value;
+  const amount = Number.isFinite(n) ? (Math.trunc(n * 100 + (n >= 0 ? 1e-6 : -1e-6)) / 100).toFixed(2) : m.value;
   return m.currency?.toLowerCase() === "usd"
     ? `$${amount}`
     : `${amount} ${m.currency}`;
@@ -151,7 +152,7 @@ export function registerAccountTools(server: McpServer): void {
       title: "Get Account Balance",
       description: `Get the current Atlas Cloud account balance and credit summary for the authenticated API key.
 
-Returns available balance, cash, bonus, frozen amount, and credit grant status.
+Returns available balance, cash, bonus, frozen amount, and credit grant status. Tell the user the balance as available_display (cut to the cent, the same figure the website shows); don't round the raw value yourself.
 
 Args:
   None.
@@ -163,6 +164,7 @@ Examples:
         scope: z.string(),
         account_name: z.string().optional(),
         account_type: z.string().optional(),
+        available_display: z.string().optional(),
         available: moneyValueSchema.optional(),
         cash: moneyValueSchema.optional(),
         bonus: moneyValueSchema.optional(),
@@ -212,6 +214,8 @@ Examples:
             scope: res.scope,
             ...(res.account?.name ? { account_name: res.account.name } : {}),
             ...(res.account?.type ? { account_type: res.account.type } : {}),
+            // 原始值有 6 位小数，模型会自己四舍五入；给一个和官网同口径的现成写法让它照抄。
+            ...(res.available ? { available_display: money(res.available) } : {}),
             ...(res.available ? { available: res.available } : {}),
             ...(res.cash ? { cash: res.cash } : {}),
             ...(res.bonus ? { bonus: res.bonus } : {}),

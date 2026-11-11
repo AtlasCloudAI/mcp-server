@@ -459,7 +459,20 @@ function imageCard(card: CardData, media: CardMedia, actions: CardActions, fail:
     referrerpolicy: "no-referrer",
   });
   img.addEventListener("error", fail, { once: true });
-  return h("section", { class: "card" }, h("div", { class: "media" }, img), caption(card, media), resultActions(media, actions));
+  const frame = h("div", { class: "media" }, img);
+  // 方图、竖图高度会被 420px 封顶，框却还占满卡片宽度，两侧露出框底色（深色模式下是两条深色边，
+  // 11-11 Claude C4）。和竖版视频一样：框按图片比例收窄并居中，宽图不受影响。
+  img.addEventListener(
+    "load",
+    () => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0 && img.naturalHeight * 4 > img.naturalWidth * 3) {
+        frame.classList.add("portrait");
+        frame.style.setProperty("--media-ratio", String(img.naturalWidth / img.naturalHeight));
+      }
+    },
+    { once: true }
+  );
+  return h("section", { class: "card" }, frame, caption(card, media), resultActions(media, actions));
 }
 
 /** 参数里已经有时长（10 s）就不再补视频读出来的时长。 */
@@ -513,8 +526,24 @@ function waveHeights(seed: string, count: number): number[] {
   return out;
 }
 
+// 卡片每次重绘（轮询、提示、宿主改尺寸）都会重建界面。<audio> 不挂在页面上，旧的那个重绘后
+// 还在播，新画出来的播放器却停在 0:00（11-11 Claude G2）。所以同一个地址只建一个 <audio>，
+// 重绘时把事件改绑到新界面上，按它此刻的播放状态画。
+const audioElements = new Map<string, { audio: HTMLAudioElement; listeners?: AbortController }>();
+
+function sharedAudio(url: string): { audio: HTMLAudioElement; signal: AbortSignal } {
+  let entry = audioElements.get(url);
+  if (!entry) {
+    entry = { audio: h("audio", { src: url, preload: "metadata", referrerpolicy: "no-referrer" }) as HTMLAudioElement };
+    audioElements.set(url, entry);
+  }
+  entry.listeners?.abort();
+  entry.listeners = new AbortController();
+  return { audio: entry.audio, signal: entry.listeners.signal };
+}
+
 function audioCard(card: CardData, media: CardMedia, actions: CardActions, fail: () => void): HTMLElement {
-  const audio = h("audio", { src: media.url, preload: "metadata", referrerpolicy: "no-referrer" });
+  const { audio, signal } = sharedAudio(media.url);
   const time = h("span", { class: "audio-time" }, "0:00 / –:––");
   const bars = waveHeights(media.url, 30).map((height) => h("span", { style: `height:${height}px` }));
   const wave = h("div", { class: "wave", role: "slider", "aria-label": "Seek", tabindex: "0" }, ...bars);
@@ -534,21 +563,25 @@ function audioCard(card: CardData, media: CardMedia, actions: CardActions, fail:
     time.textContent = `${formatClock(audio.currentTime)} / ${duration > 0 ? formatClock(duration) : "–:––"}`;
     wave.setAttribute("aria-valuenow", String(Math.round(progress * 100)));
   };
-  audio.addEventListener("loadedmetadata", paint);
-  audio.addEventListener("timeupdate", paint);
-  audio.addEventListener("play", () => {
+  const onPlay = () => {
     play.innerHTML = ICON_PAUSE;
     play.classList.remove("paused");
     play.setAttribute("aria-label", "Pause audio");
-  });
+  };
   const onStop = () => {
     play.innerHTML = ICON_PLAY;
     play.classList.add("paused");
     play.setAttribute("aria-label", "Play audio");
   };
-  audio.addEventListener("pause", onStop);
-  audio.addEventListener("ended", onStop);
-  audio.addEventListener("error", fail, { once: true });
+  audio.addEventListener("loadedmetadata", paint, { signal });
+  audio.addEventListener("timeupdate", paint, { signal });
+  audio.addEventListener("play", onPlay, { signal });
+  audio.addEventListener("pause", onStop, { signal });
+  audio.addEventListener("ended", onStop, { signal });
+  audio.addEventListener("error", fail, { once: true, signal });
+  // 重绘接上一个正在播（或播到一半）的元素：照它现在的样子画，不从 0:00 开始。
+  paint();
+  if (!audio.paused) onPlay();
   wave.addEventListener("click", (event) => {
     const rect = wave.getBoundingClientRect();
     if (Number.isFinite(audio.duration) && rect.width > 0) {
@@ -807,7 +840,8 @@ export function loadingCard(predictionId?: string): HTMLElement {
   return h(
     "section",
     { class: "card" },
-    head("Atlas Cloud", badge("Checking", { spinner: true })),
+    // 不写 Checking：设计稿里 Checking 只给「不确定有没有提交」那一种状态（11-11 Claude D2）。
+    head("Atlas Cloud", badge("Loading", { spinner: true })),
     predictionId
       ? h("div", { class: "rows" }, row("Task", shortId(predictionId), { mono: true, title: predictionId }))
       : null

@@ -64,6 +64,20 @@ export const modelSearchOutputSchema = {
   models: z.array(modelSummarySchema),
 };
 
+// atlas_search_docs：文档页在前，模型列表沿用 modelSearchOutputSchema 的字段，老客户端读到的不变。
+export const docsSearchOutputSchema = {
+  ...modelSearchOutputSchema,
+  docs: z.array(
+    z.object({
+      title: z.string(),
+      url: z.string(),
+      description: z.string(),
+      snippet: z.string(),
+    })
+  ),
+  docs_error: z.string().optional(),
+};
+
 export const modelPageLimitSchema = z
   .number()
   .int()

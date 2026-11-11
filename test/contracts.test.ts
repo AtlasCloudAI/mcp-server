@@ -104,6 +104,9 @@ test("stdio exposes all 19 tools with exact annotations and output schemas", asy
       for (const field of ["count", "total_count", "offset", "has_more", "models"]) {
         assert.ok(outputRequired.includes(field), `${toolName} output must require ${field}`);
       }
+      if (toolName === "atlas_search_docs") {
+        assert.ok(outputRequired.includes("docs"), "atlas_search_docs output must require docs");
+      }
     }
   } finally {
     await client.close();

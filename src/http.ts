@@ -44,6 +44,7 @@ import {
 } from "./http/tool-call-analytics.js";
 import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
 import { MEDIA_NAME_REDIS_PREFIX } from "./services/media-names.js";
+import { prewarmDocSearch } from "./services/doc-search.js";
 import {
   challengeUnauthenticated,
   createPreAuthRateLimiter,
@@ -443,6 +444,8 @@ export async function startHttpServer(
         ? `; tool-call analytics on (environment=${config.analytics.environment})`
         : "; tool-call analytics off (POSTHOG_KEY not set)")
   );
+  // 文档搜索第一次要把几十篇正文读进缓存，放在启动时做，第一个用户不用等。
+  if (process.env.MCP_DOCS_PREWARM !== "off") prewarmDocSearch();
 
   const close = async (): Promise<void> => {
     readiness.stop();

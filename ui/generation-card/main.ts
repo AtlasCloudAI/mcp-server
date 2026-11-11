@@ -21,7 +21,7 @@ import {
   keepImageRatio,
   newIdempotencyKey,
 } from "./card.js";
-import { type CardActions, type ViewOptions, errorCard, loadingCard, renderCard, tickTimers } from "./view.js";
+import { type CardActions, type ViewOptions, button, errorCard, h, loadingCard, renderCard, tickTimers } from "./view.js";
 import {
   type QuoteState,
   createQuoteActions,
@@ -181,7 +181,7 @@ function render(force = false): void {
   renderedKey = key;
   let view: HTMLElement;
   if (history && historyOpts && !card && !pendingId) view = renderHistory(history, historyOpts, historyActions);
-  else if (history) view = h2(backLink(closeDetail), card ? renderCard(card, opts, actions) : loadingCard(pendingId));
+  else if (history) view = h2(backLink(closeDetail), card ? withReusePrompt(renderCard(card, opts, actions)) : loadingCard(pendingId));
   else if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
   else if (card) view = renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
@@ -511,6 +511,29 @@ function h2(...children: HTMLElement[]): HTMLElement {
   const box = document.createElement("div");
   box.append(...children);
   return box;
+}
+
+/**
+ * 历史单条下面的「Reuse prompt」（设计 11-10 第 11 项，原来叫「重新生成」）：把这一单的提示词发回对话，请模型
+ * 重新报价，不直接再跑一单。要宿主能替用户发消息；Cursor、Codex 这类不能的不放这个按钮。
+ */
+function withReusePrompt(detail: HTMLElement): HTMLElement {
+  // 看宿主真实的能力，不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
+  if (hostCaps().message === undefined || !card) return detail;
+  const item = history?.data.items.find((entry) => entry.prediction_id === (pendingId ?? card?.prediction_id));
+  const prompt = item?.prompt;
+  if (!prompt) return detail;
+  const model = item.model_name ?? item.model_id;
+  const sample = history?.data.sample === true;
+  const reuse = button("Reuse prompt", "secondary", () => {
+    if (sample) setNotice("This is a sample card, so nothing was sent.");
+    else sendForUser(app, say.reusePrompt(userLang(app), model, prompt), setNotice);
+  });
+  // 放进结果卡自己的按钮行（Download、View request 旁边）；没有按钮行的状态（生成中、失败）单独一行。
+  const row = detail.querySelector(".actions");
+  if (row) row.append(reuse);
+  else detail.append(h("div", { class: "actions" }, reuse));
+  return detail;
 }
 
 function historyOptions() {

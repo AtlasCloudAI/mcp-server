@@ -242,6 +242,8 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
   let filter: AssetFilter | undefined = FILTER_VALUES.has(data.media_type) ? data.media_type : undefined;
   let locked = data.locked === true;
   let loading = false;
+  // 不能全屏的客户端（Cursor 这类）分页看，不再「Load more」越拉越长（设计 11-10 第 9 项）。从 0 开始。
+  let page = 0;
   let using = false;
   let error: string | undefined;
   /**
@@ -436,6 +438,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     const keepQuery = next.clearQuery ? undefined : next.text !== undefined ? next.text.trim() || undefined : data.query;
     if (sample) {
       filter = next.filter;
+      if (!next.append) page = 0;
       const words = keepQuery?.toLowerCase();
       data = {
         ...data,
@@ -454,6 +457,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     error = undefined;
     reconnect = undefined;
     filter = next.filter;
+    if (!next.append) page = 0;
     changed();
     try {
       const result = await deps.app.callServerTool({
@@ -721,6 +725,36 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     );
   }
 
+  /** 分页模式：第 p 页在 items 里的起止。第一页的第一格是上传格时少放一个资产。 */
+  function pageRange(p: number, perPage: number, withUpload: boolean): [number, number] {
+    const first = perPage - (withUpload ? 1 : 0);
+    const start = p === 0 ? 0 : first + (p - 1) * perPage;
+    return [start, start + (p === 0 ? first : perPage)];
+  }
+
+  /** 翻页条：「‹  Page 2  ›」。下一页还没取到就先去取，取到再翻过去。 */
+  function pager(perPage: number, withUpload: boolean): HTMLElement | null {
+    const [, end] = pageRange(page, perPage, withUpload);
+    const hasNext = end < data.items.length || Boolean(data.next_cursor);
+    if (page === 0 && !hasNext) return null;
+    const go = (target: number) => {
+      page = target;
+      changed();
+    };
+    const next = async () => {
+      const [, nextEnd] = pageRange(page + 1, perPage, withUpload);
+      if (nextEnd > data.items.length && data.next_cursor) await query({ filter, append: true });
+      if (pageRange(page + 1, perPage, withUpload)[0] < data.items.length) go(page + 1);
+    };
+    return h(
+      "div",
+      { class: "asset-pager", role: "navigation", "aria-label": "Asset pages" },
+      h("button", { type: "button", class: "asset-page-btn", "aria-label": "Previous page", disabled: page === 0 || loading, onclick: () => go(page - 1) }, "‹"),
+      h("span", { class: "asset-page-label" }, loading ? "Loading…" : `Page ${page + 1}`),
+      h("button", { type: "button", class: "asset-page-btn", "aria-label": "Next page", disabled: !hasNext || loading, onclick: () => void next() }, "›")
+    );
+  }
+
   function footer(opts: LibraryViewOptions, shown: number): HTMLElement | null {
     const n = selected.size;
     const handed = handedOffNow();
@@ -728,7 +762,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     const left = h("span", { class: "asset-count" }, n > 0 ? `${n} selected` : `Pick up to ${data.max_pick}`);
     const buttons: (HTMLElement | null)[] = [];
     if (!opts.fullscreen && more > 0 && opts.canExpand) buttons.push(button("View all", "secondary", deps.expand));
-    else if ((opts.fullscreen || !opts.canExpand) && data.next_cursor) {
+    else if (opts.fullscreen && data.next_cursor) {
       buttons.push(button(loading ? "Loading…" : "Load more", "secondary", () => void query({ filter, append: true }), { disabled: loading }));
     }
     if (handed) buttons.push(button("Added to chat", "primary", () => undefined, { disabled: true }));
@@ -746,7 +780,18 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     const frozen = handedOffNow();
     // 上传格占网格的第一格：对话里还是两行，资产少露一个。
     const withUpload = canUpload() && data.items.length > 0;
-    const shown = opts.fullscreen || !opts.canExpand ? data.items : data.items.slice(0, inlineTiles() - (withUpload ? 1 : 0));
+    const paged = !opts.fullscreen && !opts.canExpand;
+    const perPage = inlineTiles();
+    // 选中项被筛掉、或这一页因为换了筛选不存在了：回到还有东西的最后一页。
+    while (paged && page > 0 && pageRange(page, perPage, withUpload)[0] >= data.items.length) page--;
+    const withUploadHere = withUpload && (!paged || page === 0);
+    const shown = opts.fullscreen
+      ? data.items
+      : paged
+        ? data.items.slice(...pageRange(page, perPage, withUpload))
+        : data.items.slice(0, perPage - (withUpload ? 1 : 0));
+    // 最后一页不满时补空格：卡片高度不变，底部的「Use N selected」不跟着跳。
+    const filler = paged && page > 0 ? Math.max(0, perPage - shown.length) : 0;
     const notice = deps.noticeText();
     const title = h("div", { class: "head" }, h("p", { class: opts.fullscreen ? "title-lg" : "title" }, "Asset Library"));
     if (locked) {
@@ -766,7 +811,13 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     }
     const body =
       data.items.length > 0
-        ? h("ul", { class: "asset-grid" }, withUpload ? uploadTile(frozen) : null, ...shown.map((item) => tile(item, frozen)))
+        ? h(
+            "ul",
+            { class: "asset-grid" },
+            withUploadHere ? uploadTile(frozen) : null,
+            ...shown.map((item) => tile(item, frozen)),
+            ...Array.from({ length: filler }, () => h("li", { class: "asset-slot", "aria-hidden": "true" }))
+          )
         : loading
           ? h("p", { class: "desc" }, "Loading your assets…")
           : error
@@ -791,6 +842,7 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       data.items.length === 0 && !filter && !data.query && !loading ? null : tabs(),
       body,
       error ? h("p", { class: "note", role: "status" }, error) : null,
+      paged && data.items.length > 0 ? pager(perPage, withUpload) : null,
       data.items.length > 0 ? footer(opts, shown.length) : null,
       manualHandOff ? h("p", { class: "note" }, manualHandOff) : null,
       notice ? h("p", { class: "note", role: "status" }, notice) : null

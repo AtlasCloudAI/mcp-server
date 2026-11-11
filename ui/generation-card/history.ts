@@ -20,6 +20,8 @@ export interface HistoryCardItem {
   outputs: number;
   price_usd?: number;
   error?: string;
+  /** 「Reuse prompt」发回对话的提示词。 */
+  prompt?: string;
 }
 
 export interface HistoryCardData {

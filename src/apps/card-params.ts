@@ -172,3 +172,16 @@ export function inputsOf(params: Record<string, unknown> | undefined): ParamInpu
   }
   return urls.map((url, i) => ({ url, name: fileName(url, i), ...(fields.get(url) ? { field: fields.get(url) } : {}) }));
 }
+
+/**
+ * 地址认不出类型时（资产库临时地址没有扩展名，资产又没带 mime），按参数字段名猜：image / product_image /
+ * images 是图，video、audio 同理（11-03 第 9 轮问题 37）。服务端拼报价卡和卡片兜底拼报价卡都用它。
+ */
+export function kindFromField(field: string | undefined): "image" | "video" | "audio" | undefined {
+  if (!field) return undefined;
+  const name = field.toLowerCase();
+  if (/(^|_)(image|images|img|photo|frame)(_|$)|image_url|first_frame|last_frame/.test(name)) return "image";
+  if (/(^|_)(video|videos)(_|$)|video_url/.test(name)) return "video";
+  if (/(^|_)(audio|audios|voice|music)(_|$)|audio_url/.test(name)) return "audio";
+  return undefined;
+}

@@ -1095,6 +1095,44 @@ button.history-row:focus-visible {
   color: var(--ac-primary-bg);
 }
 
+/* 资产库分页（不能全屏的客户端，设计 11-10 第 9 项）：翻页条在网格下面，空格子撑住最后一页的高度。 */
+.asset-pager {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.asset-page-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ac-border);
+  border-radius: 8px;
+  background: var(--ac-surface);
+  color: var(--ac-text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.asset-page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.asset-page-label {
+  min-width: 64px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ac-text-2);
+}
+
+.asset-slot {
+  aspect-ratio: 1 / 1;
+  visibility: hidden;
+}
+
 .asset-foot {
   margin-top: 12px;
   padding-top: 12px;

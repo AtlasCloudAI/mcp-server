@@ -308,6 +308,7 @@ function historySample(): HistoryCardData {
       outputs: sample.outputs.length,
       ...(sample.price && state === "succeeded" ? { price_usd: Number.parseFloat(sample.price) } : {}),
       ...(variant === "failed" ? { error: "Upstream timeout" } : {}),
+      prompt: "A glass perfume bottle on wet black stone, soft rim light, studio product shot",
     };
   };
   const items = [

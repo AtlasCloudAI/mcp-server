@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { balanceResponseSchema } from "../response-schemas.js";
 import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
-import { inputsOf, positiveNumber, promptOf, settingsChips } from "./card-params.js";
+import { inputsOf, kindFromField, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
 import { rememberedMedia } from "../services/media-names.js";
@@ -60,12 +60,8 @@ function inputShapeOf(value: unknown): { ratio: string } | undefined {
  */
 function inputKind(url: string, field: string | undefined): CardMediaKind {
   const kind = cardMediaKind(url);
-  if (kind !== "other" || !field) return kind;
-  const name = field.toLowerCase();
-  if (/(^|_)(image|images|img|photo|frame)(_|$)|image_url|first_frame|last_frame/.test(name)) return "image";
-  if (/(^|_)(video|videos)(_|$)|video_url/.test(name)) return "video";
-  if (/(^|_)(audio|audios|voice|music)(_|$)|audio_url/.test(name)) return "audio";
-  return kind;
+  if (kind !== "other") return kind;
+  return kindFromField(field) ?? kind;
 }
 
 /** 报价卡上的「任务内容」和「输入素材」（需求文档 6.1）。 */

@@ -33,6 +33,8 @@ export interface HistoryCardItem {
   /** 实际扣费，来自历史接口的 billing.amount。 */
   price_usd?: number;
   error?: string;
+  /** 这一单的提示词，单条详情的「Reuse prompt」用（设计 11-10 第 11 项）。完整原文，最长 2000 字。 */
+  prompt?: string;
 }
 
 export interface HistoryCardData {
@@ -46,6 +48,19 @@ export interface HistoryCardData {
   items: HistoryCardItem[];
   /** 测试卡片的样例列表。 */
   sample?: boolean;
+}
+
+/** 「Reuse prompt」发回对话的提示词上限：够放下常见的长提示词，又不让卡片数据过大。 */
+const REUSE_PROMPT_MAX = 2000;
+
+/** 历史条目的完整提示词（「Reuse prompt」用），没有或不是字符串时为空。 */
+export function fullPrompt(item: HistoryItem): string | undefined {
+  const body = (item as Record<string, unknown>).requestBody;
+  if (body === null || typeof body !== "object") return undefined;
+  const prompt = (body as Record<string, unknown>).prompt;
+  if (typeof prompt !== "string" || !prompt.trim()) return undefined;
+  const text = prompt.trim();
+  return text.length > REUSE_PROMPT_MAX ? `${text.slice(0, REUSE_PROMPT_MAX - 1)}…` : text;
 }
 
 function billingAmount(item: HistoryItem): number | undefined {
@@ -66,6 +81,7 @@ export async function historyCardData(
     const model = byId.get(summary.model);
     const first = summary.outputs[0];
     const price = billingAmount(raw[index]!);
+    const prompt = fullPrompt(raw[index]!);
     return {
       prediction_id: summary.prediction_id,
       model_id: summary.model,
@@ -77,6 +93,7 @@ export async function historyCardData(
       outputs: summary.outputs.length,
       ...(price !== undefined ? { price_usd: price } : {}),
       ...(summary.error ? { error: summary.error } : {}),
+      ...(prompt ? { prompt } : {}),
     };
   });
   return {

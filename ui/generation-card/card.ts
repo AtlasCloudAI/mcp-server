@@ -1,6 +1,8 @@
 // 卡片数据：服务端放在工具结果 _meta["atlascloud/card"] 里（见 src/apps/generation-card.ts）。
 // 宿主没把 _meta 转过来时，从 structuredContent 推一份够用的。这里只放纯函数，测试直接引。
 
+import { inputsOf, kindFromField, promptOf, settingsChips } from "../../src/apps/card-params.js";
+
 export type CardMediaKind = "image" | "video" | "audio" | "3d" | "other";
 
 export interface CardMedia {
@@ -195,6 +197,20 @@ function quoteFromStructured(
   const args = Object.fromEntries(
     Object.entries(call.args ?? {}).filter(([name]) => !["confirmation_token", "confirmed", "idempotency_key"].includes(name))
   );
+  // Cursor 不转 _meta，卡片只能从这里拼（11-05/06 实测：报价卡只剩标题和价格）。提示词、参数和输入素材按服务端
+  // 同一套规则从报价里的实际参数取；工具没回参数时用这次调用的参数。素材名字没有服务端记的那么全，只看地址。
+  const params = record(structured.params) ?? record(args.params) ?? args;
+  const prompt = promptOf(params);
+  const firstInput = Array.isArray(structured.input_images) ? record(structured.input_images[0]) : undefined;
+  const settings = settingsChips(
+    params,
+    typeof firstInput?.ratio === "string" ? { ratio: firstInput.ratio } : undefined,
+    typeof structured.kind === "string" ? structured.kind : undefined
+  );
+  const inputs = inputsOf(params).map(({ field, ...input }) => {
+    const kind = kindOfUrl(input.url);
+    return { ...input, kind: kind !== "other" ? kind : kindFromField(field) ?? kind };
+  });
   return {
     state: "quote",
     prediction_id: "",
@@ -216,20 +232,22 @@ function quoteFromStructured(
             ...(structured.estimate_partial === true ? { partial: true } : {}),
             ...(structured.estimate_reason === "settles_on_usage" ? { settles_on_usage: true } : {}),
             ...billingAccountOf(structured.billing_account),
-            settings: [],
+            settings,
+            ...(prompt ? { prompt } : {}),
+            ...(inputs.length > 0 ? { inputs } : {}),
           },
         }
       : {}),
   };
 }
 
-function billingAccountOf(raw: unknown): { account?: { name: string; email?: string; type?: string; balance_usd?: number } } {
+// 不带邮箱：设计稿 v3（11-10）扣费行只写「名字 · Personal」，和服务端拼的报价卡一致。
+function billingAccountOf(raw: unknown): { account?: { name: string; type?: string; balance_usd?: number } } {
   const account = record(raw);
   if (!account || typeof account.name !== "string") return {};
   return {
     account: {
       name: account.name,
-      ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
       ...(typeof account.type === "string" ? { type: account.type } : {}),
       ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
     },

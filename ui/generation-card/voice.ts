@@ -93,6 +93,11 @@ export const say = {
       ? "刚才的生成失败了。请重新给我报个价，我可能想先改点东西。"
       : "That generation failed. Please give me a new quote for it; I may want to change something first.";
   },
+  reusePrompt(lang: Lang, model: string, prompt: string): string {
+    return lang === "zh"
+      ? `用同样的提示词再生成一次（上次用的是 ${model}），先给我报价：\n\n${prompt}`
+      : `Generate this again with the same prompt (last time it was ${model}), and quote it first:\n\n${prompt}`;
+  },
   failedSwitchModel(lang: Lang): string {
     return lang === "zh"
       ? "刚才的生成失败了。请换一个模型做同样的需求。"

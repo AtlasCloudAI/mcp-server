@@ -261,6 +261,40 @@ test("卡片前端：宿主丢了 _meta 时用工具名和参数拼报价卡；�
   assert.equal(submitted?.state, "running");
 });
 
+test("卡片前端：Cursor 不转 _meta，兜底报价卡也有提示词、参数和输入素材，扣费行不带邮箱（设计 11-10 第 10 项）", () => {
+  const card = cardFromToolResult(
+    {
+      structuredContent: {
+        status: "confirmation_required",
+        model_id: "bytedance/seedance-2.5/image-to-video",
+        model_name: "Seedance 2.5 Image-to-Video",
+        kind: "video",
+        confirmation_token: "c2.x",
+        idempotency_key: "k-1",
+        confirmation_valid_seconds: 3600,
+        estimated_cost_usd: 1.52,
+        params: {
+          prompt: "A slow push-in on the product",
+          image: "https://cdn.example.com/u/sneaker-front.jpg",
+          resolution: "720p",
+          duration: 5,
+        },
+        billing_account: { name: "Lucas Zhu", user_email: "lucas@example.com", type: "personal", available_usd: 38.8 },
+      },
+    },
+    { tool: "atlas_generate_video", args: { model: "bytedance/seedance-2.5/image-to-video", params: {} } }
+  );
+  assert.equal(card?.quote?.prompt, "A slow push-in on the product");
+  assert.ok(card?.quote?.settings.includes("720p"), `settings: ${card?.quote?.settings}`);
+  assert.ok(card?.quote?.settings.includes("5 s"), `settings: ${card?.quote?.settings}`);
+  assert.deepEqual(
+    card?.quote?.inputs?.map((input) => [input.name, input.kind]),
+    [["sneaker-front.jpg", "image"]]
+  );
+  assert.equal(card?.quote?.account?.name, "Lucas Zhu");
+  assert.equal((card?.quote?.account as Record<string, unknown> | undefined)?.email, undefined);
+});
+
 test("卡片前端：报价过期判断、初始状态、金额两位小数", () => {
   const base = { tool: "t", arguments: {}, idempotency_key: "k", confirmation_token: "c", settings: [] };
   assert.equal(quoteExpired({ ...base, expires_at: new Date(Date.now() - 1000).toISOString() }), true);
@@ -561,7 +595,8 @@ test("卡片前端：宿主丢了 _meta 时，报价兜底也带上扣费账户�
     },
     { tool: "atlas_generate_video", args: VIDEO_ARGS }
   );
-  assert.deepEqual(card?.quote?.account, { name: "Ada Lovelace", email: "ada@example.com", balance_usd: -1.25 });
+  // 设计稿 v3（11-10）扣费行不写邮箱，兜底和服务端拼的报价卡一致。
+  assert.deepEqual(card?.quote?.account, { name: "Ada Lovelace", balance_usd: -1.25 });
   assert.equal(card?.quote?.settles_on_usage, true);
 });
 

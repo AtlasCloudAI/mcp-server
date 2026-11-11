@@ -328,18 +328,25 @@ async function mountCard(slot, tool, args, caller = callTool) {
   iframe.className = "card-frame";
   slot.replaceChildren(iframe);
 
+  // Cursor（11-05/06 真机实测）：只能内嵌、不能代发消息、不能把选择告诉模型。
+  // ?nometa=1 再模拟它不把工具结果的 _meta 转给卡片（报价卡只能从 structuredContent 兜底）。样例卡的数据只在
+  // _meta 里，所以默认不去掉，否则资产库、历史这些样例都是空的。
+  const cursor = s.host === "cursor";
+  const dropMeta = new URLSearchParams(location.search).get("nometa") === "1";
   const hostContext = {
     theme: s.theme,
-    platform: "web",
+    platform: cursor ? "desktop" : "web",
     displayMode: "inline",
-    availableDisplayModes: ["inline", "fullscreen"],
+    availableDisplayModes: cursor ? ["inline"] : ["inline", "fullscreen"],
     locale: "en-US",
     containerDimensions: { maxWidth: s.width },
   };
   const bridge = new AppBridge(
     null,
-    { name: s.host === "claude" ? "Claude" : "ChatGPT", version: "1.0.0" },
-    { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} }, updateModelContext: { text: {} } },
+    { name: s.host === "claude" ? "Claude" : cursor ? "Cursor" : "ChatGPT", version: "1.0.0" },
+    cursor
+      ? { openLinks: {}, serverTools: {}, downloadFile: {} }
+      : { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} }, updateModelContext: { text: {} } },
     { hostContext }
   );
   bridge.onsizechange = ({ height }) => {
@@ -380,7 +387,12 @@ async function mountCard(slot, tool, args, caller = callTool) {
     await bridge.sendToolInput({ arguments: args });
     try {
       const result = await caller(tool, args);
-      await bridge.sendToolResult(result);
+      if (dropMeta) {
+        const { _meta, ...withoutMeta } = result ?? {};
+        await bridge.sendToolResult(withoutMeta);
+      } else {
+        await bridge.sendToolResult(result);
+      }
       log(`${tool}`, args, "→", result?._meta?.["atlascloud/card"]?.state ?? "no card data");
     } catch (error) {
       log(`${tool} failed`, String(error));

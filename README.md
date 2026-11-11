@@ -164,7 +164,7 @@ If you'd rather use Skills than MCP, we also ship an [Atlas Cloud Skills](https:
 | `atlas_chat` | Chat with LLM models (OpenAI-compatible format) |
 | `atlas_get_prediction` | Check status and result of image/video/audio/3D generation tasks |
 | `atlas_get_balance` | Get the account balance and credit summary for your API key |
-| `atlas_get_model_usage` | Get daily model usage (requests, tokens, image/video counts) over a date range |
+| `atlas_get_model_usage` | Get daily model usage (requests, tokens, image/video counts) and spend; defaults to the last 7 days including today |
 | `atlas_get_model_costs` | Get daily model cost (spend) buckets over a date range |
 
 ## Usage Examples

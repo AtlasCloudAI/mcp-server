@@ -146,7 +146,7 @@ goose mcp add atlascloud -- npx -y atlascloud-mcp
 | `atlas_chat` | 与大语言模型对话（兼容 OpenAI 格式） |
 | `atlas_get_prediction` | 查询图片/视频/音频/3D 生成任务的状态和结果 |
 | `atlas_get_balance` | 查询你的 API Key 对应账户余额与额度概览 |
-| `atlas_get_model_usage` | 查询某时间范围内每日的模型用量（请求数、token、图片/视频数量） |
+| `atlas_get_model_usage` | 查询每日的模型用量（请求数、token、图片/视频数量）和花费；不填日期时查最近 7 天（含今天） |
 | `atlas_get_model_costs` | 查询某时间范围内每日的模型费用（支出）分布 |
 
 ## 使用示例

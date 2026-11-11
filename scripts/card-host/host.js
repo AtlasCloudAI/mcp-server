@@ -59,7 +59,7 @@ const VARIANTS = [
 ];
 
 // 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，
-// 选文件后真的走 XHR 上传。卡片换新地址（调 atlas_get_upload_url）时给一张 ok 的地址。
+// 选文件后真的走 XHR 上传。卡片换新地址（调 atlas_open_upload_card）时给一张 ok 的地址。
 const UPLOAD_MOCKS = {
   "upload-ok": "ok",
   // 存进资产库（资产库二期）：传完带资产编号，卡上显示「Saved to Asset Library」。
@@ -112,7 +112,7 @@ function mockUploadCaller(mode) {
 //   assets-signed-out    卡片自己第一次调工具（换筛选、点 Use）时 Atlas 登录失效，点 Reconnect 后正常
 const ASSET_MOCKS = {
   "assets-pick": { tool: "atlas_search_assets", empty: false },
-  "upload-from-library": { tool: "atlas_get_upload_url", empty: false },
+  "upload-from-library": { tool: "atlas_open_upload_card", empty: false },
   "assets-empty-upload": { tool: "atlas_search_assets", empty: true },
   "assets-signed-out": { tool: "atlas_search_assets", empty: false, signedOut: true },
 };
@@ -124,7 +124,7 @@ function mockAssetsCaller(empty, signedOut = false) {
   return async (name, args) => {
     // 第一次是宿主把卡片打开那次调用；卡片自己的第一次调用被挡下。
     if (signedOut && calls++ === 1) throw chatgptStyleError("Connector authorization required");
-    if (name === "atlas_get_upload_url") return upload();
+    if (name === "atlas_open_upload_card") return upload();
     if (name === "atlas_search_assets") {
       const result = await callTool("atlas_card_selftest", { variant: empty ? "assets_empty" : "assets" });
       const data = { ...result._meta["atlascloud/assets"] };
@@ -328,7 +328,8 @@ async function mountCard(slot, tool, args, caller = callTool) {
   iframe.className = "card-frame";
   slot.replaceChildren(iframe);
 
-  // Cursor（11-05/06 真机实测）：只能内嵌、不能代发消息、不能把选择告诉模型。
+  // Cursor（11-05/06、11-11 真机实测）：只能内嵌；握手不声明 message / updateModelContext，但实际处理这两个请求
+  // （Higgsfield 的上传卡在 Cursor 里能把 media_id 发回对话）。所以下面只是不声明，处理器照挂。
   // ?nometa=1 再模拟它不把工具结果的 _meta 转给卡片（报价卡只能从 structuredContent 兜底）。样例卡的数据只在
   // _meta 里，所以默认不去掉，否则资产库、历史这些样例都是空的。
   const cursor = s.host === "cursor";
@@ -448,7 +449,7 @@ async function renderAll() {
     if (only && only !== label) continue;
     const pane = hostFrame(`mock · ${label}`);
     grid.append(pane);
-    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_upload_url", {}, mockUploadCaller(mode)));
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_open_upload_card", {}, mockUploadCaller(mode)));
   }
   if (!only || only === "poll") {
     const pane = hostFrame("mock · running → refresh → result");

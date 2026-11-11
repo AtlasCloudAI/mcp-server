@@ -409,13 +409,13 @@ export function assetErrorText(error: unknown): string {
     if (error.statusCode === 401 && /does not accept scoped access tokens/i.test(error.message)) {
       return (
         "Error: The Asset Library isn't available to this Atlas Cloud connection yet. " +
-        "Ask the user to upload the file with atlas_get_upload_url or share a public link instead."
+        "Upload the file instead (atlas_get_upload_url when you can read the file, otherwise atlas_open_upload_card so the user picks it in a card) or ask the user for a public link."
       );
     }
     if (assetLibraryLocked(error)) {
       return (
         "Error: The user's Asset Library isn't activated yet. It turns on after they add balance at " +
-        `${BILLING_URL}. Until then, ask them to upload the file from their device with atlas_get_upload_url.`
+        `${BILLING_URL}. Until then, get the file from their device another way: upload it (atlas_get_upload_url when you can read the file, otherwise atlas_open_upload_card so they pick it in a card).`
       );
     }
     if (error.statusCode === 403 && /scope/i.test(error.message)) {
@@ -534,8 +534,8 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
         if (items.length === 0) {
           lines.push(
             query || media_type || cursor
-              ? "No assets match. Try other words or no filter, or ask the user to upload the file with atlas_get_upload_url."
-              : "The Asset Library is empty. Ask the user to upload the file with atlas_get_upload_url."
+              ? "No assets match. Try other words or no filter, or upload it (atlas_get_upload_url when you can read the file, otherwise atlas_open_upload_card so they pick it in a card)."
+              : "The Asset Library is empty. Get the file another way: upload it (atlas_get_upload_url when you can read the file, otherwise atlas_open_upload_card so they pick it in a card)."
           );
         }
         items.forEach((item, index) => lines.push(...describe(item, index)));

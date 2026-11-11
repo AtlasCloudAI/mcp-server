@@ -7,6 +7,7 @@
 // 发完提示一句，不然用户以为点了没反应。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { noteMessageFailed, withTimeout } from "./handoff.js";
 
 export type Lang = "zh" | "en";
 
@@ -107,11 +108,17 @@ export const say = {
 
 /** 替用户发一句话。宿主拒绝时提示自己去聊天里说；在 Claude 里发完提示点发送。 */
 export function sendForUser(app: App, text: string, notice: (text: string) => void): void {
-  app
-    .sendMessage({ role: "user", content: [{ type: "text", text }] })
+  // 宿主没声明也照样试（Cursor 不声明但能发，2026-11-11）；没声明的加超时。
+  withTimeout(app.sendMessage({ role: "user", content: [{ type: "text", text }] }), app.getHostCapabilities?.()?.message !== undefined)
     .then((res) => {
-      if (res.isError) notice(hostPrefills(app) ? PREFILL_ASK_NOTE : SEND_FAILED_NOTE);
-      else if (hostPrefills(app)) notice(PREFILLED_NOTE);
+      if (res.isError) {
+        noteMessageFailed(app);
+        notice(hostPrefills(app) ? PREFILL_ASK_NOTE : SEND_FAILED_NOTE);
+      } else if (hostPrefills(app)) notice(PREFILLED_NOTE);
     })
-    .catch(() => notice(SEND_FAILED_NOTE));
+    .catch(() => {
+      noteMessageFailed(app);
+      notice(SEND_FAILED_NOTE);
+    });
 }
+

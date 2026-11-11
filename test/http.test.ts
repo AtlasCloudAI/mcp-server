@@ -429,12 +429,19 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     let uploadPath = "";
     try {
       const { tools } = await client.listTools();
-      const tool = tools.find((entry) => entry.name === "atlas_get_upload_url");
+      // 上传卡是单独的兜底工具（2026-11-11 Cursor）：atlas_get_upload_url 不挂卡片，只给模型自己传。
+      const plain = tools.find((entry) => entry.name === "atlas_get_upload_url");
+      assert.equal((plain?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri, undefined);
+      const selfUpload = await client.callTool({ name: "atlas_get_upload_url", arguments: { filename_hint: "ref.png" } });
+      assert.equal(selfUpload._meta?.["atlascloud/upload"], undefined);
+      assert.match((selfUpload.content as Array<{ text?: string }>)[0]?.text ?? "", /curl/);
+
+      const tool = tools.find((entry) => entry.name === "atlas_open_upload_card");
       const resourceUri = (tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri;
       assert.match(String(resourceUri), /^ui:\/\/atlascloud\/generation-card-/);
       assert.equal(tool?._meta?.["openai/widgetAccessible"], true);
 
-      const minted = await client.callTool({ name: "atlas_get_upload_url", arguments: {} });
+      const minted = await client.callTool({ name: "atlas_open_upload_card", arguments: {} });
       const card = minted._meta?.["atlascloud/upload"] as Record<string, unknown>;
       assert.equal(card.view, "upload");
       assert.equal(card.upload_url, (minted.structuredContent as { upload_url: string }).upload_url);

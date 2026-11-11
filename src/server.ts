@@ -11,7 +11,7 @@ import { registerModelTools } from "./tools/models.js";
 import { registerPredictionTools } from "./tools/predictions.js";
 import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 import { registerUploadTools } from "./tools/upload.js";
-import { registerUploadUrlTool } from "./tools/upload-url.js";
+import { registerUploadCardTool, registerUploadUrlTool } from "./tools/upload-url.js";
 import { registerVideoTools } from "./tools/video.js";
 import { TOOL_POLICIES } from "./tool-policy.js";
 import {
@@ -91,6 +91,8 @@ export function createAtlasCloudServer(
     if (profile === "stdio" || rendersCards(client.clientId)) {
       registerCardStatusTool(server);
       registerCardCheckTool(server);
+      // 上传卡是兜底：模型读得到文件时用 atlas_get_upload_url 自己传（2026-11-11 Cursor）。
+      registerUploadCardTool(server);
       // 测试卡片只在开发环境用，生产永远不注册。
       const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
       if (selftest === "1" || selftest === "true" || selftest === "on") {

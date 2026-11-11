@@ -6,7 +6,7 @@ import {
   issueUploadTicketFromContext,
 } from "../services/upload-ticket.js";
 import { currentClientProfile, type ClientProfile } from "../services/client-profile.js";
-import { toolAnnotations } from "../tool-policy.js";
+import { CARD_TOOL_POLICIES, toolAnnotations } from "../tool-policy.js";
 import {
   clientRendersCards,
   generationCardEnabled,
@@ -54,34 +54,138 @@ function uploadNotes(profile: ClientProfile): string[] {
   return notes;
 }
 
+const UPLOAD_OUTPUT_SCHEMA = {
+  upload_url: z.string().url(),
+  method: z.literal("POST"),
+  filename_header: z.string(),
+  expires_at: z.string(),
+  max_bytes: z.number().int().positive(),
+  max_video_bytes: z.number().int().positive().optional(),
+  saves_to_asset_library: z.boolean(),
+  curl_example: z.string(),
+};
+
+type UploadResult = {
+  isError?: true;
+  _meta?: Record<string, unknown>;
+  structuredContent?: Record<string, unknown>;
+  content: Array<{ type: "text"; text: string }>;
+};
+
+/**
+ * 签一张上传票，拼好 curl 指引。两个工具共用：atlas_get_upload_url 只给模型自己传，
+ * atlas_open_upload_card 在会显示卡片的客户端里把同一张票交给上传卡。
+ */
+async function issueUpload(filenameHint: string | undefined, withCard: boolean): Promise<UploadResult | {
+  structuredContent: Record<string, unknown>;
+  cardMeta: Record<string, unknown>;
+  sizeLine: string;
+  text: string;
+}> {
+  // 开着「上传存进资产库」时先查资产库能不能用（要充值后才开通）；能用才签存进资产库的票。
+  const library = getRequestContext()?.libraryUpload ? await assetLibraryAvailable() : false;
+  const issued = await issueUploadTicketFromContext({ library });
+  if (!issued) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text:
+            "Error: upload URLs are only issued by the hosted Atlas MCP server. " +
+            "In a local (stdio) setup, use atlas_upload_media with the file path instead.",
+        },
+      ],
+    };
+  }
+  const name = exampleFilename(filenameHint);
+  const curlExample = [
+    `curl -sS --max-time 180 -w "\\nHTTP %{http_code}\\n" -X POST "${issued.uploadUrl}"`,
+    `  -H "Content-Type: application/octet-stream"`,
+    `  -H "${UPLOAD_FILENAME_HEADER}: ${name}"`,
+    `  --data-binary @"/path/to/${name}"`,
+  ].join(" \\\n");
+  const expiresAt = new Date(issued.expiresAt).toISOString();
+  const megabytes = Math.floor(issued.maxBytes / 1_048_576);
+  const sizeLine = issued.maxVideoBytes
+    ? `images and audio up to ${megabytes} MB, videos and 3D models up to ${Math.floor(issued.maxVideoBytes / 1_048_576)} MB`
+    : `${megabytes} MB`;
+  const cardMeta = withCard && generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: uploadCardData(issued) } } : {};
+  const structuredContent = {
+    upload_url: issued.uploadUrl,
+    method: "POST" as const,
+    filename_header: UPLOAD_FILENAME_HEADER,
+    expires_at: expiresAt,
+    max_bytes: issued.maxBytes,
+    ...(issued.maxVideoBytes ? { max_video_bytes: issued.maxVideoBytes } : {}),
+    saves_to_asset_library: issued.library,
+    curl_example: curlExample,
+  };
+  const text = [
+    "# Upload URL",
+    "",
+    `- **Expires**: ${expiresAt}`,
+    issued.maxVideoBytes
+      ? `- **Max size**: ${issued.maxBytes} bytes for images and audio, ${issued.maxVideoBytes} bytes for videos and 3D models (${sizeLine})`
+      : `- **Max size**: ${issued.maxBytes} bytes (${megabytes} MB)`,
+    ...(issued.library
+      ? [
+          "- **Saved to**: the user's Asset Library. The returned `url` lasts about 15 minutes; if it expires, call atlas_use_assets with the returned `asset_id`.",
+          ...(issued.maxImagePixels ? [`- **Images**: up to ${Math.floor(issued.maxImagePixels / 1_000_000)} MP; larger ones are rejected, so resize them first`] : []),
+          "- **If the Asset Library is full**: the response is HTTP 413 `upload_quota_exceeded` with a `fallback_upload_url`. POST the same file there: it still works for this request but isn't saved to the Asset Library, so tell the user.",
+        ]
+      : []),
+    `- **Method**: POST the raw bytes; file name in the \`${UPLOAD_FILENAME_HEADER}\` header`,
+    "",
+    "```bash",
+    curlExample,
+    "```",
+    "",
+    "The response is JSON with `url`; use it as the media URL in a generation tool. " +
+      "For larger files, ask the user for a public link instead.",
+    "",
+    ...uploadNotes(currentClientProfile()),
+  ].join("\n");
+  return { structuredContent, cardMeta, sizeLine, text };
+}
+
+const RETURNS = `Returns:
+  upload_url, method, filename_header, expires_at, max_bytes, max_video_bytes (when uploads go to the Asset Library), saves_to_asset_library, curl_example.`;
+
+const UPLOAD_RULES = `Rules:
+  - One URL serves several files until it expires (about 10 minutes); do not request a new one per file.
+  - Uploads are free; nothing is billed until a generation is submitted with the returned URL.
+  - Files larger than max_bytes are rejected with 413; when max_video_bytes is present, it is the limit for videos and 3D files and max_bytes is the limit for images and audio. Ask the user to host larger files elsewhere and give you a public link.
+  - Only report a file as uploaded when the response contained "url". If the command fails, say so and offer the public-link fallback.
+  - When saves_to_asset_library is true, uploads are saved in the user's Asset Library and the returned url is temporary (about 15 minutes); if it has expired, call atlas_use_assets with the asset_id. For an image the upload response also gives width, height, orientation and ratio, so there is no need to call atlas_use_assets just to learn its shape. Otherwise uploaded files are temporary inputs for generation, not permanent hosting.`;
+
+/**
+ * 模型自己传：拿到地址后在命令行里 curl。2026-11-11 在 Cursor 里，旧版说明让会显示卡片的客户端
+ * 都去等上传卡，模型手里有本地路径也让用户去卡片里再选一遍。Higgsfield 也是同样的拆法：
+ * media_upload 是默认路径，media_upload_widget 只兜底。
+ */
 export function registerUploadUrlTool(server: McpServer): void {
   server.registerTool(
     "atlas_get_upload_url",
     {
       title: "Get Upload URL",
-      description: `Get a short-lived URL that accepts a local file and returns a public Atlas media URL, for use as the image/audio URL parameter of generation tools.
+      description: `Get a short-lived URL that accepts a file and returns a public Atlas media URL, for use as the image/video/audio URL parameter of generation tools.
 
-Use this when the user has a local file (product photo, reference image, audio to transcribe) and the target model needs a URL. The hosted MCP server cannot read files on the user's machine; this URL lets you push the bytes yourself.
+This is the default path for any file whose bytes you can read: a path on this machine (in a coding agent such as Cursor, Codex or Claude Code) or a file in your code sandbox. Upload it yourself; do not ask the user to pick or attach the file again. The hosted MCP server cannot read files on the user's machine; this URL lets you push the bytes yourself.
 
 Steps:
   1. Call this tool. It returns upload_url, expires_at and max_bytes.
   2. POST the raw file bytes to upload_url with the file name (keep the extension) in the ${UPLOAD_FILENAME_HEADER} header. The curl_example in the result is ready to run.
   3. The response JSON has "url" (and "asset_id" when the file was saved to the user's Asset Library). Pass that URL to atlas_generate_image, atlas_generate_video, atlas_generate_audio, atlas_transcribe_audio or atlas_quick_generate.
 
-In chat apps that show Atlas cards (ChatGPT, Claude), the result opens an upload card instead: the user picks their files in the card and the card uploads them and hands you the URLs. Call this tool when the task needs the user's own image, video or audio and you have no URL for it yet; then wait for the user to add the files in the card.
+Only when you cannot read the file (it is only on the user's device), cannot run commands, or the upload failed, call atlas_open_upload_card instead (in apps that show Atlas cards) so the user can pick the file there.
 
-Rules:
-  - One URL serves several files until it expires (about 10 minutes); do not request a new one per file.
-  - Uploads are free; nothing is billed until a generation is submitted with the returned URL.
-  - Files larger than max_bytes are rejected with 413; when max_video_bytes is present, it is the limit for videos and 3D files and max_bytes is the limit for images and audio. Ask the user to host larger files elsewhere and give you a public link.
-  - Only report a file as uploaded when the response contained "url". If the command fails, say so and offer the public-link fallback.
-  - When saves_to_asset_library is true, uploads are saved in the user's Asset Library and the returned url is temporary (about 15 minutes); if it has expired, call atlas_use_assets with the asset_id. For an image the upload response also gives width, height, orientation and ratio, so there is no need to call atlas_use_assets just to learn its shape. Otherwise uploaded files are temporary inputs for generation, not permanent hosting.
+${UPLOAD_RULES}
 
 Args:
   - filename_hint (string, optional): the file name you intend to upload; only used to fill in curl_example.
 
-Returns:
-  upload_url, method, filename_header, expires_at, max_bytes, max_video_bytes (when uploads go to the Asset Library), saves_to_asset_library, curl_example.`,
+${RETURNS}`,
       inputSchema: {
         filename_hint: z
           .string()
@@ -92,97 +196,51 @@ Returns:
             "File name (with extension) you intend to upload; only used to fill in curl_example"
           ),
       },
-      outputSchema: {
-        upload_url: z.string().url(),
-        method: z.literal("POST"),
-        filename_header: z.string(),
-        expires_at: z.string(),
-        max_bytes: z.number().int().positive(),
-        max_video_bytes: z.number().int().positive().optional(),
-        saves_to_asset_library: z.boolean(),
-        curl_example: z.string(),
-      },
+      outputSchema: UPLOAD_OUTPUT_SCHEMA,
       annotations: toolAnnotations("atlas_get_upload_url"),
-      // 卡片打开时挂上传卡；卡片里的「Upload again」也调这个工具换一张新地址。
-      ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ filename_hint }) => {
-      // 开着「上传存进资产库」时先查资产库能不能用（要充值后才开通）；能用才签存进资产库的票。
-      const library = getRequestContext()?.libraryUpload ? await assetLibraryAvailable() : false;
-      const issued = await issueUploadTicketFromContext({ library });
-      if (!issued) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                "Error: upload URLs are only issued by the hosted Atlas MCP server. " +
-                "In a local (stdio) setup, use atlas_upload_media with the file path instead.",
-            },
-          ],
-        };
+      const issued = await issueUpload(filename_hint, false);
+      if ("content" in issued) return issued;
+      return { structuredContent: issued.structuredContent, content: [{ type: "text", text: issued.text }] };
+    }
+  );
+}
+
+/**
+ * 上传卡（兜底）：只注册给会显示卡片的客户端。卡片里「Upload again」和资产库的上传格也调它换新地址。
+ */
+export function registerUploadCardTool(server: McpServer): void {
+  server.registerTool(
+    "atlas_open_upload_card",
+    {
+      title: "Open Upload Card",
+      description: `Fallback for getting the user's own image, video or audio into Atlas: opens an upload card in the chat where the user picks files on their device and the card uploads them.
+
+Use it only when you cannot upload the file yourself with atlas_get_upload_url: the file is not readable from your shell or sandbox (it is only on the user's device), you cannot run commands or reach the network, or the upload command failed. If you can read the file, use atlas_get_upload_url instead and do not open this card. Files the user attached in a ChatGPT chat go through atlas_import_chat_files instead.
+
+Call it as the only tool in that turn. Briefly tell the user to add their files in the card, then wait: when they press "Use files", the uploaded URLs (and Asset Library IDs) arrive in a new message or in your context. Do not ask the user to attach the files in the chat.
+
+${UPLOAD_RULES}
+
+${RETURNS}`,
+      inputSchema: {},
+      outputSchema: UPLOAD_OUTPUT_SCHEMA,
+      annotations: { ...CARD_TOOL_POLICIES.atlas_open_upload_card.annotations },
+      // 卡片里的「Upload again」、资产库上传格也调这个工具换一张新地址。
+      ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
+    },
+    async () => {
+      const issued = await issueUpload(undefined, true);
+      if ("content" in issued) return issued;
+      // 客户端不显示卡片（不该发生：只注册给显示卡片的客户端）时，退回给模型 curl 指引。
+      if (!clientRendersCards(server)) {
+        return { ...issued.cardMeta, structuredContent: issued.structuredContent, content: [{ type: "text", text: issued.text }] };
       }
-      const name = exampleFilename(filename_hint);
-      const curlExample = [
-        `curl -sS --max-time 180 -w "\\nHTTP %{http_code}\\n" -X POST "${issued.uploadUrl}"`,
-        `  -H "Content-Type: application/octet-stream"`,
-        `  -H "${UPLOAD_FILENAME_HEADER}: ${name}"`,
-        `  --data-binary @"/path/to/${name}"`,
-      ].join(" \\\n");
-      const expiresAt = new Date(issued.expiresAt).toISOString();
-      const megabytes = Math.floor(issued.maxBytes / 1_048_576);
-      const sizeLine = issued.maxVideoBytes
-        ? `images and audio up to ${megabytes} MB, videos and 3D models up to ${Math.floor(issued.maxVideoBytes / 1_048_576)} MB`
-        : `${megabytes} MB`;
-      const cardMeta = generationCardEnabled() ? { _meta: { [UPLOAD_META_KEY]: uploadCardData(issued) } } : {};
-      const structuredContent = {
-        upload_url: issued.uploadUrl,
-        method: "POST" as const,
-        filename_header: UPLOAD_FILENAME_HEADER,
-        expires_at: expiresAt,
-        max_bytes: issued.maxBytes,
-        ...(issued.maxVideoBytes ? { max_video_bytes: issued.maxVideoBytes } : {}),
-        saves_to_asset_library: issued.library,
-        curl_example: curlExample,
-      };
-      // 客户端会渲染卡片：用户在卡片里传，模型不用（ChatGPT 里也没法）自己跑 curl。
-      if (clientRendersCards(server)) {
-        return {
-          ...cardMeta,
-          structuredContent,
-          content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${sizeLine}.` }],
-        };
-      }
-      const text = [
-        "# Upload URL",
-        "",
-        `- **Expires**: ${expiresAt}`,
-        issued.maxVideoBytes
-          ? `- **Max size**: ${issued.maxBytes} bytes for images and audio, ${issued.maxVideoBytes} bytes for videos and 3D models (${sizeLine})`
-          : `- **Max size**: ${issued.maxBytes} bytes (${megabytes} MB)`,
-        ...(issued.library
-          ? [
-              "- **Saved to**: the user's Asset Library. The returned `url` lasts about 15 minutes; if it expires, call atlas_use_assets with the returned `asset_id`.",
-              ...(issued.maxImagePixels ? [`- **Images**: up to ${Math.floor(issued.maxImagePixels / 1_000_000)} MP; larger ones are rejected, so resize them first`] : []),
-              "- **If the Asset Library is full**: the response is HTTP 413 `upload_quota_exceeded` with a `fallback_upload_url`. POST the same file there: it still works for this request but isn't saved to the Asset Library, so tell the user.",
-            ]
-          : []),
-        `- **Method**: POST the raw bytes; file name in the \`${UPLOAD_FILENAME_HEADER}\` header`,
-        "",
-        "```bash",
-        curlExample,
-        "```",
-        "",
-        "The response is JSON with `url`; use it as the media URL in a generation tool. " +
-          "For larger files, ask the user for a public link instead.",
-        "",
-        ...uploadNotes(currentClientProfile()),
-      ].join("\n");
       return {
-        ...cardMeta,
-        structuredContent,
-        content: [{ type: "text", text }],
+        ...issued.cardMeta,
+        structuredContent: issued.structuredContent,
+        content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${issued.sizeLine}.` }],
       };
     }
   );

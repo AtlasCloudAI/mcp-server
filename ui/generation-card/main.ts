@@ -8,7 +8,7 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
-import { handOff } from "./handoff.js";
+import { handOff, messagingAvailable } from "./handoff.js";
 import {
   type CardData,
   type CardMedia,
@@ -79,7 +79,8 @@ function viewOptions(): ViewOptions {
   const sample = card?.sample === true;
   return {
     canRefresh: sample || caps.serverTools !== undefined,
-    canMessage: sample || caps.message !== undefined,
+    // 不按握手声明判断：Cursor 不声明但能发（2026-11-11）。真试过失败才不再摆这些按钮。
+    canMessage: sample || messagingAvailable(),
     stalled: stalled || card?.sample_stalled === true,
     signedOut: signedOut || card?.sample_signed_out === true,
     refreshing,
@@ -518,8 +519,8 @@ function h2(...children: HTMLElement[]): HTMLElement {
  * 重新报价，不直接再跑一单。要宿主能替用户发消息；Cursor、Codex 这类不能的不放这个按钮。
  */
 function withReusePrompt(detail: HTMLElement): HTMLElement {
-  // 看宿主真实的能力，不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
-  if (hostCaps().message === undefined || !card) return detail;
+  // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
+  if (!messagingAvailable() || !card) return detail;
   const item = history?.data.items.find((entry) => entry.prediction_id === (pendingId ?? card?.prediction_id));
   const prompt = item?.prompt;
   if (!prompt) return detail;
@@ -702,7 +703,7 @@ async function switchToUpload(): Promise<void> {
     return;
   }
   try {
-    const result = await app.callServerTool({ name: "atlas_get_upload_url", arguments: {} });
+    const result = await app.callServerTool({ name: "atlas_open_upload_card", arguments: {} });
     const data = result.isError ? undefined : uploadFromToolResult(result);
     if (!data) throw new Error("bad result");
     startUploader(data);

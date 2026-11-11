@@ -11,7 +11,8 @@ import { TRANSFER_NEXT_STEP } from "../src/tools/llm.js";
 import { cardFromToolResult } from "../ui/generation-card/card.js";
 
 const HERMES = "https://nousresearch.github.io/hermes-agent/docs/oauth/client-metadata.json";
-const CARD_ONLY = ["atlas_card_status", "atlas_card_check_submission", "atlas_card_selftest"];
+// atlas_open_upload_card：上传卡是兜底，不显示卡片的客户端只用 atlas_get_upload_url 自己传（2026-11-11）。
+const CARD_ONLY = ["atlas_card_status", "atlas_card_check_submission", "atlas_card_selftest", "atlas_open_upload_card"];
 
 async function toolNames(clientId: string): Promise<string[]> {
   const server = createAtlasCloudServer("remote", { clientId });

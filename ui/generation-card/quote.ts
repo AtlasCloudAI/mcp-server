@@ -23,6 +23,7 @@ import {
   typeLabel,
 } from "./card.js";
 import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
+import { withTimeout } from "./handoff.js";
 import { say, sendForUser, userLang } from "./voice.js";
 
 const CHECK_TOOL = "atlas_card_check_submission";
@@ -470,14 +471,14 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
  * 免得它再报一次价、或者把用户后面那句「好了吗」当成没提交。
  */
 function tellModel(app: App, quoteCard: CardData | undefined, submitted: CardData): void {
-  if (app.getHostCapabilities()?.updateModelContext === undefined) return;
   const price = priceLabel(quoteCard?.quote);
   const text =
     `The user approved the Atlas Cloud quote in the card` +
     (price ? ` (${modelLabel(submitted)}, about ${price})` : ` (${modelLabel(submitted)})`) +
     `. The card submitted it as prediction ${submitted.prediction_id} and is tracking it, so do not ` +
     `submit it again. Call atlas_get_prediction with this ID if the user asks about the result.`;
-  void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
+  // 宿主没声明也试（Cursor 不声明但处理这个请求，2026-11-11），失败就算了：报价结果里的说明兜底。
+  void withTimeout(app.updateModelContext({ content: [{ type: "text", text }] }), app.getHostCapabilities()?.updateModelContext !== undefined).catch(() => undefined);
 }
 
 /** 卡片里确认了、但这一单没开始时，告诉模型为什么（每种都没扣钱）。 */
@@ -497,13 +498,14 @@ const NOT_STARTED: Partial<Record<QuotePhase, string>> = {
  */
 function tellModelNotStarted(app: App, card: CardData | undefined, state: QuoteState): void {
   const reason = NOT_STARTED[state.phase];
-  if (!reason || app.getHostCapabilities()?.updateModelContext === undefined) return;
+  if (!reason) return;
   const detail = state.phase === "error" && state.message ? ` (${readableReason(state.message)})` : "";
   const text =
     `The user pressed Confirm on the Atlas Cloud quote in the card for ${card ? modelLabel(card) : "this job"}, ` +
     `but it did not start: ${reason}${detail}. Nothing was charged. Do not say it is still waiting for the user's ` +
     `confirmation; tell them what is needed, and quote again only if they ask.`;
-  void app.updateModelContext({ content: [{ type: "text", text }] }).catch(() => undefined);
+  // 宿主没声明也试（Cursor 不声明但处理这个请求，2026-11-11），失败就算了：报价结果里的说明兜底。
+  void withTimeout(app.updateModelContext({ content: [{ type: "text", text }] }), app.getHostCapabilities()?.updateModelContext !== undefined).catch(() => undefined);
 }
 
 /** 核实时按哪个模型找：卡片上的模型 ID，没有就用报价参数里的。 */

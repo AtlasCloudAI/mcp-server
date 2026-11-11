@@ -13,7 +13,7 @@ import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
 
 export const UPLOAD_META_KEY = "atlascloud/upload";
-const UPLOAD_TOOL = "atlas_get_upload_url";
+const UPLOAD_TOOL = "atlas_open_upload_card";
 
 export type UploadKind = "image" | "video" | "audio" | "other";
 export type UploadStatus = "queued" | "uploading" | "saving" | "done" | "invalid" | "failed";

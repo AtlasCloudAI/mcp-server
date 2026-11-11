@@ -817,9 +817,9 @@ export function renderQuoteCard(
         ? badge("Estimate only", { warn: true })
         : badge("Needs confirmation");
 
-  // 设计稿：价格下面一行「Estimated · valid for 9:42」；提交中只写 Estimated。
+  // 设计稿 v3：价格下面一行「Estimated · USD · quote valid for 9:42」；提交中不写有效期。
   const timer = busy ? null : countdown(quote);
-  const validity = timer ? [" · valid for ", timer] : [];
+  const validity = timer ? [" · quote valid for ", timer] : [];
   const amount =
     price === null
       ? [
@@ -828,7 +828,7 @@ export function renderQuoteCard(
         ]
       : [
           h("p", { class: "quote-price" }, quote?.partial ? `≈ ${price}` : price),
-          h("p", { class: "note quote-note" }, estimateNote(quote, template), ...validity),
+          h("p", { class: "note quote-note" }, withCurrency(estimateNote(quote, template)), ...validity),
         ];
 
   // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
@@ -867,6 +867,11 @@ function notice(opts: ViewOptions): HTMLElement | null {
   return opts.notice ? h("p", { class: "note", role: "status" }, opts.notice) : null;
 }
 
+/** 设计稿 v3：「Estimated · USD · …」，币种紧跟在 Estimated 后面；别的说法（部分估算）放在句尾。 */
+function withCurrency(note: string): string {
+  return /^Estimated(?: ·|$)/.test(note) ? note.replace(/^Estimated/, "Estimated · USD") : `${note} · USD`;
+}
+
 /** 价格下面那行：为什么是预估。 */
 function estimateNote(quote: QuoteInfo | undefined, template = false): string {
   if (quote?.partial) {
@@ -882,18 +887,18 @@ function estimateNote(quote: QuoteInfo | undefined, template = false): string {
 const ACCOUNT_TYPE_LABEL: Record<string, string> = { personal: "Personal", team: "Team", organization: "Team" };
 
 /**
- * 底部一行「Billed to Ada Lovelace · ada@example.com · Personal      Balance $24.60」。
+ * 底部一行「Billed to Ada Lovelace · Personal      Balance $24.60」。设计稿 v3（11-10）去掉了邮箱：对话可能被分享。
  * 账户类型要写出来：授权页和控制台都说费用从个人账户扣、和官网当前选的团队无关，确认扣费的地方也要看得到。
  * short：余额不够这一单时余额标红（余额不足卡）。没有账户、也没有余额就不画。
  */
 function billingLine(account: QuoteInfo["account"], balance: number | undefined, short = false): HTMLElement | null {
   if (!account && balance === undefined) return null;
   const kind = account?.type ? ACCOUNT_TYPE_LABEL[account.type.toLowerCase()] ?? account.type : null;
-  const label = account ? (account.email ? `${account.name} · ${account.email}` : account.name) : null;
+  const label = account ? account.name : null;
   return h(
     "div",
     { class: "billing" },
-    // 账户类型单独一段、不参与截断：地方不够时只截邮箱，「Personal」总能看到。
+    // 账户类型单独一段、不参与截断：地方不够时只截名字，「Personal」总能看到。
     label
       ? h(
           "span",

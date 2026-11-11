@@ -32,7 +32,8 @@ export function requestedRatio(params: Record<string, unknown> | undefined): str
  */
 export function settingsChips(
   params: Record<string, unknown> | undefined,
-  inputShape?: { ratio: string }
+  inputShape?: { ratio: string },
+  kind?: string
 ): string[] {
   if (!params) return [];
   const chips: string[] = [];
@@ -69,18 +70,23 @@ export function settingsChips(
     chips.push(fromImage);
   }
 
-  for (const key of ["num_images", "max_images", "n", "count"]) {
-    const n = positiveNumber(params[key]);
-    if (n !== undefined && n > 1) {
-      chips.push(`${n} images`);
-      break;
-    }
-  }
+  const count = ["num_images", "max_images", "n", "count"]
+    .map((key) => positiveNumber(params[key]))
+    .find((n) => n !== undefined);
 
   // 只认布尔 true：Wan 的 audio 也可能是一条音频链接。
   if ([params.generate_audio, params.audio, params.enable_audio, params.sound].some((v) => v === true)) {
     chips.push("Audio");
   }
+
+  // 设计稿（对话内组件 v3，11-10）：参数行最后一个是数量，「1 image」「1 video」，一张也写。
+  // 知道是图还是视频时总是带上，并保证不被截掉；不知道时照旧只在多张时写「N images」。
+  const noun = kind === "image" || kind === "video" ? kind : undefined;
+  if (noun) {
+    const n = count ?? 1;
+    return [...chips.slice(0, 4), `${n} ${noun}${n === 1 ? "" : "s"}`];
+  }
+  if (count !== undefined && count > 1) chips.push(`${count} images`);
   return chips.slice(0, 5);
 }
 
@@ -111,11 +117,24 @@ export interface ParamInput {
 
 const MAX_INPUTS = 8;
 
+// 生成结果存进历史时的文件名：32 位任务号 + 短哈希，比如 6032bfc4…175b7c-713f8561dbef66aa.jpeg。
+const GENERATED_NAME = /^[0-9a-f]{32}-[0-9a-f]{8,}\.(\w+)$/i;
+// 上传、转存后只剩随机编号的文件名（UUID、长十六进制）：给用户看没有意义。
+const RANDOM_NAME = /^[0-9a-f-]{24,}(?:\.\w+)?$/i;
+const VIDEO_EXT = /^(mp4|mov|webm|m4v)$/i;
+const AUDIO_EXT = /^(mp3|wav|m4a|aac|ogg|flac)$/i;
+
 function fileName(url: string, index: number): string {
   try {
     const last = new URL(url).pathname.split("/").pop() ?? "";
     const name = decodeURIComponent(last);
-    if (name && name.length <= 80) return name;
+    // 拿上一单的结果当输入（11-11 Claude C8）：名字写成任务号哈希，用户认不出是什么。
+    const generated = GENERATED_NAME.exec(name);
+    if (generated) {
+      const ext = generated[1]!;
+      return VIDEO_EXT.test(ext) ? "Generated video" : AUDIO_EXT.test(ext) ? "Generated audio" : "Generated image";
+    }
+    if (name && name.length <= 80 && !RANDOM_NAME.test(name)) return name;
   } catch {
     // 不是合法链接就用编号
   }

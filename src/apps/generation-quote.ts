@@ -130,13 +130,17 @@ export function generationResultCard(
         ...(content.estimate_partial === true ? { partial: true } : {}),
         ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
         ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
-        settings: settingsChips(params, inputShapeOf(content.input_images)),
+        settings: settingsChips(
+          params,
+          inputShapeOf(content.input_images),
+          typeof content.kind === "string" ? content.kind : modelType?.toLowerCase()
+        ),
         ...quoteTask(params),
         ...(account && typeof account.name === "string"
           ? {
+              // 不带邮箱：设计稿 v3（11-10）扣费行只写「名字 · Personal」，对话可能被分享，邮箱不该露在卡上。
               account: {
                 name: account.name,
-                ...(typeof account.user_email === "string" ? { email: account.user_email } : {}),
                 ...(typeof account.type === "string" ? { type: account.type } : {}),
                 ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
               },

@@ -232,7 +232,8 @@ const SETTINGS_SAMPLES: Record<string, string[]> = {
 };
 
 // 报价卡上的扣费账户和余额（需求文档 6.1），示例数字。
-const QUOTE_ACCOUNT = { name: "Ada Lovelace", email: "ada@example.com", type: "personal", balance_usd: 24.6 } as const;
+// 和真实报价一致：卡片不带邮箱（设计稿 v3，11-10）。
+const QUOTE_ACCOUNT = { name: "Ada Lovelace", type: "personal", balance_usd: 24.6 } as const;
 
 // 报价卡样例：参数照一单 Seedance 2.5 文生视频填，价格是示例数字。
 const QUOTE_SAMPLE = {
@@ -459,7 +460,7 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       account: { ...QUOTE_ACCOUNT },
       prompt: promptOf(base.params),
       inputs: inputsOf(base.params).map((input) => ({ ...input, kind: cardMediaKind(input.url), source })),
-      settings: settingsChips(base.params),
+      settings: settingsChips(base.params, undefined, template ? "image" : "video"),
       // 和真实报价一致：确认令牌 1 小时有效。
       valid_seconds: 3600,
       ...(sample.problem ? { problem: sample.problem } : {}),

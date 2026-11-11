@@ -108,7 +108,7 @@ test("报价结果拼成报价卡：确认要的东西齐全，参数里去掉�
   assert.equal(card?.quote?.idempotency_key, VIDEO_ARGS.idempotency_key);
   assert.equal(card?.quote?.confirmation_token, "c2.1793083000.abcdefghijklmnop");
   assert.equal(card?.quote?.estimated_usd, 1.514799);
-  assert.deepEqual(card?.quote?.settings, ["720p", "5 s", "16:9", "Audio"]);
+  assert.deepEqual(card?.quote?.settings, ["720p", "5 s", "16:9", "Audio", "1 video"]);
   const validFor = Date.parse(card!.quote!.expires_at!) - Date.now();
   assert.ok(validFor > 590_000 && validFor <= 600_000, `expires in ${validFor} ms`);
 });
@@ -119,7 +119,7 @@ test("快速生成的参数平铺在顶层，也能做出小标签", () => {
     { idempotency_key: "k", type: "Video", prompt: "x", duration: 8, aspect_ratio: "9:16" },
     { ...QUOTE_RESULT.structuredContent, estimated_cost_usd: undefined, estimate_partial: true }
   );
-  assert.deepEqual(card?.quote?.settings, ["8 s", "9:16"]);
+  assert.deepEqual(card?.quote?.settings, ["8 s", "9:16", "1 video"]);
   assert.equal(card?.quote?.estimated_usd, undefined);
   assert.equal(card?.quote?.partial, true);
 });
@@ -506,8 +506,9 @@ test("报价补上主要参数和扣费账户：文字和结构化结果都有�
     )({ ...VIDEO_ARGS, params: { prompt: "a paper boat" } }, {});
     const quote = (card._meta?.["atlascloud/card"] as { quote: Record<string, unknown> }).quote;
     // 参数标签按实际提交的参数，不按调用方给的（这里调用方没给分辨率）。
-    assert.deepEqual(quote.settings, ["720p", "5 s", "16:9"]);
-    assert.deepEqual(quote.account, { name: "Ada Lovelace", email: "ada@example.com", type: "personal", balance_usd: 8.5 });
+    assert.deepEqual(quote.settings, ["720p", "5 s", "16:9", "1 video"]);
+    // 设计稿 v3（11-10）：卡上只写名字和账户类型，不带邮箱。
+    assert.deepEqual(quote.account, { name: "Ada Lovelace", type: "personal", balance_usd: 8.5 });
     assert.equal(quote.settles_on_usage, true);
   } finally {
     restore();
@@ -705,4 +706,26 @@ test("卡片前端：确认时素材被删（素材失效）、Atlas 登录失�
   // ChatGPT 弹出连接、用户取消之后，卡片收到的原话（11-02 test 实测）。
   assert.deepEqual(failureState("Connector authorization required"), { phase: "signed_out" });
   assert.deepEqual(thrownFailureState(new Error("Connector authorization required")), { phase: "signed_out" });
+});
+
+test("参数行最后带数量：知道是图还是视频时总写，一张也写；五个标签时数量不被挤掉（设计稿 v3）", () => {
+  assert.deepEqual(settingsChips({ resolution: "2k", aspect_ratio: "1:1" }, undefined, "image"), ["2K", "1:1", "1 image"]);
+  assert.deepEqual(settingsChips({ num_images: 3 }, undefined, "image"), ["3 images"]);
+  assert.deepEqual(
+    settingsChips({ resolution: "1080p", size: "1920*1080", duration: 5, aspect_ratio: "16:9", generate_audio: true }, undefined, "video"),
+    ["1080p", "1920×1080", "5 s", "16:9", "1 video"]
+  );
+  // 不知道类型（文字版报价补参数）时照旧：一张不写，多张写「N images」。
+  assert.deepEqual(settingsChips({ duration: 5 }), ["5 s"]);
+  assert.deepEqual(settingsChips({ n: 2 }), ["2 images"]);
+});
+
+test("输入素材名：上一单的结果显示成 Generated image / video，随机编号显示成 Input N（11-11 Claude C8）", () => {
+  const names = inputsOf({
+    image: "https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a-x/u-y/s-z/6032bfc4f8c34174aa04655fca175b7c-713f8561dbef66aa.jpeg",
+    video: "https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a-x/u-y/s-z/0f66012b6d4d44d3ab7f876a610bf06a-437031df43e0f65a.mp4",
+    last_image: "https://cdn.example.com/up/3f2504e0-4f89-41d3-9a0c-0305e82c3301.png",
+    reference: "https://cdn.example.com/sneaker-front.jpg",
+  }).map((input) => input.name);
+  assert.deepEqual(names, ["Generated image", "Generated video", "Input 3", "sneaker-front.jpg"]);
 });

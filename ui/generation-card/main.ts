@@ -9,6 +9,7 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { handOff, messagingAvailable } from "./handoff.js";
+import { cardTransport } from "./echo-transport.js";
 import {
   type CardData,
   type CardMedia,
@@ -44,6 +45,8 @@ const MIN_POLL_GAP_MS = 3_000;
 
 const root = document.getElementById("root") as HTMLElement;
 const app = new App({ name: "Atlas Cloud generation card", version: "1.0.0" }, {}, { autoResize: true });
+// 带回声过滤的传输：WorkBuddy 会把卡片发出的消息原样弹回来（见 echo-transport.ts）。
+const transport = cardTransport();
 
 let card: CardData | undefined;
 let pendingId: string | undefined;
@@ -122,6 +125,7 @@ function diagnostics(): HTMLElement {
     `csp (this frame): ${cspOf(document)}`,
     `csp (parent frame): ${parentDoc ? cspOf(parentDoc) : "(cross-origin)"}`,
     `blocked: ${violations.length ? violations.join("; ") : "(none)"}`,
+    `echoes dropped: ${transport.dropped}`,
   ];
   const box = document.createElement("details");
   box.className = "diagnostics";
@@ -794,7 +798,7 @@ darkQuery?.addEventListener?.("change", systemTheme);
 setInterval(() => tickTimers(root), 1000);
 
 app
-  .connect()
+  .connect(transport)
   .then(() => {
     detectHost();
     applyContext(app.getHostContext());

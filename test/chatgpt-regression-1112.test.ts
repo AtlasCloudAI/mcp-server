@@ -7,7 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { reusableInputs } from "../src/apps/history-card.js";
 import { withGenerationCard } from "../src/apps/generation-quote.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
-import { rememberMediaName } from "../src/services/media-names.js";
+import { rememberAssetNames, rememberMediaName } from "../src/services/media-names.js";
 import { runWithRequestContext } from "../src/services/request-context.js";
 import type { HistoryItem } from "../src/response-schemas.js";
 import { withBillingRecord } from "../ui/generation-card/history.js";
@@ -79,6 +79,31 @@ test("历史条目的输入素材：资产库的写 asset://编号，公开链�
 
   const none = await reusableInputs({ ...item, requestBody: '{"prompt":"a cat"}' } as unknown as HistoryItem);
   assert.deepEqual(none, { inputs: [], unavailable: 0 });
+});
+
+test("历史里存的是资产引用：Seedance 的 asset://atlas-asset-… 原样交回，资产库的 assetd:// 改写成 asset://（11-12 复测）", async () => {
+  await rememberAssetNames([{ asset_id: "asset_abcdefgh5678", name: "vertical-apple.jpg" }]);
+  const seedance = {
+    ID: "e78404363c724d6c9e32611a16ec2c85",
+    model: "bytedance/seedance-2.5/image-to-video",
+    status: "failed",
+    requestBody: JSON.stringify({ image: "asset://atlas-asset-e069064e556f", prompt: "A man eating an apple", duration: 5 }),
+  } as unknown as HistoryItem;
+  assert.deepEqual(await reusableInputs(seedance), {
+    inputs: [{ name: "Input 1", ref: "asset://atlas-asset-e069064e556f", field: "image" }],
+    unavailable: 0,
+  });
+
+  const edit = {
+    ID: "f7dd9cbe692a47efa5e4c2d4f8d9319e",
+    model: "bytedance/seedream-v5.0-flash/edit",
+    status: "completed",
+    requestBody: { images: ["assetd://asset_abcdefgh5678", "https://atlas-media.oss-us-west-1.aliyuncs.com/u/b.png"], prompt: "Make the apple green" },
+  } as unknown as HistoryItem;
+  assert.deepEqual((await reusableInputs(edit)).inputs, [
+    { name: "vertical-apple.jpg", ref: "asset://asset_abcdefgh5678", field: "images" },
+    { name: "b.png", ref: "https://atlas-media.oss-us-west-1.aliyuncs.com/u/b.png", field: "images" },
+  ]);
 });
 
 const UI_MIME = "text/html;profile=mcp-app";

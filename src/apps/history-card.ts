@@ -1,7 +1,7 @@
 import { getModels } from "../services/doc-fetcher.js";
 import type { HistoryItem } from "../response-schemas.js";
 import { asRecord } from "../services/json-record.js";
-import { rememberedMedia } from "../services/media-names.js";
+import { rememberedMedia, rememberedMediaNames } from "../services/media-names.js";
 import { inputsOf } from "./card-params.js";
 import type { PredictionSummary } from "../tools/predictions.js";
 import {
@@ -85,15 +85,56 @@ export function fullPrompt(item: HistoryItem): string | undefined {
  */
 const SIGNED_URL = /[?&](?:x-oss-credential|x-oss-signature|ossaccesskeyid|signature|x-amz-signature|x-amz-credential)=/i;
 
+/**
+ * 请求里已经是资产引用的输入，历史里存的不一定是链接（11-12 复测：只认 http 链接时 Seedance 那单什么输入
+ * 都没带上）：
+ * - 资产库素材：插件和网站 Playground 提交时都换成 assetd://asset_…（library-references.ts）。交回给模型
+ *   写成 asset://asset_…，生成工具认这种写法（resolveAssetReferences），提交时再换回 assetd://。
+ * - Seedance：网关把输入登记成上游资产，存成 asset://atlas-asset-…（官网显示「预览不可用」）。提交时网关
+ *   自己认，原样交回。
+ */
+const ASSET_REF = /^(assetd|asset):\/\/([A-Za-z0-9._-]{4,128})$/;
+
+function assetRefsIn(params: Record<string, unknown> | undefined): HistoryCardInput[] {
+  if (!params) return [];
+  const out: HistoryCardInput[] = [];
+  const visit = (value: unknown, field: string, depth: number): void => {
+    if (out.length >= 10 || depth > 3) return;
+    if (typeof value === "string") {
+      const match = ASSET_REF.exec(value.trim());
+      const ref = match ? `asset://${match[2]}` : undefined;
+      if (ref && !out.some((input) => input.ref === ref)) {
+        out.push({ name: `Input ${out.length + 1}`, ref, field });
+      }
+    } else if (Array.isArray(value)) {
+      for (const entry of value) visit(entry, field, depth + 1);
+    } else {
+      const nested = asRecord(value);
+      if (nested) for (const entry of Object.values(nested)) visit(entry, field, depth + 1);
+    }
+  };
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "prompt" || key === "model") continue;
+    visit(value, key, 0);
+  }
+  return out;
+}
+
 /** 历史条目的输入素材 → 能交回给模型的引用。认不出编号的签名地址只计数。 */
 export async function reusableInputs(
   item: HistoryItem
 ): Promise<{ inputs: HistoryCardInput[]; unavailable: number }> {
   const params = asRecord((item as Record<string, unknown>).requestBody);
+  const refs = assetRefsIn(params);
+  if (refs.length > 0) {
+    // 资产库素材的名字：搜资产库时按编号记下过（media-names.ts，7 天），记得就用原名。
+    const names = await rememberedMediaNames(refs.map((input) => `asset:${input.ref.slice("asset://".length)}`));
+    for (const input of refs) input.name = names.get(`asset:${input.ref.slice("asset://".length)}`) ?? input.name;
+  }
   const found = inputsOf(params);
-  if (found.length === 0) return { inputs: [], unavailable: 0 };
+  if (found.length === 0) return { inputs: refs, unavailable: 0 };
   const remembered = await rememberedMedia(found.map((input) => input.url));
-  const inputs: HistoryCardInput[] = [];
+  const inputs: HistoryCardInput[] = [...refs];
   let unavailable = 0;
   for (const input of found) {
     const media = remembered.get(input.url);

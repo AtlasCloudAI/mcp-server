@@ -220,9 +220,15 @@ const TRACKING_CARD_NOTE =
   "atlas_get_prediction for it: tell the user it's generating and the card will show the result. " +
   "Check it only if the user asks about it later.";
 
-const QUOTE_CARD_NOTE =
-  "The Atlas card already shows this quote (model, settings, price and billing account) with a " +
-  "\"Confirm and generate\" button, so a single short sentence pointing the user to the card is " +
+// 报价没有金额时卡上写「Cost unavailable」、按钮是「Confirm anyway」（11-12 Claude R0：模型照着这里的
+// 「Confirm and generate」叫用户去点，卡上并没有这个按钮）。按钮名跟着卡片走。
+function confirmButtonOf(hasPrice: boolean): string {
+  return hasPrice ? "Confirm and generate" : "Confirm anyway";
+}
+
+const quoteCardNote = (hasPrice: boolean) =>
+  `The Atlas card already shows this quote (model, settings, ${hasPrice ? "price" : "a note that the price isn't available"} and billing account) with a ` +
+  `"${confirmButtonOf(hasPrice)}" button, so a single short sentence pointing the user to the card is ` +
   "enough: repeating the price or settings as a list duplicates the card. The settings and billing " +
   "account lines above are for apps without a card; here the card already shows them. This card is " +
   "the confirmation step, so a quote card, table, summary widget or confirm button drawn in your own " +
@@ -233,7 +239,8 @@ const QUOTE_CARD_NOTE =
   "returns the job the card already started rather than a second one. Some apps don't tell you " +
   "what happened on the card, so don't assume the quote is still waiting: if the user asks about it, " +
   "check atlas_list_predictions first: it also lists confirms that did not start, and why. A confirm " +
-  "the card could not start (for example, not enough balance) charged nothing.";
+  "the card could not start (for example, not enough balance) charged nothing." +
+  (hasPrice ? "" : " The price could not be estimated for this job: say so, and that confirming charges the model's standard rate.");
 
 // 报价正文和 withQuoteDetails 都叫模型「把模型、费用、参数展示给用户」，那是给没有卡片的客户端写的。
 // 卡片已经画出来时还这么说，ChatGPT 会在卡片下面再列一张参数表、写「等待确认」，用户在卡上确认后
@@ -247,13 +254,18 @@ const INCLUDE_SETTINGS_ASK = /\nInclude these settings[^.]*when showing the quot
 // content 里的文字块（上面的 QUOTE_CARD_NOTE）它看不到，照样自己画一张带「确认」按钮的报价卡，
 // 价格还按 estimated_cost_usd 的精度写成 US$0.000420（11-06 实测：content 里写的是 $0.0004）。
 // 同样的话再放进结构化结果的 card_note，价格那句也改成指向卡片。
-const QUOTE_CARD_NOTE_STRUCTURED =
-  "The Atlas card in this reply is the quote and the confirmation step: it shows the model, settings, price and " +
-  "billing account with a \"Confirm and generate\" button. Point the user to it in one short sentence. Do not " +
+const quoteCardNoteStructured = (hasPrice: boolean) =>
+  `The Atlas card in this reply is the quote and the confirmation step: it shows the model, settings, ${hasPrice ? "price" : "a note that the price isn't available"} and ` +
+  `billing account with a "${confirmButtonOf(hasPrice)}" button. Point the user to it in one short sentence. Do not ` +
   "draw your own quote card, table, summary widget or confirm button: it would be a second copy that does not " +
   "update after the user confirms, and a confirm button outside the Atlas card does not reach Atlas. If the " +
   "user confirms on the card, do not call a generation tool again; if they confirm in the chat instead, call " +
   "again with the same idempotency_key.";
+
+/** 报价里有没有估出这一单的金额（没有时卡上是「Cost unavailable」+「Confirm anyway」）。 */
+function hasEstimate(content: Record<string, unknown> | undefined): boolean {
+  return typeof content?.estimated_cost_usd === "number";
+}
 
 function withCardNote(structured: CallToolResult["structuredContent"]): CallToolResult["structuredContent"] {
   const content = record(structured);
@@ -262,7 +274,7 @@ function withCardNote(structured: CallToolResult["structuredContent"]): CallTool
   return {
     // status 和 card_note 排在最前面，模型读结构化结果时先看到。
     status: content.status,
-    card_note: QUOTE_CARD_NOTE_STRUCTURED,
+    card_note: quoteCardNoteStructured(hasEstimate(content)),
     ...content,
     ...(typeof price === "string" ? { price_to_tell_user: `${price} The Atlas card already shows the price: point the user to the card instead of repeating it.` } : {}),
   };
@@ -354,7 +366,7 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
       ...(onCard ? { structuredContent: withCardNote(result.structuredContent) } : {}),
       content: onCard
-        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: QUOTE_CARD_NOTE }]
+        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: quoteCardNote(hasEstimate(record(result.structuredContent))) }]
         : tracking
           ? [...result.content, { type: "text" as const, text: TRACKING_CARD_NOTE }]
           : result.content,

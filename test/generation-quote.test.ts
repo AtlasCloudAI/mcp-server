@@ -764,3 +764,24 @@ test("输入素材名：上一单的结果显示成 Generated image / video，�
   }).map((input) => input.name);
   assert.deepEqual(names, ["Generated image", "Generated video", "Input 3", "sneaker-front.jpg"]);
 });
+
+test("报价没有金额时（卡上 Cost unavailable + Confirm anyway），给模型的说明也叫 Confirm anyway（11-12 Jia R0）", async () => {
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  try {
+    const structured = { ...(QUOTE_RESULT.structuredContent as Record<string, unknown>) };
+    delete structured.estimated_cost_usd;
+    delete structured.price_to_tell_user;
+    const unpriced = await withGenerationCard(fakeServer(true), "atlas_generate_video", async () => ({
+      ...QUOTE_RESULT,
+      content: [...QUOTE_RESULT.content],
+      structuredContent: structured,
+    }))(VIDEO_ARGS, {});
+    const note = (unpriced.content[1] as { text: string }).text;
+    assert.match(note, /"Confirm anyway" button/);
+    assert.doesNotMatch(note, /Confirm and generate/);
+    assert.match(note, /price could not be estimated/);
+    assert.match(String((unpriced.structuredContent as Record<string, unknown>).card_note), /"Confirm anyway" button/);
+  } finally {
+    restore();
+  }
+});

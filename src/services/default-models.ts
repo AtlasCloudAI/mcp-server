@@ -134,7 +134,9 @@ export function defaultRouteGuidance(type: DefaultRouteType): string {
     `When it is missing from atlas_list_models or cannot take the inputs, the same variant of the next model in this order applies: ${fallbacks}. ` +
     DEFAULT_SETTINGS[type] +
     "The server fills in any of these settings the request leaves out; values the user asks for take precedence. " +
-    "A model the user names takes precedence, and tasks outside these variants are chosen from the catalog."
+    "A model the user names takes precedence, and tasks outside these variants are chosen from the catalog. " +
+    // 11-12 Claude（Jia P6）：参数是可选的，模型自己挑了模型也不写，报价卡就少了「Why this model」那行。
+    "Whenever you pick the model yourself (the user did not name one), also pass why_this_model: one short sentence on why it fits, shown on the quote card."
   );
 }
 
@@ -159,7 +161,8 @@ export function defaultRouteSummary(): string {
     DEFAULT_MODEL_ROUTES[type].map((entry) => entry.name).join(" → ");
   return (
     "When the user does not name a model, follow the default route in the generation tool descriptions " +
-    `(video: ${chain("Video")}; image: ${chain("Image")}) instead of picking by price. `
+    `(video: ${chain("Video")}; image: ${chain("Image")}) instead of picking by price, ` +
+    "and pass why_this_model with one short reason the quote card can show. "
   );
 }
 

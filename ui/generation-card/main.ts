@@ -111,6 +111,17 @@ function cspOf(doc: Document | undefined): string {
   }
 }
 
+function localStorageWorks(): boolean {
+  try {
+    const key = "atlas-card-storage-check";
+    window.localStorage.setItem(key, "1");
+    window.localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function diagnostics(): HTMLElement {
   let parentDoc: Document | undefined;
   try {
@@ -122,6 +133,8 @@ function diagnostics(): HTMLElement {
     `host: ${app.getHostVersion()?.name ?? "?"} ${app.getHostVersion()?.version ?? ""}`,
     `caps: ${Object.keys(hostCaps()).join(",") || "(none)"}`,
     `origin: ${location.origin}`,
+    // 上传卡切走对话再回来靠它恢复已传的文件（11-12 Jia U3）；不可用时卡片照旧，只是不恢复。
+    `storage: ${localStorageWorks() ? "localStorage ok" : "unavailable"}`,
     `csp (this frame): ${cspOf(document)}`,
     `csp (parent frame): ${parentDoc ? cspOf(parentDoc) : "(cross-origin)"}`,
     `blocked: ${violations.length ? violations.join("; ") : "(none)"}`,

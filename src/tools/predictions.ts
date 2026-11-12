@@ -143,7 +143,7 @@ Args:
   - model_prefix (string, optional): a whole family, e.g. "google/nano-banana-2"
 
 Returns:
-  total, page, size, has_more and the predictions on this page.
+  total, page, size, has_more, charged_total_usd (the sum of charged_usd over the predictions on this page) and the predictions on this page. When the user asks what several tasks cost together, quote charged_total_usd (or add up charged_usd exactly) rather than estimating.
 
 Notes:
   - Status values are the platform's own ("completed", "failed", "processing", ...); filter with "state" rather than matching status strings yourself.
@@ -179,6 +179,8 @@ Notes:
         page: z.number().int().positive(),
         size: z.number().int().positive(),
         has_more: z.boolean(),
+        // 这一页实扣合计：11-12 Claude（Jia P4）自己把 $0.0011 + $0.018 + $0.018 加成了 $0.0191。
+        charged_total_usd: z.number().nonnegative(),
         predictions: z.array(
           z.object({
             prediction_id: z.string(),
@@ -207,6 +209,9 @@ Notes:
         const predictions = result.data.items.map(summarizeHistoryItem);
         const total = result.data.total;
         const hasMore = page * size < total;
+        // 按分以下的精度累加再四舍五入到 6 位，免得浮点误差带出一串尾数。
+        const chargedTotal =
+          Math.round(predictions.reduce((sum, prediction) => sum + (prediction.charged_usd ?? 0), 0) * 1e6) / 1e6;
 
         const lines = [`# Predictions (page ${page}, ${predictions.length} of ${total})`, ""];
         if (predictions.length === 0) lines.push("No tasks match these filters.");
@@ -227,6 +232,9 @@ Notes:
           if (prediction.error) lines.push(`   error: ${prediction.error}`);
         });
         lines.push("");
+        if (predictions.some((prediction) => prediction.charged_usd !== undefined)) {
+          lines.push(`Charged on this page in total: ${formatUsd(chargedTotal)}.`);
+        }
         lines.push(
           hasMore
             ? `More pages available: call again with page=${page + 1}.`
@@ -246,7 +254,7 @@ Notes:
 
         return {
           ...(history ? { _meta: { [HISTORY_META_KEY]: history } } : {}),
-          structuredContent: { total, page, size, has_more: hasMore, predictions },
+          structuredContent: { total, page, size, has_more: hasMore, charged_total_usd: chargedTotal, predictions },
           content: [{ type: "text", text: lines.join("\n") }],
         };
       } catch (error) {

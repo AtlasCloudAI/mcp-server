@@ -317,6 +317,63 @@ async function imageInfo(file: File): Promise<{ thumb: string; width: number; he
   }
 }
 
+/**
+ * 传好的文件记在浏览器本地（按这张卡的上传地址分开）。11-12 Claude（Jia U3）：选好文件、还没点 Use 就切到
+ * 别的对话，回来卡片重新加载、恢复成初始状态，选的文件全丢了。MCP Apps 没有给卡片存状态的接口，宿主每次都
+ * 用同一份工具结果重开卡片，所以用这张卡自己的上传地址当键。存不了（沙箱禁了本地存储）就照旧不恢复。
+ */
+const SAVED_PREFIX = "atlas-upload-card:";
+const SAVED_TTL_MS = 24 * 60 * 60_000;
+// data URL 缩略图太大就不存，恢复时没有缩略图只显示图标。
+const SAVED_THUMB_MAX = 40_000;
+
+interface SavedUploads {
+  at: number;
+  items: Array<Pick<UploadItem, "name" | "size" | "kind" | "url" | "asset_id" | "saved" | "thumb" | "shape">>;
+  handedOff: string;
+  libraryFull?: { quota_bytes?: number };
+}
+
+function storage(): Storage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+export function loadSavedUploads(key: string, now = Date.now(), store = storage()): SavedUploads | undefined {
+  try {
+    const raw = store?.getItem(key);
+    if (!raw) return undefined;
+    const saved = JSON.parse(raw) as SavedUploads;
+    if (!saved || !Array.isArray(saved.items) || typeof saved.at !== "number" || now - saved.at > SAVED_TTL_MS) return undefined;
+    return saved;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveUploads(key: string, saved: SavedUploads, store = storage()): void {
+  try {
+    if (!store) return;
+    if (saved.items.length === 0) {
+      store.removeItem(key);
+      return;
+    }
+    store.setItem(key, JSON.stringify(saved));
+    // 顺手清掉过期的记录。
+    for (let i = store.length - 1; i >= 0; i -= 1) {
+      const other = store.key(i);
+      if (!other || !other.startsWith(SAVED_PREFIX) || other === key) continue;
+      const old = loadSavedUploads(other, saved.at, store);
+      if (!old) store.removeItem(other);
+    }
+  } catch {
+    // 存满了或被禁：不影响上传本身。
+  }
+}
+
 export function createUploader(initial: UploadCardData, deps: UploaderDeps): Uploader {
   let data = initial;
   let version = 0;
@@ -363,8 +420,38 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   const sample = initial.sample === true;
 
   const caps = () => deps.app.getHostCapabilities() ?? {};
+  // 这张卡的本地记录：键用第一次拿到的上传地址（换新地址后照旧用这个）。样例卡不存。
+  const savedKey = !sample && initial.upload_url ? `${SAVED_PREFIX}${initial.upload_url}` : undefined;
+  if (savedKey && items.length === 0) {
+    const saved = loadSavedUploads(savedKey);
+    if (saved) {
+      items = saved.items.map((item) => ({ ...item, id: `r${nextId++}`, status: "done" as const, progress: 1 }));
+      handedOff = saved.handedOff;
+      libraryFull = saved.libraryFull;
+    }
+  }
+  function persist(): void {
+    if (!savedKey) return;
+    const done = items.filter((i) => i.status === "done" && i.url);
+    saveUploads(savedKey, {
+      at: Date.now(),
+      items: done.map((i) => ({
+        name: i.name,
+        size: i.size,
+        kind: i.kind,
+        url: i.url,
+        ...(i.asset_id ? { asset_id: i.asset_id } : {}),
+        ...(i.saved ? { saved: true } : {}),
+        ...(i.thumb && i.thumb.length <= SAVED_THUMB_MAX ? { thumb: i.thumb } : {}),
+        ...(i.shape ? { shape: i.shape } : {}),
+      })),
+      handedOff,
+      ...(libraryFull ? { libraryFull } : {}),
+    });
+  }
   const changed = () => {
     version += 1;
+    persist();
     deps.render();
   };
 
@@ -931,6 +1018,14 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     );
   }
 
+  /** 这次传的文件没进资产库（资产库这会儿用不了）：卡上说一句，免得用户以为存了（11-12 Jia U4）。 */
+  function notSavedNote(): HTMLElement | null {
+    // 不看 data.library：签了存资产库的票、文件却没带回资产编号时也要说。空间满了有自己的那句。
+    if (libraryFull) return null;
+    if (!items.some((i) => i.status === "done" && !i.asset_id)) return null;
+    return h("p", { class: "note" }, "These files weren't saved to your Asset Library. You can still use them for this request.");
+  }
+
   function libraryFullNote(): HTMLElement | null {
     if (!libraryFull) return null;
     const space = libraryFull.quota_bytes ? ` (${quotaLabel(libraryFull.quota_bytes)})` : "";
@@ -977,7 +1072,14 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       body = [
         head("Add reference media", null),
         chooser(),
-        h("p", { class: "note" }, "Files are saved to your Asset Library. Have a link? Paste it in the chat."),
+        h(
+          "p",
+          { class: "note" },
+          data.library
+            ? "Files are saved to your Asset Library. Have a link? Paste it in the chat."
+            : // 资产库这会儿用不了（没开通或服务异常）：文件照样能用在这次生成里，只是不存（11-12 Jia U3）。
+              "Files are used for this request only and won't be saved to your Asset Library. Have a link? Paste it in the chat."
+        ),
         h(
           "div",
           { class: "actions" },
@@ -1017,6 +1119,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
         list(),
         overflowNote(),
         libraryFullNote(),
+        notSavedNote(),
         h("div", { class: "actions" }, ...actions),
         manualHandOff && phase === "done" ? h("p", { class: "note" }, manualHandOff) : null,
       ];

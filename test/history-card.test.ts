@@ -180,3 +180,12 @@ test("卡片前端：目录里没有的模型，ID 去掉前缀写成可读名�
   assert.equal(readableModelId("bytedance/seedream-v4.7"), "Seedream v4.7");
   assert.equal(readableModelId("single"), "Single");
 });
+
+test("列表带这一页的实扣合计：模型不用自己加（11-12 Jia P4 把三单加错了）", async () => {
+  const { result } = await listPredictions(false, { size: 3 });
+  const structured = result.structuredContent as { charged_total_usd: number };
+  // a1 实扣 0.003，a3 失败扣 0，a2 还没结算不算。
+  assert.equal(structured.charged_total_usd, 0.003);
+  const text = (result.content as Array<{ text?: string }>)[0]?.text ?? "";
+  assert.match(text, /Charged on this page in total: \$0\.003\./);
+});

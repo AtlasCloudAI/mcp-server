@@ -32,6 +32,16 @@ const CHECK_GAP_MS = 5_000;
 const CHECK_BUDGET_MS = 120_000;
 /** 报价出来超过这么久卡片才被打开，算「重新打开」：先问一次这份报价提交过没有。 */
 const REOPENED_AFTER_MS = 15_000;
+/**
+ * 卡上还在等确认时，后台悄悄问「这份报价交过没有」的间隔：先密后疏，问满 WATCH_FOR_MS 就不再定时问，
+ * 之后只在用户切回这个页面时问一次。用户在对话里打字确认时，提交的是模型那次调用，结果出在新卡里，
+ * 这张旧卡自己不知道，还挂着「Confirm and generate」（11-12 Jia 第二轮 G2）。
+ */
+const WATCH_GAPS_MS = [10_000, 20_000, 30_000];
+const WATCH_EVERY_MS = 60_000;
+export const WATCH_FOR_MS = 10 * 60_000;
+/** 切回页面时，离上次问不到这么久就不再问。 */
+const WATCH_REFOCUS_MIN_MS = 3_000;
 const RESUME_FAILED =
   "Couldn't check whether this quote was already submitted. Confirming again won't charge twice: you'd get the same job back.";
 
@@ -79,7 +89,14 @@ export interface QuoteState {
 export interface QuoteDeps {
   app: App;
   card(): CardData | undefined;
+  /** 卡片现在的报价状态。 */
+  state(): QuoteState;
   setState(state: QuoteState): void;
+  /**
+   * 宿主让卡片不打扰用户地调工具（Claude、ChatGPT）。Cursor 这类每次都要用户点授权的不算：
+   * 后台定时问会一直弹授权框。
+   */
+  quietCalls(): boolean;
   /** 收下一个工具结果（新报价或已提交），返回是否认得。carry 里的字段在结果没给时补上。 */
   accept(result: unknown, carry?: Partial<CardData>): boolean;
   /** 已提交后开始自己刷新。 */
@@ -109,6 +126,8 @@ export interface QuoteActions {
   checkAgain(): void;
   /** 卡片重新打开在一份旧报价上：这份报价已经提交过就直接接着显示进度。 */
   resume(): void;
+  /** 等确认期间在后台留意这份报价是不是已经在对话里打字确认、提交了；提交了就直接切成进度。 */
+  watch(): void;
   topUp(): void;
   openInAtlas(): void;
 }
@@ -196,6 +215,19 @@ export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): bo
   if (!quote?.expires_at) return false;
   const at = Date.parse(quote.expires_at);
   return Number.isFinite(at) && at <= now;
+}
+
+/** 第 n 次（从 0 数）后台检查前等多久；加上已经问了的时长超过 WATCH_FOR_MS 就不再定时问（undefined）。 */
+export function watchGap(n: number, elapsedMs: number): number | undefined {
+  const gap = WATCH_GAPS_MS[n] ?? WATCH_EVERY_MS;
+  return elapsedMs + gap > WATCH_FOR_MS ? undefined : gap;
+}
+
+/** 卡上还是一份等用户确认的报价（没过期、不是样例）：这时才值得在后台问交过没有。 */
+export function awaitingConfirmation(card: CardData | undefined, state: QuoteState, now = Date.now()): boolean {
+  if (card?.state !== "quote" || !card.quote || card.sample === true) return false;
+  if (state.phase !== "ready" && state.phase !== "price_changed") return false;
+  return !quoteExpired(card.quote, now);
 }
 
 export function initialQuoteState(card: CardData, now = Date.now()): QuoteState {
@@ -301,6 +333,61 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
       backToQuote(true);
     }
+  }
+
+  let watchingSince = 0;
+  let watchInflight = false;
+  let lastQuietCheck = 0;
+
+  /** 悄悄问一次：不改卡片的样子，只有「开始了」才切成进度；问不到、没提交，都照旧。 */
+  async function quietCheck(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || checking || watchInflight || !deps.quietCalls()) return;
+    if (!awaitingConfirmation(deps.card(), deps.state())) return;
+    watchInflight = true;
+    lastQuietCheck = Date.now();
+    try {
+      const result = await deps.app.callServerTool({
+        name: CHECK_TOOL,
+        arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
+      });
+      const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
+      // 问的这会儿用户可能自己点了确认：那一路自己会接着显示，这里不插手。
+      if (
+        !result.isError &&
+        outcome === "started" &&
+        deps.card()?.quote === quote &&
+        awaitingConfirmation(deps.card(), deps.state())
+      ) {
+        startedFrom(result, quote, false);
+      }
+    } catch {
+      // 问不到：下次再问。真点了确认，服务端按幂等键认出提交过的，不会重复扣钱。
+    } finally {
+      watchInflight = false;
+    }
+  }
+
+  function watch(): void {
+    if (watchingSince || sample()) return;
+    watchingSince = Date.now();
+    let n = 0;
+    const next = (): void => {
+      const gap = watchGap(n++, Date.now() - watchingSince);
+      if (gap === undefined) return;
+      setTimeout(() => {
+        void quietCheck().finally(() => {
+          if (deps.card()?.state === "quote") next();
+        });
+      }, gap);
+    };
+    next();
+    const refocus = (): void => {
+      if (document.visibilityState !== "visible" || Date.now() - lastQuietCheck < WATCH_REFOCUS_MIN_MS) return;
+      void quietCheck();
+    };
+    document.addEventListener("visibilitychange", refocus);
+    window.addEventListener("focus", refocus);
   }
 
   async function verify(): Promise<void> {
@@ -448,6 +535,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
     },
     checkAgain: () => void verify(),
     resume: () => void resume(),
+    watch,
     chooseAnother(missing) {
       // 打开资产库重选（测试卡片打开样例资产库，选好也不发送）。
       if (deps.chooseReplacement) {

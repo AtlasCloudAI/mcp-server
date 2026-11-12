@@ -62,3 +62,35 @@ test("P6 设计 2：自己挑模型时要写 why_this_model，工具说明和服
   assert.match(defaultRouteGuidance("Video"), /why_this_model/);
   assert.match(defaultRouteSummary(), /why_this_model/);
 });
+
+test("第二轮 G2：打字确认后旧报价卡在后台问几次交过没有——先密后疏，问满 10 分钟停", async () => {
+  const { watchGap, WATCH_FOR_MS } = await import("../ui/generation-card/quote.js");
+  assert.equal(watchGap(0, 0), 10_000);
+  assert.equal(watchGap(1, 10_000), 20_000);
+  assert.equal(watchGap(2, 30_000), 30_000);
+  assert.equal(watchGap(3, 60_000), 60_000);
+  assert.equal(watchGap(12, WATCH_FOR_MS - 60_000), 60_000);
+  assert.equal(watchGap(13, WATCH_FOR_MS - 30_000), undefined);
+  // 10 分钟内一共问不到 15 次。
+  let n = 0;
+  let elapsed = 0;
+  for (let gap = watchGap(n, elapsed); gap !== undefined; gap = watchGap(++n, elapsed)) elapsed += gap;
+  assert.ok(n <= 15, `问了 ${n} 次`);
+});
+
+test("第二轮 G2：只在卡上还是一份等确认、没过期的真报价时才问", async () => {
+  const { awaitingConfirmation } = await import("../ui/generation-card/quote.js");
+  const now = Date.parse("2026-11-12T06:00:00Z");
+  const quote = { tool: "atlas_generate_image", idempotency_key: "k", arguments: {}, expires_at: "2026-11-12T06:30:00Z" };
+  const card = { state: "quote", quote } as never;
+  assert.equal(awaitingConfirmation(card, { phase: "ready" } as never, now), true);
+  assert.equal(awaitingConfirmation(card, { phase: "price_changed" } as never, now), true);
+  // 用户自己点了确认、正在提交 / 核实，或者重新打开时正在问：都不插手。
+  for (const phase of ["submitting", "verifying", "resuming", "expired", "error"]) {
+    assert.equal(awaitingConfirmation(card, { phase } as never, now), false, phase);
+  }
+  // 已经是进度 / 结果、样例卡、报价过期了：不问。
+  assert.equal(awaitingConfirmation({ state: "running", quote } as never, { phase: "ready" } as never, now), false);
+  assert.equal(awaitingConfirmation({ state: "quote", quote, sample: true } as never, { phase: "ready" } as never, now), false);
+  assert.equal(awaitingConfirmation(card, { phase: "ready" } as never, Date.parse("2026-11-12T07:00:00Z")), false);
+});

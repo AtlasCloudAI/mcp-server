@@ -157,6 +157,8 @@ const QUOTE_MOCKS = {
   // 提交没拿到确定的回答：卡片自己调 atlas_card_check_submission 核实。
   "quote-unconfirmed-started": "unconfirmed-started",
   "quote-unconfirmed-not-started": "unconfirmed-none",
+  // 用户没点卡片、在对话里打字确认（11-12 Jia 第二轮 G2）：模型那次调用约 12 秒后提交，卡片在后台问到了就自己切成进度。
+  "quote-typed-confirm": "typed",
 };
 
 const UNCONFIRMED =
@@ -174,6 +176,7 @@ function mockQuoteCaller(outcome) {
   let polls = 0;
   let checks = 0;
   let mismatched = false;
+  const mountedAt = Date.now();
   const unsample = (result, overrides = {}) => {
     const card = { ...result._meta["atlascloud/card"], ...overrides };
     delete card.sample;
@@ -214,6 +217,13 @@ function mockQuoteCaller(outcome) {
         prediction_id: "mock_quote",
         retry: { tool: "atlas_generate_video", arguments: { model: args.model, params: args.params } },
       });
+    }
+    if (name === "atlas_card_check_submission" && outcome === "typed") {
+      const typed = Date.now() - mountedAt > 12_000;
+      log("      mock quiet check", JSON.stringify({ on_load: args.on_load, typed_confirm_happened: typed }));
+      if (!typed) return { structuredContent: { outcome: "not_submitted" }, content: [{ type: "text", text: "Not submitted." }] };
+      const started = unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+      return { ...started, structuredContent: { outcome: "started", prediction_id: "mock_quote" } };
     }
     if (name === "atlas_card_check_submission") {
       checks += 1;

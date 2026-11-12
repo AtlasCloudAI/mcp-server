@@ -457,10 +457,12 @@ const actions: CardActions = {
 const quoteActions = createQuoteActions({
   app,
   card: () => card,
+  state: () => quoteState,
   setState(state) {
     quoteState = state;
     render();
   },
+  quietCalls: () => ["claude", "chatgpt"].includes(document.documentElement.dataset.host ?? ""),
   accept,
   startPolling: () => void pollLoop(),
   notice: (text) => setNotice(text),
@@ -848,6 +850,8 @@ app.ontoolresult = (params) => {
   if (!accept(params)) return;
   // 重新打开对话时报价卡又显示待确认（11-04 问题 39）：先问一次这份报价是不是已经提交过。
   if (card?.state === "quote" && reopenedOnQuote(card.quote)) quoteActions.resume();
+  // 用户可能不点卡片、在对话里打字确认：卡片在后台留意，提交了就自己切成进度（11-12 Jia 第二轮 G2）。
+  if (card?.state === "quote") quoteActions.watch();
   void pollLoop();
 };
 

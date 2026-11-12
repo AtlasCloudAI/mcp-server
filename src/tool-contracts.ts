@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Model, SubmitKind } from "./types.js";
 import { confirmationValidSeconds, formatUsd } from "./services/spend-policy.js";
+import { brandIconUrl } from "./services/brand-logo.js";
 
 export const idempotencyKeySchema = z
   .string()
@@ -249,10 +250,12 @@ export function toModelSummary(model: Model): {
 }
 
 /**
- * 目录里的厂商图标（logo 字段：字节、OpenAI 的标），只给 https 地址（卡片的 CSP 只放行几个 https 域名）。
- * 不用 avatar：那个地址（/model/avatar/BYTEDANCE.png 这类）11-11 实测全是 404。
+ * 模型行的厂商图标：先用官网模型卡那套品牌图标（services/brand-logo.ts），匹配不到再用目录里的 logo 字段
+ * （只给 https 地址，卡片的 CSP 只放行几个 https 域名）。不用 avatar：那个地址 11-11 实测全是 404。
  */
 function modelAvatar(model: Model): { model_avatar?: string } {
+  const brand = brandIconUrl(model.model);
+  if (brand) return { model_avatar: brand };
   return typeof model.logo === "string" && /^https:\/\//i.test(model.logo) ? { model_avatar: model.logo } : {};
 }
 

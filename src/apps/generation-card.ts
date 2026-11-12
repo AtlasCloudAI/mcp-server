@@ -38,12 +38,29 @@ import { handleError } from "../utils/error-handler.js";
 // ChatGPT 和 Claude 都按 _meta.ui.resourceUri 认它。设计稿见 Figma「MCP 对话内组件 · 跟随宿主」
 // 的「生成进度」「作品图库」「报价确认」「上传」，以及全屏视图里的历史列表。
 
+// 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
+// 生成结果在 atlas-media 桶，用户上传和工作流素材在 atlas-img 桶，示例素材在 static。
+// 资产库的签名缩略图：用户传进资产库的在 atlas-asset 桶，归档的生成历史在 atlas-media 和
+// res-atlascloud（dev 的 AssetD 配置是 atlas-asset-dev / atlas-media-dev / res-atlascloud，
+// 生产桶名按同一规律，2026-10-28 确认 atlas-asset 桶存在）。
+export const DEFAULT_MEDIA_DOMAINS = [
+  "https://atlas-media.oss-us-west-1.aliyuncs.com",
+  "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
+  "https://static.atlascloud.ai",
+  "https://atlas-asset.oss-us-west-1.aliyuncs.com",
+  "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
+  // 报价卡模型行的厂商图标：官网的品牌图标（services/brand-logo.ts）。
+  "https://www.atlascloud.ai",
+];
+
 /**
  * 卡片页面的地址带上页面内容的哈希。ChatGPT 按地址缓存卡片页面：2026-10-27 在 test 上换了新镜像、
  * 点了「刷新工具」，新对话里仍是旧页面。页面一变地址就变，挂在工具上的地址也跟着变，宿主只能去拉新的。
  */
 export const GENERATION_CARD_URI = `ui://atlascloud/generation-card-${createHash("sha256")
   .update(loadCardHtml())
+  // 放行的来源也算进去：只改 CSP 时地址不变，宿主会一直用缓存里旧 CSP 的那份（新加的图标域名就加载不了）。
+  .update(DEFAULT_MEDIA_DOMAINS.join(","))
   .digest("hex")
   .slice(0, 12)}.html`;
 
@@ -85,18 +102,7 @@ export function clientRendersCards(server: McpServer): boolean {
   return currentClientProfile() === "chat";
 }
 
-// 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
-// 生成结果在 atlas-media 桶，用户上传和工作流素材在 atlas-img 桶，示例素材在 static。
-// 资产库的签名缩略图：用户传进资产库的在 atlas-asset 桶，归档的生成历史在 atlas-media 和
-// res-atlascloud（dev 的 AssetD 配置是 atlas-asset-dev / atlas-media-dev / res-atlascloud，
-// 生产桶名按同一规律，2026-10-28 确认 atlas-asset 桶存在）。
-const DEFAULT_MEDIA_DOMAINS = [
-  "https://atlas-media.oss-us-west-1.aliyuncs.com",
-  "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
-  "https://static.atlascloud.ai",
-  "https://atlas-asset.oss-us-west-1.aliyuncs.com",
-  "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
-];
+
 
 /**
  * 卡片能加载的媒体来源。别的环境存储桶不一样（test 是 atlas-media-dev / atlas-img-dev），

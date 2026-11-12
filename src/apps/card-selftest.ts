@@ -12,6 +12,7 @@ import { inputsOf, promptOf, settingsChips } from "./card-params.js";
 import { HISTORY_META_KEY, type HistoryCardData, type HistoryCardItem } from "./history-card.js";
 import { UPLOAD_MAX_FILES, UPLOAD_META_KEY, type UploadCardData, type UploadSampleFile } from "./upload-card.js";
 import { ASSETS_MAX_PICK, ASSETS_META_KEY, type AssetCardData, type AssetCardItem } from "./asset-library.js";
+import { brandIconUrl } from "../services/brand-logo.js";
 
 // 测试卡片：不调接口、不花钱，用官网公开的示例素材把生成卡的各个状态渲染出来，
 // 用来在 ChatGPT、Claude 里核对卡片长得对不对。只在 MCP_UI_SELFTEST 打开的环境注册。
@@ -450,7 +451,7 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
     ...(template
       ? {}
       : {
-          model_icon: `${STATIC}/model/logo/bytedance-seedance-2.5-image-to-video.png`,
+          model_icon: brandIconUrl("bytedance/seedance-2.5/image-to-video"),
           model_reason: "Keeps the product sharp while animating it, and follows the photo's framing.",
         }),
     state: "quote",

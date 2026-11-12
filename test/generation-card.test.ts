@@ -360,11 +360,13 @@ test("卡片媒体来源：默认生产来源（含资产库的桶），可用 M
     "https://static.atlascloud.ai",
     "https://atlas-asset.oss-us-west-1.aliyuncs.com",
     "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
+    // 报价卡模型行的厂商图标用官网的品牌图标（11-12）。
+    "https://www.atlascloud.ai",
   ]);
   const extended = cardMediaDomains({
     MCP_UI_MEDIA_DOMAINS: " atlas-media-dev.oss-us-west-1.aliyuncs.com, https://atlas-img-dev.oss-us-west-1.aliyuncs.com/ ,https://static.atlascloud.ai",
   });
-  assert.equal(extended.length, 7);
+  assert.equal(extended.length, 8);
   assert.ok(extended.includes("https://atlas-media-dev.oss-us-west-1.aliyuncs.com"));
   assert.ok(extended.includes("https://atlas-img-dev.oss-us-west-1.aliyuncs.com"));
 });

@@ -84,7 +84,7 @@ test("资产库缩略图：长宽比 1.5 倍及以上整张显示，接近方形
   assert.equal(isLopsided(0, 100), false); // 还没加载出尺寸
 });
 
-test("工具结果的 model_avatar 取目录的 logo，不取打不开的 avatar；不是 https 就不给", () => {
+test("工具结果的 model_avatar：先用官网品牌图标；品牌匹配不到才取目录的 logo，不取打不开的 avatar；不是 https 就不给", () => {
   const model: Model = {
     uuid: "u",
     model: "bytedance/seedance-2.5/image-to-video",
@@ -96,7 +96,13 @@ test("工具结果的 model_avatar 取目录的 logo，不取打不开的 avatar
     readme: "",
     tags: [],
   };
-  assert.equal(generationStructuredContent("p1", model, "video").model_avatar, ICON);
-  assert.equal(generationStructuredContent("p1", { ...model, logo: "" }, "video").model_avatar, undefined);
-  assert.equal(generationStructuredContent("p1", { ...model, logo: "http://x/a.png" }, "video").model_avatar, undefined);
+  // 字节的模型：用官网那套品牌图标（11-12 Mike），不管目录 logo 有没有、能不能打开。
+  const brand = "https://www.atlascloud.ai/icons/brands/bytedance-color.svg";
+  assert.equal(generationStructuredContent("p1", model, "video").model_avatar, brand);
+  assert.equal(generationStructuredContent("p1", { ...model, logo: "" }, "video").model_avatar, brand);
+  // 品牌表里没有的厂商：退回目录 logo，只收 https。
+  const other = { ...model, model: "someone/unknown-model" };
+  assert.equal(generationStructuredContent("p1", other, "video").model_avatar, ICON);
+  assert.equal(generationStructuredContent("p1", { ...other, logo: "" }, "video").model_avatar, undefined);
+  assert.equal(generationStructuredContent("p1", { ...other, logo: "http://x/a.png" }, "video").model_avatar, undefined);
 });

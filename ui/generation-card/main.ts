@@ -597,7 +597,8 @@ const historyActions = {
 async function openDetail(predictionId: string): Promise<void> {
   pendingId = predictionId;
   card = undefined;
-  if (history) history = { ...history, loading: true };
+  // 上一次打开失败的提示不带到这一次。
+  if (history) history = { ...history, loading: true, error: undefined };
   render();
   try {
     // 测试卡片里的历史样例：条目号是 selftest_<样例名>，打开对应的测试卡片，不调真实接口。

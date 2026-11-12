@@ -263,10 +263,11 @@ export function renderHistory(view: HistoryView, opts: HistoryOptions, actions: 
       h("span", { class: "history-count" }, data.total === 1 ? "1 task" : `${data.total} tasks`)
     ),
     tabs,
+    // 错误放在列表上面：点开一条失败时卡片会闪回列表，放在最底下看起来就像点了没反应（11-12 Jia 复测 P9）。
+    view.error ? h("p", { class: "note danger history-error", role: "status" }, view.error) : null,
     rows.length > 0
       ? h("ul", { class: "history-list" }, ...rows.map((item) => rowFor(item, opts, actions)))
       : h("p", { class: "desc" }, view.loading ? "Loading…" : data.state ? "Nothing here yet." : "No generations yet."),
-    view.error ? h("p", { class: "note", role: "status" }, view.error) : null,
     footer.some(Boolean) ? h("div", { class: "actions" }, ...footer) : null
   );
 }

@@ -445,6 +445,19 @@ async function renderAll() {
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), mock.tool, {}, mockAssetsCaller(mock.empty, mock.signedOut)));
   }
+  // 历史卡点开一条时网关报错（11-12 test 的 aiproxy 返回 service unavailable）：错误提示要一眼看得到。
+  if (only === "history-open-fails") {
+    const pane = hostFrame("mock · history-open-fails");
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_list_predictions", {}, async (name, args) => {
+      if (name === "atlas_card_status") return { isError: true, content: [{ type: "text", text: "Error: service unavailable" }] };
+      const result = await callTool("atlas_card_selftest", { variant: "history" });
+      const key = Object.keys(result._meta ?? {}).find((k) => k.startsWith("atlascloud/"));
+      const data = { ...result._meta[key] };
+      delete data.sample;
+      return { ...result, _meta: { [key]: data } };
+    }));
+  }
   for (const [label, mode] of Object.entries(UPLOAD_MOCKS)) {
     if (only && only !== label) continue;
     const pane = hostFrame(`mock · ${label}`);
@@ -456,7 +469,7 @@ async function renderAll() {
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
   }
-  for (const variant of only ? (only === "poll" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS || only in ASSET_MOCKS ? [] : [only]) : VARIANTS) {
+  for (const variant of only ? (only === "poll" || only === "history-open-fails" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS || only in ASSET_MOCKS ? [] : [only]) : VARIANTS) {
     const pane = hostFrame(`atlas_card_selftest · ${variant}`);
     grid.append(pane);
     jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
@@ -465,7 +478,7 @@ async function renderAll() {
 }
 
 const variantSelect = $("#variant");
-for (const variant of ["poll", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...Object.keys(ASSET_MOCKS), ...VARIANTS]) {
+for (const variant of ["poll", "history-open-fails", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...Object.keys(ASSET_MOCKS), ...VARIANTS]) {
   const option = document.createElement("option");
   option.value = variant;
   option.textContent = variant;

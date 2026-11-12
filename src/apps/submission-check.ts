@@ -15,6 +15,7 @@ import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { handleError } from "../utils/error-handler.js";
 import { CARD_META_KEY, buildGenerationCardData, predictionCardData } from "./generation-card.js";
 import { CARD_GENERATION_TOOLS } from "./generation-quote.js";
+import { asRecord } from "../services/json-record.js";
 
 // 报价卡点了 Generate 却没拿到确定的回答（超时、断网、宿主把调用掐了）：这一单可能已经在跑，
 // 也可能根本没到。卡片调这个工具自己核实，而不是让用户去 Atlas 翻记录、或者再点一次多扣一单。
@@ -43,18 +44,6 @@ export type SubmissionOutcome =
 
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "string") {
-    try {
-      return asRecord(JSON.parse(value));
-    } catch {
-      return undefined;
-    }
-  }
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 /** 幂等记录里存的提交结果：生成工具存 { ok, predictionId }，快速生成存原始响应 { data: { id } }。 */
 function storedPredictionId(result: unknown): string | undefined {

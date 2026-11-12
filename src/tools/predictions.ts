@@ -13,6 +13,7 @@ import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
 import { describeNotStarted, recentNotStarted } from "../services/not-started.js";
 import { formatUsd } from "../services/spend-policy.js";
+import { asRecord } from "../services/json-record.js";
 
 // 和目录里的模型 ID 同形：厂商/名字/变体，只放这几类字符。
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
@@ -51,18 +52,6 @@ function toIsoTimestamp(value: unknown): string | undefined {
 }
 
 // requestBody 在库里是 JSON 字符串，result 是对象；两边都按「可能是任一种」处理。
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "string") {
-    try {
-      return asRecord(JSON.parse(value));
-    } catch {
-      return undefined;
-    }
-  }
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function outputUrls(result: Record<string, unknown> | undefined): string[] {
   if (!result) return [];

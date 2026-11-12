@@ -1,5 +1,6 @@
 import { getModels } from "../services/doc-fetcher.js";
 import type { HistoryItem } from "../response-schemas.js";
+import { asRecord } from "../services/json-record.js";
 import type { PredictionSummary } from "../tools/predictions.js";
 import {
   type CardMedia,
@@ -55,18 +56,15 @@ const REUSE_PROMPT_MAX = 2000;
 
 /** 历史条目的完整提示词（「Reuse prompt」用），没有或不是字符串时为空。 */
 export function fullPrompt(item: HistoryItem): string | undefined {
-  const body = (item as Record<string, unknown>).requestBody;
-  if (body === null || typeof body !== "object") return undefined;
-  const prompt = (body as Record<string, unknown>).prompt;
+  // 线上 requestBody 是 JSON 字符串：原来只认对象，真实数据里一条提示词都取不到（11-12 Jia 第二轮）。
+  const prompt = asRecord((item as Record<string, unknown>).requestBody)?.prompt;
   if (typeof prompt !== "string" || !prompt.trim()) return undefined;
   const text = prompt.trim();
   return text.length > REUSE_PROMPT_MAX ? `${text.slice(0, REUSE_PROMPT_MAX - 1)}…` : text;
 }
 
 function billingAmount(item: HistoryItem): number | undefined {
-  const billing = (item as Record<string, unknown>).billing;
-  if (billing === null || typeof billing !== "object") return undefined;
-  return priceOf((billing as Record<string, unknown>).amount);
+  return priceOf(asRecord((item as Record<string, unknown>).billing)?.amount);
 }
 
 /** 历史接口的原始条目 + 已整理好的摘要 → 卡片数据。模型名查不到就只显示模型 ID。 */

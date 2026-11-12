@@ -21,6 +21,8 @@ const HISTORY_ITEMS = [
     createdAt: 1793072162,
     result: { outputs: ["https://atlas-media.oss-us-west-1.aliyuncs.com/a1.jpeg"] },
     billing: { paymentStatus: 2, amount: "0.003" },
+    // 线上就是 JSON 字符串（11-12 Jia 第二轮：只认对象时详情里没有 Reuse prompt）。
+    requestBody: '{"model":"black-forest-labs/flux-schnell","prompt":"a blue paper airplane"}',
   },
   {
     ID: "a2",
@@ -36,6 +38,7 @@ const HISTORY_ITEMS = [
     createdAt: "1793000000",
     result: { error: "Upstream timeout" },
     billing: { amount: "0" },
+    requestBody: { prompt: "a red sneaker" },
   },
 ];
 
@@ -131,6 +134,10 @@ test("卡片打开：历史列表带上列表卡数据——状态、缩略图�
   assert.equal(running!.outputs, 0);
   assert.equal(failed!.state, "failed");
   assert.equal(failed!.error, "Upstream timeout");
+  // 详情的「Reuse prompt」靠这个：字符串和对象两种 requestBody 都取得到，没有的就不带。
+  assert.equal(done!.prompt, "a blue paper airplane");
+  assert.equal(failed!.prompt, "a red sneaker");
+  assert.equal(running!.prompt, undefined);
 });
 
 test("卡片前端：优先读 _meta，宿主丢了就从 structuredContent 推出列表", () => {

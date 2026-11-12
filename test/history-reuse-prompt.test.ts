@@ -17,6 +17,20 @@ test("历史条目带完整提示词给「Reuse prompt」，不是列表里那�
   assert.equal(fullPrompt({ ...item, requestBody: undefined } as unknown as HistoryItem), undefined);
 });
 
+test("线上 /model/history 的 requestBody 是 JSON 字符串：照样取得到提示词（11-12 Jia 第二轮：成功单详情只有 Download）", () => {
+  const live = {
+    ID: "f5b2b24cb3c949bb8c370a5c9f30f3fc",
+    model: "bytedance/seedream-v5.0-flash/text-to-image",
+    status: "completed",
+    requestBody: '{"model":"bytedance/seedream-v5.0-flash/text-to-image","prompt":"a blue paper airplane","size":"2048*2048"}',
+  } as unknown as HistoryItem;
+  assert.equal(fullPrompt(live), "a blue paper airplane");
+  // 坏字符串、数组、没有 prompt 的字符串都当没有。
+  assert.equal(fullPrompt({ ...live, requestBody: "{not json" } as unknown as HistoryItem), undefined);
+  assert.equal(fullPrompt({ ...live, requestBody: "[1,2]" } as unknown as HistoryItem), undefined);
+  assert.equal(fullPrompt({ ...live, requestBody: '{"text":"hi"}' } as unknown as HistoryItem), undefined);
+});
+
 test("历史详情的按钮按设计 11-12：成功 Download + Reuse prompt，失败 Reuse prompt + View request，生成中只有 View request", async () => {
   const { historyDetailButtons } = await import("../ui/generation-card/history.js");
   assert.deepEqual(historyDetailButtons("succeeded", true, true), ["keep-download", "reuse"]);

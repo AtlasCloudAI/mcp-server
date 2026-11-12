@@ -23,6 +23,7 @@ import { registerCardSelftestTool } from "./apps/card-selftest.js";
 import { registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
+import { registerCardUploadPartTool } from "./tools/card-upload.js";
 
 export type ServerProfile = "stdio" | "remote";
 
@@ -93,6 +94,8 @@ export function createAtlasCloudServer(
       registerCardCheckTool(server);
       // 上传卡是兜底：模型读得到文件时用 atlas_get_upload_url 自己传（2026-11-11 Cursor）。
       registerUploadCardTool(server);
+      // 本地版没有上传中转：上传卡把文件分块交给本地服务（tools/card-upload.ts）。
+      if (profile === "stdio") registerCardUploadPartTool(server);
       // 测试卡片只在开发环境用，生产永远不注册。
       const selftest = process.env.MCP_UI_SELFTEST?.trim().toLowerCase();
       if (selftest === "1" || selftest === "true" || selftest === "on") {

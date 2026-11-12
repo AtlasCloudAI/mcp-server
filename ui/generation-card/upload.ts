@@ -175,6 +175,29 @@ export type UploadOutcome =
   /** 资产库上传空间满了：中转另给了一张普通上传的地址，这个文件改传那里（不存进资产库）。 */
   | { kind: "library_full"; quota_bytes?: number; fallback?: { upload_url: string; expires_at: string; max_bytes: number } };
 
+/** 本地（stdio）版的上传地址前缀：不走 XHR，改调卡片专用工具（src/tools/card-upload.ts）。 */
+export const TOOL_UPLOAD_PREFIX = "tool:";
+/** 每块原始字节数：base64 后约 1.87M 字符，低于服务端每块 2M 字符的上限。 */
+const TOOL_UPLOAD_PART_BYTES = 1_400_000;
+
+function randomUploadId(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function base64Of(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** 上传中转的回应 → 这个文件怎么样了。状态码见 src/http/upload-relay.ts。 */
 export function outcomeOf(status: number, body: string, maxBytes: number): UploadOutcome {
   let json: Record<string, unknown> | undefined;
@@ -416,12 +439,17 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
    * 生成里，只是不存进资产库。卡片上留一句说明。
    */
   let libraryFull: { quota_bytes?: number } | undefined = initial.sample_library_full;
-  const inflight = new Map<string, XMLHttpRequest>();
+  /** 正在传的：托管版是 XHR，本地版是分块调工具的那一路，都只需要能中止。 */
+  const inflight = new Map<string, { abort(): void }>();
   const sample = initial.sample === true;
 
   const caps = () => deps.app.getHostCapabilities() ?? {};
   // 这张卡的本地记录：键用第一次拿到的上传地址（换新地址后照旧用这个）。样例卡不存。
-  const savedKey = !sample && initial.upload_url ? `${SAVED_PREFIX}${initial.upload_url}` : undefined;
+  // 本地版每张卡的上传地址都是同一个（tool:…），再带上签发时间区分。
+  const savedKey =
+    !sample && initial.upload_url
+      ? `${SAVED_PREFIX}${initial.upload_url}${initial.upload_url.startsWith(TOOL_UPLOAD_PREFIX) ? `#${initial.expires_at ?? ""}` : ""}`
+      : undefined;
   if (savedKey && items.length === 0) {
     const saved = loadSavedUploads(savedKey);
     if (saved) {
@@ -658,12 +686,16 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   function start(item: UploadItem): void {
     const file = item.file;
     if (!file) return;
+    const usedUrl = data.upload_url;
+    if (usedUrl.startsWith(TOOL_UPLOAD_PREFIX)) {
+      startViaTool(item, file, usedUrl);
+      return;
+    }
     const xhr = new XMLHttpRequest();
     inflight.set(item.id, xhr);
     item.status = "uploading";
     item.progress = 0;
     item.error = undefined;
-    const usedUrl = data.upload_url;
     const sep = usedUrl.includes("?") ? "&" : "?";
     xhr.open("POST", `${usedUrl}${sep}filename=${encodeURIComponent(item.name)}`);
     xhr.timeout = Math.min(XHR_MAX_TIMEOUT_MS, Math.max(XHR_TIMEOUT_MS, (file.size / XHR_MIN_BYTES_PER_SECOND) * 1000));
@@ -678,8 +710,82 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       item.progress = 1;
       updateSub(item);
     };
-    const finish = (outcome: UploadOutcome) => {
-      if (inflight.get(item.id) !== xhr) return;
+    const finish = finisher(item, file, usedUrl, xhr);
+    xhr.onload = () => finish(outcomeOf(xhr.status, xhr.responseText, limitFor(item.kind, data)));
+    xhr.onerror = () => finish(outcomeOf(0, "", limitFor(item.kind, data)));
+    xhr.ontimeout = () => finish({ kind: "failed", message: "Upload timed out" });
+    xhr.send(file);
+    changed();
+  }
+
+  /**
+   * 本地（stdio）版：没有上传中转，把文件切成小块，经宿主调 atlas_card_upload_part 交给本地服务，
+   * 最后一块的回复和托管版中转的 HTTP 回应同一个格式（src/tools/card-upload.ts）。
+   */
+  function startViaTool(item: UploadItem, file: File, usedUrl: string): void {
+    let aborted = false;
+    const handle = { abort: () => void (aborted = true) };
+    inflight.set(item.id, handle);
+    item.status = "uploading";
+    item.progress = 0;
+    item.error = undefined;
+    const finish = finisher(item, file, usedUrl, handle);
+    const [tool, query = ""] = usedUrl.slice(TOOL_UPLOAD_PREFIX.length).split("?");
+    const plain = /(^|&)plain=1(&|$)/.test(query);
+    const limit = limitFor(item.kind, data);
+    const total = Math.max(1, Math.ceil(file.size / TOOL_UPLOAD_PART_BYTES));
+    const uploadId = randomUploadId();
+    void (async () => {
+      try {
+        for (let index = 0; index < total; index++) {
+          if (aborted) return;
+          const last = index === total - 1;
+          if (last && total > 1) {
+            item.status = "saving";
+            item.progress = 1;
+            updateSub(item);
+          }
+          const part = file.slice(index * TOOL_UPLOAD_PART_BYTES, Math.min(file.size, (index + 1) * TOOL_UPLOAD_PART_BYTES));
+          const result = await deps.app.callServerTool({
+            name: tool!,
+            arguments: {
+              upload_id: uploadId,
+              filename: item.name,
+              index,
+              total,
+              size: file.size,
+              data: await base64Of(part),
+              ...(plain ? { plain: true } : {}),
+            },
+          });
+          if (aborted) return;
+          const reply = result.structuredContent as { status?: unknown; body?: unknown } | undefined;
+          if (result.isError || typeof reply?.status !== "number") {
+            finish({ kind: "failed", message: "Upload failed" });
+            return;
+          }
+          if (!last) {
+            if (reply.status !== 202) {
+              finish(outcomeOf(reply.status, JSON.stringify(reply.body ?? {}), limit));
+              return;
+            }
+            item.progress = (index + 1) / total;
+            updateSub(item);
+            continue;
+          }
+          finish(outcomeOf(reply.status, JSON.stringify(reply.body ?? {}), limit));
+        }
+      } catch {
+        if (!aborted) finish(outcomeOf(0, "", limit));
+      }
+    })();
+    changed();
+  }
+
+  /** 一个文件传完（或失败）之后怎么办：两条传输路共用。handle 不是当前这一路的就忽略（已经取消或重传了）。 */
+  function finisher(item: UploadItem, file: File, usedUrl: string, handle: { abort(): void }): (outcome: UploadOutcome) => void {
+    return (outcome: UploadOutcome) => {
+      if (inflight.get(item.id) !== handle) return;
       inflight.delete(item.id);
       if (!items.includes(item)) return;
       if (outcome.kind === "done") {
@@ -720,11 +826,6 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
       changed();
       void pump();
     };
-    xhr.onload = () => finish(outcomeOf(xhr.status, xhr.responseText, limitFor(item.kind, data)));
-    xhr.onerror = () => finish(outcomeOf(0, "", limitFor(item.kind, data)));
-    xhr.ontimeout = () => finish({ kind: "failed", message: "Upload timed out" });
-    xhr.send(file);
-    changed();
   }
 
   function remove(item: UploadItem): void {

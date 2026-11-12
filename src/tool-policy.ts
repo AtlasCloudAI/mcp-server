@@ -236,7 +236,8 @@ export type CardToolName =
   | "atlas_card_status"
   | "atlas_card_check_submission"
   | "atlas_card_selftest"
-  | "atlas_open_upload_card";
+  | "atlas_open_upload_card"
+  | "atlas_card_upload_part";
 
 export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
   atlas_card_status: {
@@ -263,6 +264,14 @@ export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
     annotations: firstPartyRead,
     annotationJustification:
       "Opens an upload card with a short-lived, subject-bound upload URL; nothing is uploaded or billed until the user adds files.",
+  },
+  atlas_card_upload_part: {
+    scope: "tasks:write",
+    remote: false,
+    billable: false,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotationJustification:
+      "Local (stdio) upload card only: receives a file the user picked in the card, in parts, and uploads it to their Atlas Asset Library. Uploading is free.",
   },
   atlas_card_selftest: {
     scope: null,

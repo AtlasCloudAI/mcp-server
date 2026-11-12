@@ -13,6 +13,7 @@ import {
   generationCardToolMeta,
 } from "../apps/generation-card.js";
 import { UPLOAD_CARD_NOTE, UPLOAD_META_KEY, uploadCardData } from "../apps/upload-card.js";
+import { LOCAL_CARD_UPLOAD_URL, LOCAL_LIBRARY_LIMITS } from "./card-upload.js";
 import { getRequestContext } from "../services/request-context.js";
 import { assetLibraryAvailable } from "./assets.js";
 
@@ -73,6 +74,30 @@ type UploadResult = {
 };
 
 /**
+ * 本地（stdio）版：没有上传中转，上传卡把文件分块交给 atlas_card_upload_part（tools/card-upload.ts），
+ * 由本地服务存进资产库。上限和托管版资产库上传一样。
+ */
+async function localCardUpload(): Promise<{
+  uploadUrl: string;
+  expiresAt: number;
+  maxBytes: number;
+  maxVideoBytes?: number;
+  maxImagePixels?: number;
+  library: boolean;
+} | undefined> {
+  if (getRequestContext()) return undefined;
+  const library = await assetLibraryAvailable();
+  return {
+    uploadUrl: LOCAL_CARD_UPLOAD_URL,
+    expiresAt: Date.now() + 24 * 60 * 60_000,
+    maxBytes: LOCAL_LIBRARY_LIMITS.maxBytes,
+    maxVideoBytes: LOCAL_LIBRARY_LIMITS.maxVideoBytes,
+    ...(library ? { maxImagePixels: LOCAL_LIBRARY_LIMITS.maxImagePixels } : {}),
+    library,
+  };
+}
+
+/**
  * 签一张上传票，拼好 curl 指引。两个工具共用：atlas_get_upload_url 只给模型自己传，
  * atlas_open_upload_card 在会显示卡片的客户端里把同一张票交给上传卡。
  */
@@ -84,7 +109,7 @@ async function issueUpload(filenameHint: string | undefined, withCard: boolean):
 }> {
   // 开着「上传存进资产库」时先查资产库能不能用（要充值后才开通）；能用才签存进资产库的票。
   const library = getRequestContext()?.libraryUpload ? await assetLibraryAvailable() : false;
-  const issued = await issueUploadTicketFromContext({ library });
+  const issued = (await issueUploadTicketFromContext({ library })) ?? (withCard ? await localCardUpload() : undefined);
   if (!issued) {
     return {
       isError: true,

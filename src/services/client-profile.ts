@@ -151,6 +151,11 @@ export function clientPlatform(
   }
 }
 
+/** Is the request being served coming from ChatGPT (not Codex)? */
+export function currentClientIsChatGpt(): boolean {
+  return knownClient(getRequestContext()?.authInfo.clientId) === "chatgpt";
+}
+
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
   const context = getRequestContext();

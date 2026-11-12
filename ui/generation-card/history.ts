@@ -22,6 +22,29 @@ export interface HistoryCardItem {
   error?: string;
   /** 「Reuse prompt」发回对话的提示词。 */
   prompt?: string;
+  /** 这一单的输入素材（asset://编号或公开链接），「Reuse prompt」一起交回去。 */
+  inputs?: { name: string; ref: string; field?: string }[];
+  /** 链接已经用不了的输入文件个数，Reuse 时请用户重新选。 */
+  inputs_unavailable?: number;
+}
+
+/**
+ * 历史详情：失败单的扣费以账单为准。11-12 ChatGPT 回归：Food Motion 失败了，账单里记着扣了 $0.8865
+ * （历史接口 billing.amount 同样是 0.8865，列表上写了），查结果接口却回 not_charged，详情卡就写了
+ * 「You weren't charged」，列表和详情对不上。账单记了钱、详情又没说扣了，就按账单写扣了多少。
+ */
+export function withBillingRecord<T extends { state: CardState; price_usd?: number; charge_status?: string }>(
+  card: T,
+  item: Pick<HistoryCardItem, "price_usd"> | undefined
+): T {
+  const billed = item?.price_usd;
+  if (billed === undefined || !(billed > 0)) return card;
+  if (card.state !== "failed" && card.state !== "canceled") return card;
+  if (card.charge_status === "charged" || card.charge_status === "partially_charged") {
+    return card.price_usd !== undefined && card.price_usd > 0 ? card : { ...card, price_usd: billed };
+  }
+  if (card.charge_status === "refunded") return card;
+  return { ...card, charge_status: "charged", price_usd: billed };
 }
 
 export interface HistoryCardData {

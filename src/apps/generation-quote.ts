@@ -5,6 +5,7 @@ import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spe
 import { inputsOf, kindFromField, modelCardExtras, positiveNumber, promptOf, settingsChips } from "./card-params.js";
 import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
+import { currentClientIsChatGpt } from "../services/client-profile.js";
 import { rememberedMedia } from "../services/media-names.js";
 import { rememberNotStarted } from "../services/not-started.js";
 import type { BalanceResponse } from "../types.js";
@@ -262,6 +263,18 @@ const quoteCardNoteStructured = (hasPrice: boolean) =>
   "user confirms on the card, do not call a generation tool again; if they confirm in the chat instead, call " +
   "again with the same idempotency_key.";
 
+// 11-12 ChatGPT 回归：用户在对话里只打「I confirm, generate it.」，ChatGPT 那一轮没挂上 Atlas 应用，
+// 模型答「工具用不了，请点卡片」，什么都没提交；同一句带上 @Atlas Cloud Test 就提交了。所以在 ChatGPT 里
+// 提到可以打字确认时，要让用户带上 @应用名；卡片按钮不受影响。
+const CHATGPT_TYPED_CONFIRM_NOTE =
+  " In ChatGPT a reply typed in the chat reaches these tools only when it mentions this app with @ (for example " +
+  '"@Atlas Cloud confirm"); a plain "I confirm" can arrive in a turn where the tools are not available. If you ' +
+  "mention confirming in the chat, tell the user to include that @ mention; the card button works either way.";
+
+function forClient(note: string): string {
+  return currentClientIsChatGpt() ? `${note}${CHATGPT_TYPED_CONFIRM_NOTE}` : note;
+}
+
 /** 报价里有没有估出这一单的金额（没有时卡上是「Cost unavailable」+「Confirm anyway」）。 */
 function hasEstimate(content: Record<string, unknown> | undefined): boolean {
   return typeof content?.estimated_cost_usd === "number";
@@ -274,7 +287,7 @@ function withCardNote(structured: CallToolResult["structuredContent"]): CallTool
   return {
     // status 和 card_note 排在最前面，模型读结构化结果时先看到。
     status: content.status,
-    card_note: quoteCardNoteStructured(hasEstimate(content)),
+    card_note: forClient(quoteCardNoteStructured(hasEstimate(content))),
     ...content,
     ...(typeof price === "string" ? { price_to_tell_user: `${price} The Atlas card already shows the price: point the user to the card instead of repeating it.` } : {}),
   };
@@ -366,7 +379,7 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
       ...(onCard ? { structuredContent: withCardNote(result.structuredContent) } : {}),
       content: onCard
-        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: quoteCardNote(hasEstimate(record(result.structuredContent))) }]
+        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: forClient(quoteCardNote(hasEstimate(record(result.structuredContent)))) }]
         : tracking
           ? [...result.content, { type: "text" as const, text: TRACKING_CARD_NOTE }]
           : result.content,

@@ -94,10 +94,38 @@ export const say = {
       ? "刚才的生成失败了。请重新给我报个价，我可能想先改点东西。"
       : "That generation failed. Please give me a new quote for it; I may want to change something first.";
   },
-  reusePrompt(lang: Lang, model: string, prompt: string): string {
-    return lang === "zh"
-      ? `用同样的提示词再生成一次（上次用的是 ${model}），先给我报价：\n\n${prompt}`
-      : `Generate this again with the same prompt (last time it was ${model}), and quote it first:\n\n${prompt}`;
+  /**
+   * 「Reuse prompt」：提示词连同原来的输入素材一起交回去。编辑、图生视频这类任务只给提示词时，模型会自己
+   * 去资产库挑一张当输入（11-12 ChatGPT 回归）。素材写成 asset://编号或公开链接，模型直接填进参数；
+   * 链接已经用不了的，请模型先让用户重新选。
+   */
+  reusePrompt(
+    lang: Lang,
+    model: string,
+    prompt: string,
+    inputs: { name: string; ref: string; field?: string }[] = [],
+    unavailable = 0
+  ): string {
+    const list = inputs.map((input) => `- ${input.name}${input.field ? ` (${input.field})` : ""}: ${input.ref}`).join("\n");
+    if (lang === "zh") {
+      const head =
+        inputs.length > 0 || unavailable > 0
+          ? `用同样的提示词和输入素材再生成一次（上次用的是 ${model}），先给我报价：`
+          : `用同样的提示词再生成一次（上次用的是 ${model}），先给我报价：`;
+      const files = inputs.length > 0 ? `\n\n输入素材（照原来的字段填）：\n${list}` : "";
+      const missing = unavailable > 0 ? `\n\n还有 ${unavailable} 个输入文件的链接已经失效，请先让我重新选一下。` : "";
+      return `${head}\n\n${prompt}${files}${missing}`;
+    }
+    const head =
+      inputs.length > 0 || unavailable > 0
+        ? `Generate this again with the same prompt and input files (last time it was ${model}), and quote it first:`
+        : `Generate this again with the same prompt (last time it was ${model}), and quote it first:`;
+    const files = inputs.length > 0 ? `\n\nInput files (use them in the same fields):\n${list}` : "";
+    const missing =
+      unavailable > 0
+        ? `\n\n${unavailable === 1 ? "One input file's link has" : `${unavailable} input files' links have`} expired: ask me to pick ${unavailable === 1 ? "it" : "them"} again first.`
+        : "";
+    return `${head}\n\n${prompt}${files}${missing}`;
   },
   failedSwitchModel(lang: Lang): string {
     return lang === "zh"

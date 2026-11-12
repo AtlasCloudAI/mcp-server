@@ -1,6 +1,8 @@
 import { getModels } from "../services/doc-fetcher.js";
 import type { HistoryItem } from "../response-schemas.js";
 import { asRecord } from "../services/json-record.js";
+import { rememberedMedia } from "../services/media-names.js";
+import { inputsOf } from "./card-params.js";
 import type { PredictionSummary } from "../tools/predictions.js";
 import {
   type CardMedia,
@@ -36,6 +38,20 @@ export interface HistoryCardItem {
   error?: string;
   /** 这一单的提示词，单条详情的「Reuse prompt」用（设计 11-10 第 11 项）。完整原文，最长 2000 字。 */
   prompt?: string;
+  /**
+   * 这一单的输入素材，「Reuse prompt」一起交回去（11-12 ChatGPT 回归：编辑类任务只带提示词，模型自己去
+   * 资产库挑了一张图当输入）。ref 是模型能直接填进参数的引用：资产库素材写 asset://编号，公开链接写链接。
+   */
+  inputs?: HistoryCardInput[];
+  /** 输入里有几个文件的链接已经用不了（资产库临时地址过期、又认不出编号），Reuse 时请用户重新选。 */
+  inputs_unavailable?: number;
+}
+
+export interface HistoryCardInput {
+  name: string;
+  ref: string;
+  /** 参数里的字段名（image、images、video……），告诉模型原来填在哪儿。 */
+  field?: string;
 }
 
 export interface HistoryCardData {
@@ -63,6 +79,33 @@ export function fullPrompt(item: HistoryItem): string | undefined {
   return text.length > REUSE_PROMPT_MAX ? `${text.slice(0, REUSE_PROMPT_MAX - 1)}…` : text;
 }
 
+/**
+ * 带签名的临时地址（资产库给的 15 分钟地址）：交给模型没用，过一会儿就打不开；ChatGPT 还把这类参数当成
+ * 「访问凭证」拦下整个调用（11-03 第 9 轮）。只有认得出资产编号时才换成 asset://编号交回去。
+ */
+const SIGNED_URL = /[?&](?:x-oss-credential|x-oss-signature|ossaccesskeyid|signature|x-amz-signature|x-amz-credential)=/i;
+
+/** 历史条目的输入素材 → 能交回给模型的引用。认不出编号的签名地址只计数。 */
+export async function reusableInputs(
+  item: HistoryItem
+): Promise<{ inputs: HistoryCardInput[]; unavailable: number }> {
+  const params = asRecord((item as Record<string, unknown>).requestBody);
+  const found = inputsOf(params);
+  if (found.length === 0) return { inputs: [], unavailable: 0 };
+  const remembered = await rememberedMedia(found.map((input) => input.url));
+  const inputs: HistoryCardInput[] = [];
+  let unavailable = 0;
+  for (const input of found) {
+    const media = remembered.get(input.url);
+    const name = media?.name ?? input.name;
+    const field = input.field ? { field: input.field } : {};
+    if (media?.assetId) inputs.push({ name, ref: `asset://${media.assetId}`, ...field });
+    else if (!SIGNED_URL.test(input.url)) inputs.push({ name, ref: input.url, ...field });
+    else unavailable += 1;
+  }
+  return { inputs, unavailable };
+}
+
 function billingAmount(item: HistoryItem): number | undefined {
   return priceOf(asRecord((item as Record<string, unknown>).billing)?.amount);
 }
@@ -75,11 +118,16 @@ export async function historyCardData(
 ): Promise<HistoryCardData> {
   const models = await settleWithin(getModels(), MODEL_LOOKUP_TIMEOUT_MS);
   const byId = new Map((models ?? []).map((model) => [model.model, model]));
+  // 输入素材只有带提示词的条目才用得上（Reuse prompt），没有提示词的不查。
+  const reuse = await Promise.all(
+    raw.map((item) => (fullPrompt(item) ? reusableInputs(item) : Promise.resolve({ inputs: [], unavailable: 0 })))
+  );
   const items = summaries.map((summary, index): HistoryCardItem => {
     const model = byId.get(summary.model);
     const first = summary.outputs[0];
     const price = billingAmount(raw[index]!);
     const prompt = fullPrompt(raw[index]!);
+    const { inputs, unavailable } = reuse[index] ?? { inputs: [], unavailable: 0 };
     return {
       prediction_id: summary.prediction_id,
       model_id: summary.model,
@@ -92,6 +140,8 @@ export async function historyCardData(
       ...(price !== undefined ? { price_usd: price } : {}),
       ...(summary.error ? { error: summary.error } : {}),
       ...(prompt ? { prompt } : {}),
+      ...(prompt && inputs.length > 0 ? { inputs } : {}),
+      ...(prompt && unavailable > 0 ? { inputs_unavailable: unavailable } : {}),
     };
   });
   return {

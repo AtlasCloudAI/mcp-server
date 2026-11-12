@@ -136,7 +136,7 @@ Returns:
 
 Notes:
   - Status values are the platform's own ("completed", "failed", "processing", ...); filter with "state" rather than matching status strings yourself.
-  - A task in status "failed" was not billed.`,
+  - A failed task is usually not billed, but some are (a workflow can be charged for the steps that ran): when a failed task has charged_usd above 0, it was billed that amount, so say so instead of "not charged".`,
       inputSchema: {
         page: z
           .number()

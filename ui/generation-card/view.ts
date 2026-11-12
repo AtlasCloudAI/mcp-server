@@ -177,6 +177,10 @@ function priceText(card: CardData): string | null {
  * charge_status 时沿用「没扣费」：平台规则是失败不收费。
  */
 function chargeSentence(card: CardData): string {
+  // 扣了 $0 就是没扣：不写「You were charged $0.00」（11-12 ChatGPT 回归，Seedance 失败单）。
+  if (card.price_usd === 0 && (card.charge_status === "charged" || card.charge_status === "partially_charged")) {
+    return "You weren't charged.";
+  }
   const price = card.price_usd !== undefined ? formatUsd(card.price_usd) : null;
   switch (card.charge_status) {
     case "partially_charged":

@@ -31,7 +31,16 @@ import {
   renderQuoteCard,
   reopenedOnQuote,
 } from "./quote.js";
-import { type DetailButton, type HistoryFilter, type HistoryView, backLink, historyDetailButtons, historyFromToolResult, renderHistory } from "./history.js";
+import {
+  type DetailButton,
+  type HistoryFilter,
+  type HistoryView,
+  backLink,
+  historyDetailButtons,
+  historyFromToolResult,
+  renderHistory,
+  withBillingRecord,
+} from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
 import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
 import { PREFILL_NOTE_MS, isPrefillNote, prefillNote, say, sendForUser, userLang } from "./voice.js";
@@ -247,6 +256,11 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   // 网关给了扣费状态、任务也结束了：价格只认结果里的，预估价不能顶替实扣，没结算完
   // 显示「待结算」（需求文档 6.3）。老网关没有 charge_status，照旧沿用。
   else if (parsed.charge_status !== undefined && !UNSETTLED_STATES.has(parsed.state)) delete next.price_usd;
+  // 从历史列表点开的那一条：失败单的扣费以账单（列表上的金额）为准，见 withBillingRecord。
+  if (history && !history.data.sample) {
+    const listed = history.data.items.find((entry) => entry.prediction_id === next.prediction_id);
+    if (listed) Object.assign(next, withBillingRecord(next, listed));
+  }
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
   card = card?.sample
     ? {
@@ -551,7 +565,9 @@ function withHistoryActions(detail: HTMLElement): HTMLElement {
       case "reuse":
         return button("Reuse prompt", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
-          else if (prompt) sendForUser(app, say.reusePrompt(userLang(app), model, prompt), setNotice);
+          else if (prompt) {
+            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0), setNotice);
+          }
         });
       case "copy":
         return button("Copy prompt", variant, () => {

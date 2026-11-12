@@ -523,7 +523,9 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
       deps.notice("This is a sample card, so nothing was sent.");
       return;
     }
-    if (caps().serverTools === undefined) {
+    const canCallTools = caps().serverTools !== undefined;
+    // 交回上传卡要地址给缩略图，只能靠工具；直接交给模型时资产编号就够了（见下）。
+    if (!canCallTools && deps.onPicked) {
       deps.notice("This app doesn't let the card use assets. Ask in the chat to use them.");
       return;
     }
@@ -531,9 +533,20 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
     reconnect = undefined;
     changed();
     try {
-      const result = await deps.app.callServerTool({ name: USE_TOOL, arguments: { asset_ids: picks.map((p) => p.asset_id) } });
-      const used = usedFromToolResult(result);
-      if (!used || used.assets.length === 0) throw new Error(resultErrorText(result) || "Couldn't get these files ready");
+      // 先调 atlas_use_assets：拿到图片尺寸（模型据此定横竖），也能查出已经删掉的文件。
+      // 宿主不让卡片调工具、或者调用被宿主挡掉（2026-11-12 WorkBuddy 回「Sensitive MCP egress review is
+      // unavailable.」）时，直接交资产编号：消息里写的是 asset:// 引用，生成时服务端自己换新链接，只是少了尺寸。
+      let used: NonNullable<ReturnType<typeof usedFromToolResult>>;
+      try {
+        if (!canCallTools) throw new Error("card can't call tools here");
+        const result = await deps.app.callServerTool({ name: USE_TOOL, arguments: { asset_ids: picks.map((p) => p.asset_id) } });
+        const parsed = usedFromToolResult(result);
+        if (!parsed || parsed.assets.length === 0) throw new Error(resultErrorText(result) || "Couldn't get these files ready");
+        used = parsed;
+      } catch (e) {
+        if (deps.onPicked || isSignedOut(thrownErrorText(e), true)) throw e;
+        used = { assets: picks.map((p) => ({ asset_id: p.asset_id, url: "" })), missing: [] };
+      }
       const byId = new Map(picks.map((p) => [p.asset_id, p]));
       const ready = used.assets.flatMap((u): PickedAsset[] => {
         const p = byId.get(u.asset_id);

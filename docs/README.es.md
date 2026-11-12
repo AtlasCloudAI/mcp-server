@@ -34,9 +34,9 @@
 - 🎨 **Imagen** (153) — GPT Image 2.6 Sunburst · GPT Image 2.6 Flare · GPT Image 2.5 Sunburst · GPT Image 2.5 Flare
 - 🧊 **3D** (14) — Seed3D 2.0 · Tripo H3.1 · Hunyuan 3D Rapid · Hunyuan 3D Pro
 - 💬 **LLM** (83) — Hy4 · DeepSeek V4.1 Flash 1017 · Kimi K3.1 Pro HighSpeed · Kimi K3.1 Pro
-- 🔊 **Audio (TTS · Música · ASR)** (19) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
+- 🔊 **Audio (TTS · Música · ASR)** (21) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **Explora más** — [los 547 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **Explora más** — [los 549 modelos en vivo »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **Modelos de vídeo más recientes** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

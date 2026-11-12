@@ -31,7 +31,7 @@ import {
   renderQuoteCard,
   reopenedOnQuote,
 } from "./quote.js";
-import { type HistoryFilter, type HistoryView, backLink, historyFromToolResult, renderHistory } from "./history.js";
+import { type DetailButton, type HistoryFilter, type HistoryView, backLink, historyDetailButtons, historyFromToolResult, renderHistory } from "./history.js";
 import { type Uploader, type UploadCardData, createUploader, uploadFromToolResult } from "./upload.js";
 import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, assetsFromToolResult, createLibrary } from "./assets.js";
 import { PREFILL_NOTE_MS, isPrefillNote, prefillNote, say, sendForUser, userLang } from "./voice.js";
@@ -186,7 +186,7 @@ function render(force = false): void {
   renderedKey = key;
   let view: HTMLElement;
   if (history && historyOpts && !card && !pendingId) view = renderHistory(history, historyOpts, historyActions);
-  else if (history) view = h2(backLink(closeDetail), card ? withReusePrompt(renderCard(card, opts, actions)) : loadingCard(pendingId));
+  else if (history) view = h2(backLink(closeDetail), card ? withHistoryActions(renderCard(card, opts, actions)) : loadingCard(pendingId));
   else if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
   else if (card) view = renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
@@ -519,26 +519,81 @@ function h2(...children: HTMLElement[]): HTMLElement {
 }
 
 /**
- * 历史单条下面的「Reuse prompt」（设计 11-10 第 11 项，原来叫「重新生成」）：把这一单的提示词发回对话，请模型
- * 重新报价，不直接再跑一单。要宿主能替用户发消息；Cursor、Codex 这类不能的不放这个按钮。
+ * 历史详情的按钮行（设计 11-12 Figma 06 页）：按状态换掉结果卡自己的按钮行，见 historyDetailButtons。
+ * 成功的保留结果卡的下载按钮、去掉 View request、加 Reuse prompt；失败的 Reuse prompt + View request；
+ * 生成中只有 View request（卡片自己会接着刷新）。Atlas 登录失效时保留卡片自己的 Reconnect。
  */
-function withReusePrompt(detail: HTMLElement): HTMLElement {
-  // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
-  if (!messagingAvailable() || !card) return detail;
+function withHistoryActions(detail: HTMLElement): HTMLElement {
+  if (!card || viewOptions().signedOut) return detail;
   const item = history?.data.items.find((entry) => entry.prediction_id === (pendingId ?? card?.prediction_id));
   const prompt = item?.prompt;
-  if (!prompt) return detail;
-  const model = item.model_name ?? item.model_id;
+  const model = item?.model_name ?? item?.model_id ?? "";
   const sample = history?.data.sample === true;
-  const reuse = button("Reuse prompt", "secondary", () => {
-    if (sample) setNotice("This is a sample card, so nothing was sent.");
-    else sendForUser(app, say.reusePrompt(userLang(app), model, prompt), setNotice);
-  });
-  // 放进结果卡自己的按钮行（Download、View request 旁边）；没有按钮行的状态（生成中、失败）单独一行。
-  const row = detail.querySelector(".actions");
-  if (row) row.append(reuse);
-  else detail.append(h("div", { class: "actions" }, reuse));
+  // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
+  const wanted = historyDetailButtons(card.state, Boolean(prompt), messagingAvailable());
+  const make = (kind: DetailButton, variant: "primary" | "secondary"): HTMLElement | null => {
+    switch (kind) {
+      case "reuse":
+        return button("Reuse prompt", variant, () => {
+          if (sample) setNotice("This is a sample card, so nothing was sent.");
+          else if (prompt) sendForUser(app, say.reusePrompt(userLang(app), model, prompt), setNotice);
+        });
+      case "copy":
+        return button("Copy prompt", variant, () => {
+          if (prompt) void copyText(prompt).then((ok) => setNotice(ok ? "Prompt copied. Paste it in the chat." : "Couldn't copy the prompt."));
+        });
+      case "view-request":
+        return button("View request", variant, actions.openInAtlas);
+      default:
+        return null;
+    }
+  };
+  const own = Array.from(detail.querySelectorAll<HTMLElement>(".actions"));
+  if (wanted.includes("keep-download")) {
+    // 成功：结果卡自己的按钮行留着下载，去掉 View request，后面接提示词按钮。
+    const rowEl = own[0];
+    for (const el of rowEl ? Array.from(rowEl.querySelectorAll("button")) : []) if (el.textContent === "View request") el.remove();
+    const extra = wanted.filter((kind) => kind !== "keep-download").map((kind) => make(kind, "secondary"));
+    if (rowEl) rowEl.append(...extra.filter((el): el is HTMLElement => el !== null));
+    else if (extra.some(Boolean)) detail.append(h("div", { class: "actions" }, ...extra));
+    return detail;
+  }
+  const replacement = wanted.length > 0 ? h("div", { class: "actions" }, ...wanted.map((kind, i) => make(kind, i === 0 ? "primary" : "secondary"))) : null;
+  if (own[0]) {
+    if (replacement) own[0].replaceWith(replacement);
+    else own[0].remove();
+    for (const el of own.slice(1)) el.remove();
+  } else if (replacement) {
+    // 按钮放在卡片底部的提示（notice）前面。
+    const section = detail.querySelector("section.card") ?? detail;
+    const status = section.querySelector(':scope > [role="status"]');
+    if (status) status.before(replacement);
+    else section.append(replacement);
+  }
   return detail;
+}
+
+/** 复制到剪贴板：宿主的沙箱不一定给剪贴板权限，失败时退回选中文本复制。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // 退回老办法
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function historyOptions() {

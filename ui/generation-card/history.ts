@@ -272,6 +272,31 @@ export function renderHistory(view: HistoryView, opts: HistoryOptions, actions: 
   );
 }
 
+/** 历史详情底部的按钮。keep-download：保留结果卡自己的下载按钮（单个 Download，多张 Download all）。 */
+export type DetailButton = "keep-download" | "reuse" | "copy" | "view-request";
+
+/**
+ * 历史详情的按钮（设计 11-12 Figma 06 页「历史 · 点开…的记录」）：成功的 Download + Reuse prompt，
+ * 失败的 Reuse prompt + View request，生成中只有 View request。卡片不能替用户发消息时 Reuse prompt
+ * 换成 Copy prompt。Reuse prompt 不再当结果卡按钮行的第三个按钮。没有提示词的条目（内容过了保留期）
+ * 不放这一个按钮。
+ */
+export function historyDetailButtons(state: string | undefined, hasPrompt: boolean, canMessage: boolean): DetailButton[] {
+  const prompt: DetailButton[] = hasPrompt ? [canMessage ? "reuse" : "copy"] : [];
+  switch (state) {
+    case "queued":
+    case "running":
+    case "transfer_pending":
+      return ["view-request"];
+    case "failed":
+      return [...prompt, "view-request"];
+    case "canceled":
+      return [];
+    default:
+      return ["keep-download", ...prompt];
+  }
+}
+
 /** 详情页顶上的返回按钮。 */
 export function backLink(onBack: () => void): HTMLElement {
   return h("button", { type: "button", class: "history-back", onclick: onBack }, "← All generations");

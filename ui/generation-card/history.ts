@@ -26,6 +26,8 @@ export interface HistoryCardItem {
   inputs?: { name: string; ref: string; field?: string }[];
   /** 链接已经用不了的输入文件个数，Reuse 时请用户重新选。 */
   inputs_unavailable?: number;
+  /** 这一单的其他参数（尺寸、时长…），Reuse 时一起交回去。 */
+  settings?: Record<string, string | number | boolean>;
 }
 
 /**

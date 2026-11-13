@@ -20,7 +20,7 @@ import {
   registerGenerationCardResource,
 } from "./apps/generation-card.js";
 import { registerCardSelftestTool } from "./apps/card-selftest.js";
-import { registerCardCheckTool } from "./apps/submission-check.js";
+import { registerCancelQuoteTool, registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
 import { registerCardUploadPartTool } from "./tools/card-upload.js";
@@ -61,6 +61,9 @@ export function createAtlasCloudServer(
         "If a call submits straight away instead (a charge under a configured auto-submit limit), tell the user the amount. " +
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
         "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
+        (generationCardEnabled() && (profile === "stdio" || rendersCards(client.clientId))
+          ? "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. "
+          : "") +
         "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
     }
   );
@@ -92,6 +95,8 @@ export function createAtlasCloudServer(
     if (profile === "stdio" || rendersCards(client.clientId)) {
       registerCardStatusTool(server);
       registerCardCheckTool(server);
+      // 用户拒绝或改需求时作废旧报价，旧卡不能再确认（11-13 Jia A12/A14）。
+      registerCancelQuoteTool(server);
       // 上传卡是兜底：模型读得到文件时用 atlas_get_upload_url 自己传（2026-11-11 Cursor）。
       registerUploadCardTool(server);
       // 本地版没有上传中转：上传卡把文件分块交给本地服务（tools/card-upload.ts）。

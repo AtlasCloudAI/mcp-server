@@ -44,7 +44,13 @@ export function withTimeout<T>(promise: Promise<T>, declared: boolean): Promise<
   ]);
 }
 
-export async function handOff(app: App, forModel: string, text: { short: string; ask: string }): Promise<HandOffResult> {
+/** refs：一行一个文件的编号清单（「- 名字 (image, 1080×1920): asset://…」），配 text.lead 用。 */
+export async function handOff(
+  app: App,
+  forModel: string,
+  text: { short: string; ask: string; lead?: string },
+  refs?: string
+): Promise<HandOffResult> {
   const caps = app.getHostCapabilities() ?? {};
   const contextDeclared = caps.updateModelContext !== undefined;
   const messageDeclared = caps.message !== undefined;
@@ -55,7 +61,12 @@ export async function handOff(app: App, forModel: string, text: { short: string;
   } catch {
     inContext = false;
   }
-  const message = inContext && contextReachesModel(app) ? text.short : `${forModel}\n\n${text.ask}`;
+  const message =
+    inContext && contextReachesModel(app)
+      ? text.short
+      : text.lead && refs
+        ? `${text.lead}\n${refs}`
+        : `${forModel}\n\n${text.ask}`;
   try {
     const res = await withTimeout(app.sendMessage({ role: "user", content: [{ type: "text", text: message }] }), messageDeclared);
     if (res.isError) throw new Error("rejected");

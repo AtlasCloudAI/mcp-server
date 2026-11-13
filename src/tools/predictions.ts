@@ -32,11 +32,22 @@ export interface PredictionSummary {
 }
 
 /** 历史接口的 billing.amount：字符串或数字，读不出就当没有。 */
-function chargedUsd(item: HistoryItem): number | undefined {
+/**
+ * 历史接口 billing 的实扣金额。amount 是这笔账单的金额，要看 paymentStatus（kubedl dmo.ModelBillingPaymentStatus*）：
+ * 2 已付、4 部分付才算扣了；3 已退款时 amount 是退回去的那一笔，实扣是 0；1 未付是还没结算，算不出实扣。
+ * 11-13 Jia H01：GPT Image Mini 失败单退了款，列表写成扣了 $0.0043，官网是 $0。
+ * 老后端不给 paymentStatus 时照旧按 amount。
+ */
+export function chargedUsd(item: HistoryItem): number | undefined {
   const billing = asRecord((item as Record<string, unknown>).billing);
   const raw = billing?.amount;
   const value = typeof raw === "string" ? Number.parseFloat(raw) : typeof raw === "number" ? raw : NaN;
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  const status = typeof billing?.paymentStatus === "number" ? billing.paymentStatus : undefined;
+  if (status === undefined || status === 0) return value;
+  if (status === 2 || status === 4) return value;
+  if (status === 3) return 0;
+  return undefined;
 }
 
 // 后端给的是秒级时间戳字符串；这里同时容忍毫秒、数字和 ISO 字符串。

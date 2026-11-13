@@ -176,10 +176,23 @@ function requestMode(mode: "inline" | "fullscreen"): void {
   void app.requestDisplayMode({ mode }).catch(() => undefined);
 }
 
+/**
+ * 全屏时宿主压在卡片底部的那块（11-13 Jia U09：Claude 全屏资产库的「Add N selected」落在 Claude 输入框下面，
+ * 只露一条边）。宿主给了 safeAreaInsets 就用它；Claude 没给，按它输入框的高度留出来。
+ */
+export function fullscreenBottomInset(): number {
+  const context = app.getHostContext();
+  if (context?.displayMode !== "fullscreen") return 0;
+  const given = context.safeAreaInsets?.bottom;
+  if (typeof given === "number" && given > 0) return given;
+  return document.documentElement.dataset.host === "claude" ? 128 : 0;
+}
+
 function render(force = false): void {
   // 资产库卡在对话里不让页面自己滚，见 styles.css「资产库卡」。
   document.documentElement.dataset.view = library ? "assets" : "";
   document.documentElement.dataset.display = app.getHostContext()?.displayMode ?? "inline";
+  document.documentElement.style.setProperty("--ac-safe-bottom", `${fullscreenBottomInset()}px`);
   if (library) {
     const display = displayInfo();
     const key = `assets:${library.version}:${notice ?? ""}:${display.fullscreen}:${display.canExpand}`;
@@ -567,7 +580,7 @@ function withHistoryActions(detail: HTMLElement): HTMLElement {
         return button("Reuse prompt", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
           else if (prompt) {
-            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0), setNotice);
+            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0, item?.settings ?? {}, item?.model_id ?? card.model_id), setNotice);
           }
         });
       case "copy":

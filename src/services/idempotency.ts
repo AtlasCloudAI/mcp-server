@@ -9,7 +9,12 @@ export type StoredRecord<T> =
   | { fingerprint: string; state: "completed"; createdAt: number; result: T }
   // 上游明确拒收（4xx）：这一单没开始，也没扣钱。
   | { fingerprint: string; state: "rejected"; createdAt: number }
-  | { fingerprint: string; state: "uncertain"; createdAt: number };
+  | { fingerprint: string; state: "uncertain"; createdAt: number }
+  // 报价作废（atlas_cancel_quote）：用户说不要了（declined）或改了需求、另报了价（replaced）。
+  // 占住这个幂等键，之后拿它确认一律拒绝；卡片后台核实时据此改成 Canceled / Settings changed。
+  | { fingerprint: string; state: "canceled"; createdAt: number; reason: QuoteCancelReason };
+
+export type QuoteCancelReason = "declined" | "replaced";
 
 /**
  * 上游明确拒收、肯定没开始的失败：带状态码的 4xx（408 请求超时除外）。
@@ -69,6 +74,18 @@ export class UnconfirmedRequestError extends Error {
   }
 }
 
+/** 这份报价已经作废（atlas_cancel_quote）：卡片认 "quote was canceled" 这几个词，改措辞要同步 ui/generation-card/quote.ts。 */
+export class IdempotencyCanceledError extends Error {
+  constructor(readonly reason: QuoteCancelReason) {
+    super(
+      reason === "replaced"
+        ? "This quote was canceled because the request changed and a newer quote replaced it; nothing was charged. Use the newer quote, or quote again"
+        : "This quote was canceled because the user declined it; nothing was charged. Quote again only if the user asks for it"
+    );
+    this.name = "IdempotencyCanceledError";
+  }
+}
+
 export class IdempotencyUncertainError extends Error {
   constructor() {
     super(
@@ -87,6 +104,11 @@ export interface IdempotencyStore {
   ): Promise<T>;
   /** 只看不动：这个键现在记着什么。卡片核实「上一次到底提交没有」用。 */
   peek(key: string): Promise<StoredRecord<unknown> | undefined>;
+  /**
+   * 占住一个还没用过的键，记成作废。键已经有记录（提交过、正在提交、已作废）就不动，返回那条记录；
+   * 占到了返回 undefined。
+   */
+  cancel(key: string, ttlSeconds: number, reason: QuoteCancelReason): Promise<StoredRecord<unknown> | undefined>;
   ready(): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -95,6 +117,7 @@ function existingResult<T>(
   existing: StoredRecord<T>,
   fingerprint: string
 ): T {
+  if (existing.state === "canceled") throw new IdempotencyCanceledError(existing.reason);
   if (existing.fingerprint !== fingerprint) {
     throw new IdempotencyConflictError();
   }
@@ -147,6 +170,14 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
   async peek(key: string): Promise<StoredRecord<unknown> | undefined> {
     const current = this.records.get(key);
     return current && current.expiresAt > Date.now() ? current.record : undefined;
+  }
+
+  async cancel(key: string, ttlSeconds: number, reason: QuoteCancelReason): Promise<StoredRecord<unknown> | undefined> {
+    const now = Date.now();
+    const current = this.records.get(key);
+    if (current && current.expiresAt > now) return current.record;
+    this.records.set(key, { expiresAt: now + ttlSeconds * 1000, record: { fingerprint: "", state: "canceled", createdAt: now, reason } });
+    return undefined;
   }
 
   async ready(): Promise<boolean> {
@@ -216,6 +247,15 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   async peek(key: string): Promise<StoredRecord<unknown> | undefined> {
     const raw = await this.client.get(this.redisKey(key));
+    return raw ? (JSON.parse(raw) as StoredRecord<unknown>) : undefined;
+  }
+
+  async cancel(key: string, ttlSeconds: number, reason: QuoteCancelReason): Promise<StoredRecord<unknown> | undefined> {
+    const redisKey = this.redisKey(key);
+    const record: StoredRecord<unknown> = { fingerprint: "", state: "canceled", createdAt: Date.now(), reason };
+    const reserved = await this.client.set(redisKey, JSON.stringify(record), { EX: ttlSeconds, NX: true });
+    if (reserved !== null) return undefined;
+    const raw = await this.client.get(redisKey);
     return raw ? (JSON.parse(raw) as StoredRecord<unknown>) : undefined;
   }
 
@@ -292,6 +332,23 @@ export async function peekIdempotent(
   idempotencyKey: string
 ): Promise<StoredRecord<unknown> | undefined> {
   return currentStore().peek(namespacedKey(toolName, idempotencyKey));
+}
+
+/**
+ * 作废一份还没提交的报价：占住它的幂等键。返回 canceled（这次作废的或之前就作废了）或 submitted（已经提交过，作废不了）。
+ */
+export async function cancelIdempotent(
+  toolName: string,
+  idempotencyKey: string,
+  reason: QuoteCancelReason
+): Promise<{ status: "canceled"; reason: QuoteCancelReason } | { status: "submitted"; record: StoredRecord<unknown> }> {
+  const ttlSeconds = getRequestContext()?.idempotencyTtlSeconds ?? 86400;
+  const existing = await currentStore().cancel(namespacedKey(toolName, idempotencyKey), ttlSeconds, reason);
+  if (!existing) return { status: "canceled", reason };
+  if (existing.state === "canceled") return { status: "canceled", reason: existing.reason };
+  // 被上游明确拒收的那一单没开始：键已经用过，不能再确认，算作作废了。
+  if (existing.state === "rejected") return { status: "canceled", reason };
+  return { status: "submitted", record: existing };
 }
 
 function currentStore(): IdempotencyStore {

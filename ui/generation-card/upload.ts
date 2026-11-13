@@ -5,6 +5,7 @@
 // 服务端数据见 src/apps/upload-card.ts。
 
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { isLopsided } from "../../src/apps/card-params.js";
 import { ASSET_REF_NOTE, type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
 import { handOff } from "./handoff.js";
@@ -122,10 +123,13 @@ export function fileKind(name: string, mime = ""): UploadKind {
   return EXT_KIND[name.split(".").pop()?.toLowerCase() ?? ""] ?? "other";
 }
 
-/** 2.4 MB、860 KB、12 bytes。 */
+/**
+ * 2.4 MB、860 KB、12 bytes。按 1000 进位，和 Finder、Windows 资源管理器的「大小」一致（11-13 Jia U05：
+ * 60.8 MB 的文件卡上写 58 MB）。上限文案（limitLabel）仍按平台的 MiB 写整数。
+ */
 export function formatBytes(bytes: number): string {
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1).replace(/\.0$/, "")} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1).replace(/\.0$/, "")} MB`;
+  if (bytes >= 1000) return `${Math.round(bytes / 1000)} KB`;
   return `${bytes} bytes`;
 }
 
@@ -256,6 +260,13 @@ export function filesForModel(items: Array<Pick<UploadItem, "name" | "kind" | "u
     `The user added ${items.length === 1 ? "1 file" : `${items.length} files`} in the Atlas upload card. ` +
     `Use these as the media inputs for their request (they are already uploaded; do not upload them again).${fromLibrary}\n${lines.join("\n")}`
   );
+}
+
+/** 消息里的文件清单（Claude 这类模型看不到上下文的宿主用）：进了资产库的写 asset:// 编号，没进的写地址。 */
+export function fileRefLines(items: Array<Pick<UploadItem, "name" | "kind" | "url" | "asset_id" | "shape">>): string {
+  return items
+    .map((item) => `- ${item.name} (${item.shape ? `${item.kind}, ${item.shape}` : item.kind}): ${item.asset_id ? `asset://${item.asset_id}` : item.url}`)
+    .join("\n");
 }
 
 // ---------- 状态和动作 ----------
@@ -400,7 +411,10 @@ export function saveUploads(key: string, saved: SavedUploads, store = storage())
 export function createUploader(initial: UploadCardData, deps: UploaderDeps): Uploader {
   let data = initial;
   let version = 0;
-  let items: UploadItem[] = (initial.sample_files ?? []).map((f) => ({
+  let items: UploadItem[] = (initial.sample_files ?? []).map((f, i) => ({
+    // 样例上传卡在资产库能用时，传好的文件当作已存进资产库（11-13 Jia S40/S41：样例写着「weren't saved」，
+    // 和真实上传的「Saved to Asset Library」矛盾）。空间满了的那张样例照旧不存。
+    ...(f.status === "done" && initial.library && !initial.sample_library_full ? { asset_id: `asset_selftest_up${i + 1}`, saved: true } : {}),
     id: `s${nextId++}`,
     name: f.name,
     size: f.size_bytes,
@@ -948,7 +962,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (done.length === 0) return;
     const names = done.map((i) => i.name).join(", ");
     // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
-    const outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names));
+    const outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names), fileRefLines(done));
     if (outcome === "sent" || outcome === "context") {
       handedOff = doneKey();
       changed();
@@ -1011,6 +1025,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     if (item.thumb) {
       const img = h("img", { src: item.thumb, alt: "", decoding: "async", referrerpolicy: "no-referrer" });
       img.addEventListener("error", icon, { once: true });
+      // 宽图、竖图整张显示，不裁成方形（11-13 Jia U07），和资产库卡同一条规则。
+      img.addEventListener("load", () => {
+        if (isLopsided(img.naturalWidth, img.naturalHeight)) img.classList.add("upload-fit");
+      }, { once: true });
       box.append(img);
     } else {
       icon();
@@ -1145,6 +1163,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   function view(): HTMLElement {
     const phase = uploadPhase(items, gaveUp);
     const done = items.filter((i) => i.status === "done");
+    const bad = items.filter((i) => i.status === "invalid");
     const useLabel = done.length === 1 ? "Use 1 file" : `Use ${done.length} files`;
     const handed = handedOff !== "" && handedOff === doneKey();
     const useButton = (variant: "primary" | "secondary") =>
@@ -1196,7 +1215,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
             ? badge("Ready", { success: true })
             : phase === "failed"
               ? badge("Upload failed", { danger: true })
-              : badge("Can't upload", { danger: true });
+              : // 有的能用、有的不能（11-13 Jia U05）：不是全部失败，用提醒色写几个不能传。
+                done.length > 0
+                ? badge(`${bad.length} can't upload`, { warn: true })
+                : badge("Can't upload", { danger: true });
       const actions: (HTMLElement | null)[] =
         phase === "uploading"
           ? [button("Cancel", "secondary", cancel)]

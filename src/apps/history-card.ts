@@ -3,7 +3,7 @@ import type { HistoryItem } from "../response-schemas.js";
 import { asRecord } from "../services/json-record.js";
 import { rememberedMedia, rememberedMediaNames } from "../services/media-names.js";
 import { inputsOf } from "./card-params.js";
-import type { PredictionSummary } from "../tools/predictions.js";
+import { type PredictionSummary, chargedUsd } from "../tools/predictions.js";
 import {
   type CardMedia,
   type CardState,
@@ -45,6 +45,11 @@ export interface HistoryCardItem {
   inputs?: HistoryCardInput[];
   /** 输入里有几个文件的链接已经用不了（资产库临时地址过期、又认不出编号），Reuse 时请用户重新选。 */
   inputs_unavailable?: number;
+  /**
+   * 这一单的其他参数（尺寸、时长、分辨率、张数…），「Reuse prompt」一起交回去（11-13 Jia H05：2048×2048 的单
+   * Reuse 后新报价只剩「1 image」；设计 11-10 写的是带上原提示词、模型和参数）。只留标量，不含提示词和文件。
+   */
+  settings?: Record<string, string | number | boolean>;
 }
 
 export interface HistoryCardInput {
@@ -120,6 +125,38 @@ function assetRefsIn(params: Record<string, unknown> | undefined): HistoryCardIn
   return out;
 }
 
+/** 不交回去的参数：提示词、模型、文件字段，以及只跟这次调用有关的开关。 */
+const SKIP_SETTINGS = new Set([
+  "prompt",
+  "model",
+  "webhook",
+  "webhook_url",
+  "enable_sync_mode",
+  "enable_base64_output",
+  "sync_mode",
+  "seed",
+]);
+const MAX_SETTINGS = 12;
+
+/** 请求里能原样再填一次的标量参数。链接、资产引用、超长字符串都不要。 */
+export function reusableSettings(item: HistoryItem): Record<string, string | number | boolean> | undefined {
+  const params = asRecord((item as Record<string, unknown>).requestBody);
+  if (!params) return undefined;
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (Object.keys(out).length >= MAX_SETTINGS) break;
+    if (SKIP_SETTINGS.has(key)) continue;
+    if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
+    else if (typeof value === "boolean") out[key] = value;
+    else if (typeof value === "string") {
+      const text = value.trim();
+      if (!text || text.length > 60 || /^(?:https?|data|assetd?):/i.test(text)) continue;
+      out[key] = text;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** 历史条目的输入素材 → 能交回给模型的引用。认不出编号的签名地址只计数。 */
 export async function reusableInputs(
   item: HistoryItem
@@ -148,7 +185,8 @@ export async function reusableInputs(
 }
 
 function billingAmount(item: HistoryItem): number | undefined {
-  return priceOf(asRecord((item as Record<string, unknown>).billing)?.amount);
+  // 和 atlas_list_predictions 的 charged_usd 同一套：退了款的算 0，没结算的不算。
+  return chargedUsd(item);
 }
 
 /** 历史接口的原始条目 + 已整理好的摘要 → 卡片数据。模型名查不到就只显示模型 ID。 */
@@ -168,6 +206,7 @@ export async function historyCardData(
     const first = summary.outputs[0];
     const price = billingAmount(raw[index]!);
     const prompt = fullPrompt(raw[index]!);
+    const settings = prompt ? reusableSettings(raw[index]!) : undefined;
     const { inputs, unavailable } = reuse[index] ?? { inputs: [], unavailable: 0 };
     return {
       prediction_id: summary.prediction_id,
@@ -183,6 +222,7 @@ export async function historyCardData(
       ...(prompt ? { prompt } : {}),
       ...(prompt && inputs.length > 0 ? { inputs } : {}),
       ...(prompt && unavailable > 0 ? { inputs_unavailable: unavailable } : {}),
+      ...(settings ? { settings } : {}),
     };
   });
   return {

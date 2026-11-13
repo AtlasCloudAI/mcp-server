@@ -832,6 +832,11 @@ button.history-row:focus-visible {
   display: block;
 }
 
+.upload-thumb img.upload-fit {
+  object-fit: contain;
+  background: var(--ac-badge-bg);
+}
+
 .upload-thumb-icon svg {
   width: 18px;
   height: 18px;
@@ -1142,6 +1147,19 @@ button.history-row:focus-visible {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+/* 全屏：底栏吸在可见区域底部，并让开宿主压在上面的输入框（--ac-safe-bottom 由 main.ts 按宿主设置）。 */
+:root[data-display="fullscreen"] .asset-foot {
+  position: sticky;
+  bottom: var(--ac-safe-bottom, 0px);
+  z-index: 2;
+  background: var(--ac-card-bg);
+  padding-bottom: 12px;
+}
+
+:root[data-display="fullscreen"][data-view="assets"] body {
+  padding-bottom: var(--ac-safe-bottom, 0px);
 }
 
 .asset-count {

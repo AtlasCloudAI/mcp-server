@@ -379,6 +379,19 @@ function unavailableCard(card: CardData, opts: ViewOptions, actions: CardActions
   );
 }
 
+/**
+ * 失败卡第一句：按原因说清是谁的问题（11-13 Jia S16：缺参数的网关报错也写「The model couldn't finish」）。
+ * 参数不对是请求被拒；连不上上游是服务商那边；其余才是模型没做完。
+ */
+export function failureLead(error: string | undefined, what: string): string {
+  const reason = error ? readableReason(error) : "";
+  if (/^A required setting was missing/.test(reason) || /^Atlas Cloud returned an error \(HTTP 4\d\d\)/.test(reason)) {
+    return `Atlas Cloud didn't accept the settings for ${what}.`;
+  }
+  if (/model provider/.test(reason)) return `Atlas Cloud couldn't get ${what} done because of a problem on the model provider's side.`;
+  return `The model couldn't finish ${what}.`;
+}
+
 function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HTMLElement {
   // 有原参数时直接重新报价，只要宿主允许调工具；否则要能发消息。
   const canRetry = opts.canMessage || (card.retry !== undefined && opts.canRefresh);
@@ -392,7 +405,7 @@ function failedCard(card: CardData, opts: ViewOptions, actions: CardActions): HT
     "section",
     { class: "card" },
     head(progressTitle(card), badge("Failed", { danger: true })),
-    h("p", { class: "desc" }, `The model couldn't finish ${what}. ${chargeSentence(card)}`),
+    h("p", { class: "desc" }, `${failureLead(card.error, what)} ${chargeSentence(card)}`),
     rows.length > 0 ? h("div", { class: "rows" }, ...rows) : null,
     h(
       "div",
@@ -431,7 +444,28 @@ const PREVIEW_WORD: Record<CardMedia["kind"], string> = { image: "image", video:
  * 预览加载不出来（宿主拦了来源、链接一时打不开）：文件已经生成好了，可以重试预览或直接下载
  * （设计稿 v2「预览加载失败」）。
  */
+/** 宿主安全策略拦下的媒体地址（securitypolicyviolation 的 blockedURI）。预览失败时据此说「被拦了」而不是「没加载出来」。 */
+const blockedSources = new Set<string>();
+if (typeof document !== "undefined") {
+  document.addEventListener("securitypolicyviolation", (event) => {
+    if (event.blockedURI) blockedSources.add(event.blockedURI);
+  });
+}
+
+/** 这个地址（或它的来源）被宿主拦过。blockedURI 有时只给 origin。 */
+export function wasBlocked(url: string, blocked: ReadonlySet<string> = blockedSources): boolean {
+  if (blocked.has(url)) return true;
+  try {
+    const origin = new URL(url).origin;
+    return blocked.has(origin) || [...blocked].some((entry) => entry.startsWith(origin));
+  } catch {
+    return false;
+  }
+}
+
 function previewFailed(card: CardData, media: CardMedia, actions: CardActions, retry: () => void): HTMLElement {
+  // 11-13 Jia S19：被宿主拦下的来源也写成「没加载出来」，看不出是被拦。拦了的照实说，重试也没用。
+  const blocked = wasBlocked(media.url);
   return h(
     "section",
     { class: "card" },
@@ -442,15 +476,17 @@ function previewFailed(card: CardData, media: CardMedia, actions: CardActions, r
         "div",
         {},
         h("span", { class: "placeholder-icon", html: ICON_IMAGE }),
-        `Your ${PREVIEW_WORD[media.kind]} is ready, but the preview didn't load.`
+        blocked
+          ? `Your ${PREVIEW_WORD[media.kind]} is ready, but this app blocks previews from where it's stored. Download it to view.`
+          : `Your ${PREVIEW_WORD[media.kind]} is ready, but the preview didn't load.`
       )
     ),
     caption(card, media),
     h(
       "div",
       { class: "actions" },
-      button("Retry preview", "primary", retry),
-      button("Download", "secondary", () => actions.download(media))
+      blocked ? null : button("Retry preview", "primary", retry),
+      button("Download", blocked ? "primary" : "secondary", () => actions.download(media))
     )
   );
 }

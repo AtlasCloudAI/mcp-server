@@ -426,6 +426,13 @@ export function readableReason(raw: string): string {
     }
     reason = message?.trim() || `Atlas Cloud returned an error (HTTP ${http[1]}).`;
   }
+  // 上游服务连不上的原话（Go 的「Post "…": dial tcp: lookup … no such host」、connection refused、i/o timeout、
+  // context deadline exceeded）：11-13 Jia B06 失败卡把它原样写在 Reason 里，用户看不懂。说成一句人话，原话在悬停提示里。
+  if (/\bdial tcp\b|no such host|connection refused|connection reset|i\/o timeout|context deadline exceeded|tls handshake timeout|EOF$/i.test(reason)) {
+    return /timeout|deadline/i.test(reason)
+      ? "The model provider didn't respond in time. This is on the provider's side, not your request."
+      : "Atlas Cloud couldn't reach the model provider. This is on the provider's side, not your request.";
+  }
   const missing = /missing required parameters?\s*[:：]\s*(.+)$/i.exec(reason)?.[1];
   if (missing) {
     const names = missing.match(/[A-Za-z_][\w.-]*/g) ?? [];

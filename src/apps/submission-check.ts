@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { api, generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
-import { peekIdempotent } from "../services/idempotency.js";
+import { type QuoteCancelReason, cancelIdempotent, peekIdempotent } from "../services/idempotency.js";
 import {
   historyResponseSchema,
   predictionResponseSchema,
@@ -40,7 +40,9 @@ export type SubmissionOutcome =
   | { outcome: "not_started"; message: string }
   | { outcome: "checking" }
   /** on_load：这张报价没有提交记录。 */
-  | { outcome: "not_submitted" };
+  | { outcome: "not_submitted" }
+  /** 这份报价作废了（atlas_cancel_quote）：卡片改成 Canceled（declined）或 Settings changed（replaced）。 */
+  | { outcome: "canceled"; reason: QuoteCancelReason };
 
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
@@ -104,6 +106,7 @@ export async function checkSubmission(input: {
   const record = await peekIdempotent(input.tool, input.idempotency_key);
   const stored = record?.state === "completed" ? storedPredictionId(record.result) : undefined;
   if (stored) return { outcome: "started", prediction_id: stored };
+  if (record?.state === "canceled") return { outcome: "canceled", reason: record.reason };
   if (record?.state === "rejected") {
     return { outcome: "not_started", message: "Atlas Cloud turned this request down, so it didn't start." };
   }
@@ -180,7 +183,9 @@ export function registerCardCheckTool(server: McpServer): void {
                     ? "Still checking whether it started."
                     : result.outcome === "not_submitted"
                       ? "This quote hasn't been submitted."
-                      : `Not started: ${result.message}`,
+                      : result.outcome === "canceled"
+                        ? `This quote was canceled (${result.reason}).`
+                        : `Not started: ${result.message}`,
               },
             ],
           };
@@ -190,6 +195,56 @@ export function registerCardCheckTool(server: McpServer): void {
           _meta: { [CARD_META_KEY]: card },
           structuredContent: { ...result, card },
           content: [{ type: "text", text: `Started as prediction ${result.prediction_id}: ${card.state}` }],
+        };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: handleError(error) }] };
+      }
+    }
+  );
+}
+
+export const CANCEL_QUOTE_TOOL = "atlas_cancel_quote";
+
+/**
+ * 报价作废（11-13 Jia A12 / A14）：一条消息出两张报价卡，用户说「小狗那张不要了」，或者改了时长重新报价，
+ * 旧卡还是 Needs confirmation、还能点确认，可能误下单。模型在用户拒绝或改需求时调它：占住旧报价的幂等键，
+ * 之后拿它确认一律拒绝，卡片后台核实时看到作废就改成 Canceled / Settings changed。
+ */
+export function registerCancelQuoteTool(server: McpServer): void {
+  server.registerTool(
+    CANCEL_QUOTE_TOOL,
+    {
+      title: "Cancel Quote",
+      description:
+        "Withdraw a generation quote the user has not confirmed, so its card can no longer submit it. " +
+        "Call it when the user declines a quote (\"not that one\", \"never mind\", \"I don't want it\") with reason \"declined\", " +
+        "and when the user changes a quoted request (different duration, size, model, prompt...) with reason \"replaced\", for the old quote, before or right after quoting the new one. " +
+        "Pass the tool and idempotency_key of the quote being withdrawn. Nothing is charged. A quote that was already submitted cannot be canceled; the result says so.",
+      inputSchema: {
+        tool: z.enum(CARD_GENERATION_TOOLS).describe("Generation tool that issued the quote"),
+        idempotency_key: idempotencyKeySchema.describe("idempotency_key of the quote being withdrawn"),
+        reason: z.enum(["declined", "replaced"]).describe("declined: the user doesn't want it; replaced: the request changed and a new quote replaces it"),
+      },
+      annotations: { ...CARD_TOOL_POLICIES.atlas_cancel_quote.annotations },
+    },
+    async ({ tool, idempotency_key, reason }) => {
+      try {
+        const result = await cancelIdempotent(tool, idempotency_key, reason);
+        if (result.status === "canceled") {
+          return {
+            structuredContent: { status: "canceled", reason: result.reason },
+            content: [{ type: "text", text: "Quote canceled. Its card can no longer submit it, and nothing was charged." }],
+          };
+        }
+        const id = result.record.state === "completed" ? storedPredictionId(result.record.result) : undefined;
+        return {
+          structuredContent: { status: "already_submitted", ...(id ? { prediction_id: id } : {}) },
+          content: [
+            {
+              type: "text",
+              text: `This quote was already submitted${id ? ` as prediction ${id}` : ""}, so it can't be canceled. Tell the user; check its status with atlas_get_prediction.`,
+            },
+          ],
         };
       } catch (error) {
         return { isError: true, content: [{ type: "text", text: handleError(error) }] };

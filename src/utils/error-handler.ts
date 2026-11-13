@@ -3,6 +3,7 @@ import { ApiRequestError } from "../services/api-client.js";
 import { UnconfirmedRequestError } from "../services/idempotency.js";
 import { GenerationConfirmationError } from "../services/generation-confirmation.js";
 import {
+  IdempotencyCanceledError,
   IdempotencyConflictError,
   IdempotencyInProgressError,
   IdempotencyUncertainError,
@@ -34,6 +35,7 @@ function mentionsBalance(message: string): boolean {
 export function classifyToolError(error: unknown): ToolCallError {
   if (error instanceof GenerationConfirmationError) return { code: "confirmation_required" };
   if (error instanceof IdempotencyConflictError) return { code: "idempotency_conflict" };
+  if (error instanceof IdempotencyCanceledError) return { code: "confirmation_required" };
   if (error instanceof IdempotencyInProgressError) return { code: "idempotency_in_progress" };
   // 上一次提交没拿到确定答复，可能已经到了平台：和 CLI 的 submission_unknown 同义。
   if (error instanceof IdempotencyUncertainError) return { code: "submission_unknown" };

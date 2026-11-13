@@ -54,10 +54,10 @@ test("文件类型先看 MIME，没有就看扩展名；格式、空文件、超
   assert.equal(validateFile({ name: "a.mp4", size: 48 * MB, type: "video/mp4" }, 32 * MB), "over the 32 MB limit");
 });
 
-test("文件大小写成 2.4 MB、860 KB", () => {
-  assert.equal(formatBytes(Math.round(2.4 * MB)), "2.4 MB");
-  assert.equal(formatBytes(32 * MB), "32 MB");
-  assert.equal(formatBytes(860 * 1024), "860 KB");
+test("文件大小写成 2.4 MB、860 KB（按 1000 进位，和 Finder 一致）", () => {
+  assert.equal(formatBytes(2_400_000), "2.4 MB");
+  assert.equal(formatBytes(32_000_000), "32 MB");
+  assert.equal(formatBytes(860_000), "860 KB");
   assert.equal(formatBytes(12), "12 bytes");
 });
 

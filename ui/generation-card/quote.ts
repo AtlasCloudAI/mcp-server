@@ -70,6 +70,8 @@ export type QuotePhase =
   | "in_progress"
   | "input_missing"
   | "signed_out"
+  // 报价作废了（atlas_cancel_quote，11-13 Jia A12/A14）：用户说不要了，或者改了需求另报了价。不能再确认。
+  | "canceled"
   | "error";
 
 export interface QuoteState {
@@ -84,6 +86,13 @@ export interface QuoteState {
   retryAt?: number;
   /** input_missing：被删掉的素材的名字（服务端报错里写的）。 */
   missing?: string[];
+  /** canceled：因为改了需求、另报了价（显示 Settings changed），而不是用户说不要了。 */
+  replaced?: boolean;
+}
+
+/** 后台核实回来的作废原因 → 卡片状态。 */
+export function canceledState(reason: unknown): QuoteState {
+  return reason === "replaced" ? { phase: "canceled", replaced: true } : { phase: "canceled" };
 }
 
 export interface QuoteDeps {
@@ -172,6 +181,8 @@ function missingNames(text: string): string[] {
 export function failureState(text: string, now = Date.now()): QuoteState {
   if (/no longer available/i.test(text) && /asset library/i.test(text)) return { phase: "input_missing", missing: missingNames(text) };
   if (isSignedOut(text)) return { phase: "signed_out" };
+  // 服务端 IdempotencyCanceledError（src/services/idempotency.ts）：这份报价作废了，不再按 settings_changed 去重新报价。
+  if (/this quote was canceled/i.test(text)) return canceledState(/request changed|newer quote/i.test(text) ? "replaced" : "declined");
   if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
   if (/insufficient balance|top up/i.test(text)) {
     const balance = balanceIn(text);
@@ -325,9 +336,11 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         name: CHECK_TOOL,
         arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
       });
-      const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
-      // 只认「开始了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
+      const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
+      const outcome = content?.outcome;
+      // 只认「开始了」和「作废了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
       if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
+      else if (!result.isError && outcome === "canceled" && deps.card()?.quote === quote) deps.setState(canceledState(content?.reason));
       else backToQuote(Boolean(result.isError));
     } catch {
       // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
@@ -351,16 +364,13 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         name: CHECK_TOOL,
         arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
       });
-      const outcome = (result.structuredContent as { outcome?: string } | undefined)?.outcome;
+      const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
+      const outcome = content?.outcome;
       // 问的这会儿用户可能自己点了确认：那一路自己会接着显示，这里不插手。
-      if (
-        !result.isError &&
-        outcome === "started" &&
-        deps.card()?.quote === quote &&
-        awaitingConfirmation(deps.card(), deps.state())
-      ) {
-        startedFrom(result, quote, false);
-      }
+      const stillWaiting = !result.isError && deps.card()?.quote === quote && awaitingConfirmation(deps.card(), deps.state());
+      if (stillWaiting && outcome === "started") startedFrom(result, quote, false);
+      // 模型按用户的话作废了这份报价（atlas_cancel_quote）：卡片不再让人确认。
+      else if (stillWaiting && outcome === "canceled") deps.setState(canceledState(content?.reason));
     } catch {
       // 问不到：下次再问。真点了确认，服务端按幂等键认出提交过的，不会重复扣钱。
     } finally {
@@ -775,6 +785,28 @@ export function renderQuoteCard(
       subtitle,
       h("p", { class: "desc" }, "Settings changed after this quote. Get a new quote to continue. Nothing was charged."),
       quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "canceled") {
+    // 改了需求另报了价：和 settings_changed 长得一样，但不能在这张卡上重新报价（旧的幂等键已作废），去用新的那张卡。
+    if (state.replaced) {
+      return h(
+        "section",
+        { class: "card" },
+        head("Settings changed", badge("Replaced", { warn: true })),
+        subtitle,
+        h("p", { class: "desc" }, "The request changed and a newer quote replaced this one. Use the newer quote. Nothing was charged."),
+        notice(opts)
+      );
+    }
+    return h(
+      "section",
+      { class: "card" },
+      head("Quote canceled", badge("Canceled")),
+      subtitle,
+      h("p", { class: "desc" }, "You declined this quote, so it can't be confirmed. Nothing was charged."),
       notice(opts)
     );
   }

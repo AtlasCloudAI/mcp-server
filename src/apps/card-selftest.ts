@@ -142,7 +142,8 @@ const VARIANTS = {
     name: "Seedream v4.7",
     type: "Image",
     price: "0.03",
-    outputs: ["https://www.atlascloud.ai/selftest/preview-unavailable.jpg"],
+    // 卡片 CSP 不放行的来源：看「被宿主拦下」的样子（11-13 Jia S19：原来指向 www.atlascloud.ai，CSP 放行，只是 404）。
+    outputs: ["https://example.com/atlas-selftest/preview-blocked.jpg"],
   },
   expired: {
     status: "completed",

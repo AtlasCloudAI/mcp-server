@@ -52,21 +52,40 @@ const files = (lang: Lang, count: number) => (lang === "zh" ? `${count} 个文�
 export interface HandOffText {
   short: string;
   ask: string;
+  /**
+   * 模型看不到上下文的宿主（Claude）里，消息写成「lead + 文件编号清单」，不再把写给模型的整段英文说明
+   * 塞进输入框（11-13 Jia D05/U02：一大段英文 asset:// 说明，Claude 还弹红色「运行此提示词前请谨慎」）。
+   * asset:// 的用法生成工具的描述里已经写了。
+   */
+  lead?: string;
 }
 
 export const say = {
   pickedFromLibrary(lang: Lang, count: number, labels: string): HandOffText {
     return lang === "zh"
-      ? { short: `我在 Atlas 卡片里从资产库选了 ${files(lang, count)}（${labels}），请用${it(lang, count)}。`, ask: `请用${it(lang, count)}。` }
+      ? {
+          short: `我在 Atlas 卡片里从资产库选了 ${files(lang, count)}（${labels}），请用${it(lang, count)}。`,
+          ask: `请用${it(lang, count)}。`,
+          lead: `请用我在 Atlas 资产库里选的${count === 1 ? "这个文件" : `这 ${count} 个文件`}：`,
+        }
       : {
           short: `I've picked ${files(lang, count)} from my Asset Library in the Atlas card (${labels}). Please use ${it(lang, count)}.`,
           ask: `Please use ${it(lang, count)}.`,
+          lead: `Please use ${count === 1 ? "this file" : `these ${count} files`} from my Atlas Asset Library:`,
         };
   },
   addedInCard(lang: Lang, count: number, names: string): HandOffText {
     return lang === "zh"
-      ? { short: `我在 Atlas 卡片里添加了 ${files(lang, count)}（${names}），请用${it(lang, count)}。`, ask: `请用${it(lang, count)}。` }
-      : { short: `I've added ${files(lang, count)} in the Atlas card (${names}). Please use ${it(lang, count)}.`, ask: `Please use ${it(lang, count)}.` };
+      ? {
+          short: `我在 Atlas 卡片里添加了 ${files(lang, count)}（${names}），请用${it(lang, count)}。`,
+          ask: `请用${it(lang, count)}。`,
+          lead: `我在 Atlas 卡片里传好了${count === 1 ? "这个文件" : `这 ${count} 个文件`}，请用${it(lang, count)}（已经传好，不用再传）：`,
+        }
+      : {
+          short: `I've added ${files(lang, count)} in the Atlas card (${names}). Please use ${it(lang, count)}.`,
+          ask: `Please use ${it(lang, count)}.`,
+          lead: `I've uploaded ${count === 1 ? "this file" : `these ${count} files`} in the Atlas card. Please use ${it(lang, count)} (already uploaded):`,
+        };
   },
   replacedDeleted(lang: Lang, count: number, labels: string, gone: string[]): HandOffText {
     if (lang === "zh") {
@@ -104,28 +123,35 @@ export const say = {
     model: string,
     prompt: string,
     inputs: { name: string; ref: string; field?: string }[] = [],
-    unavailable = 0
+    unavailable = 0,
+    settings: Record<string, string | number | boolean> = {},
+    modelId?: string
   ): string {
     const list = inputs.map((input) => `- ${input.name}${input.field ? ` (${input.field})` : ""}: ${input.ref}`).join("\n");
+    // 原来的参数照抄（11-13 Jia H05），模型 ID 也写上，免得换成同名的别的版本。
+    const params = Object.entries(settings).map(([key, value]) => `${key}: ${value}`).join(", ");
+    const modelLine = modelId && modelId !== model ? `${model}（${modelId}）` : model;
     if (lang === "zh") {
       const head =
         inputs.length > 0 || unavailable > 0
-          ? `用同样的提示词和输入素材再生成一次（上次用的是 ${model}），先给我报价：`
-          : `用同样的提示词再生成一次（上次用的是 ${model}），先给我报价：`;
+          ? `用同样的模型、提示词、参数和输入素材再生成一次（上次用的是 ${modelLine}），先给我报价：`
+          : `用同样的模型、提示词和参数再生成一次（上次用的是 ${modelLine}），先给我报价：`;
       const files = inputs.length > 0 ? `\n\n输入素材（照原来的字段填）：\n${list}` : "";
+      const same = params ? `\n\n参数（照原来的填）：${params}` : "";
       const missing = unavailable > 0 ? `\n\n还有 ${unavailable} 个输入文件的链接已经失效，请先让我重新选一下。` : "";
-      return `${head}\n\n${prompt}${files}${missing}`;
+      return `${head}\n\n${prompt}${same}${files}${missing}`;
     }
     const head =
       inputs.length > 0 || unavailable > 0
-        ? `Generate this again with the same prompt and input files (last time it was ${model}), and quote it first:`
-        : `Generate this again with the same prompt (last time it was ${model}), and quote it first:`;
+        ? `Generate this again with the same model, prompt, settings and input files (last time it was ${modelId && modelId !== model ? `${model} (${modelId})` : model}), and quote it first:`
+        : `Generate this again with the same model, prompt and settings (last time it was ${modelId && modelId !== model ? `${model} (${modelId})` : model}), and quote it first:`;
+    const sameEn = params ? `\n\nSettings (use the same values): ${params}` : "";
     const files = inputs.length > 0 ? `\n\nInput files (use them in the same fields):\n${list}` : "";
     const missing =
       unavailable > 0
         ? `\n\n${unavailable === 1 ? "One input file's link has" : `${unavailable} input files' links have`} expired: ask me to pick ${unavailable === 1 ? "it" : "them"} again first.`
         : "";
-    return `${head}\n\n${prompt}${files}${missing}`;
+    return `${head}\n\n${prompt}${sameEn}${files}${missing}`;
   },
   failedSwitchModel(lang: Lang): string {
     return lang === "zh"

@@ -227,6 +227,7 @@ function confirmButtonOf(hasPrice: boolean): string {
   return hasPrice ? "Confirm and generate" : "Confirm anyway";
 }
 
+// 11-13 Jia：Claude 不转告卡片上发生了什么，卡片早就出完结果，回复还在说「请点卡上的按钮」「没扣钱」。
 const quoteCardNote = (hasPrice: boolean) =>
   `The Atlas card already shows this quote (model, settings, ${hasPrice ? "price" : "a note that the price isn't available"} and billing account) with a ` +
   `"${confirmButtonOf(hasPrice)}" button, so a single short sentence pointing the user to the card is ` +
@@ -238,8 +239,10 @@ const quoteCardNote = (hasPrice: boolean) =>
   "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
   "they confirm in the chat instead, call again as described above; the same idempotency_key " +
   "returns the job the card already started rather than a second one. Some apps don't tell you " +
-  "what happened on the card, so don't assume the quote is still waiting: if the user asks about it, " +
-  "check atlas_list_predictions first: it also lists confirms that did not start, and why. A confirm " +
+  "what happened on the card (Claude doesn't), so never state this quote's status from memory: before any later " +
+  "reply says it is still waiting for confirmation, that nothing was charged, or that it is generating, check " +
+  "atlas_list_predictions first. " +
+  "It also lists confirms that did not start, and why. A confirm " +
   "the card could not start (for example, not enough balance) charged nothing." +
   (hasPrice ? "" : " The price could not be estimated for this job: say so, and that confirming charges the model's standard rate.");
 

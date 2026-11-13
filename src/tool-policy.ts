@@ -235,6 +235,7 @@ export function isAtlasToolName(value: string): value is AtlasToolName {
 export type CardToolName =
   | "atlas_card_status"
   | "atlas_card_check_submission"
+  | "atlas_cancel_quote"
   | "atlas_card_selftest"
   | "atlas_open_upload_card"
   | "atlas_card_upload_part";
@@ -255,6 +256,15 @@ export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
     annotations: firstPartyRead,
     annotationJustification:
       "Reads the card's own submission record and recent Atlas predictions to tell whether an unconfirmed submission started; submits nothing.",
+  },
+  // 模型在用户拒绝或改了需求时作废旧报价（11-13 Jia A12/A14）。只写本服务的幂等记录，不碰 Atlas 账户。
+  atlas_cancel_quote: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotationJustification:
+      "Marks an unconfirmed quote as withdrawn so its card can no longer submit it; nothing is submitted or billed.",
   },
   // 模型在拿不到文件字节时调它打开上传卡（Higgsfield 的 media_upload_widget 同理：兜底，不是默认）。
   atlas_open_upload_card: {

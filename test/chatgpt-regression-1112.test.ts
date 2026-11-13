@@ -42,20 +42,20 @@ test("Reuse prompt 把原输入素材一起交回去，失效的请用户重选�
     { name: "logo.png", ref: "https://atlas-media.oss-us-west-1.aliyuncs.com/u/logo.png" },
   ];
   const en = say.reusePrompt("en", "Seedream v5.0 Flash Edit", "Make the apple green", inputs, 1);
-  assert.match(en, /^Generate this again with the same prompt and input files \(last time it was Seedream v5\.0 Flash Edit\)/);
+  assert.match(en, /^Generate this again with the same model, prompt, settings and input files \(last time it was Seedream v5\.0 Flash Edit\)/);
   assert.match(en, /Make the apple green/);
   assert.match(en, /- vertical-apple\.jpg \(image\): asset:\/\/asset_abcdefgh1234/);
   assert.match(en, /- logo\.png: https:\/\/atlas-media/);
   assert.match(en, /One input file's link has expired: ask me to pick it again first\./);
 
   const zh = say.reusePrompt("zh", "Seedream v5.0 Flash Edit", "把苹果变绿", inputs.slice(0, 1));
-  assert.match(zh, /^用同样的提示词和输入素材再生成一次/);
+  assert.match(zh, /^用同样的模型、提示词、参数和输入素材再生成一次/);
   assert.match(zh, /输入素材（照原来的字段填）：\n- vertical-apple\.jpg \(image\): asset:\/\/asset_abcdefgh1234/);
   assert.doesNotMatch(zh, /失效/);
 
   assert.equal(
     say.reusePrompt("en", "Flux", "a cat"),
-    "Generate this again with the same prompt (last time it was Flux), and quote it first:\n\na cat"
+    "Generate this again with the same model, prompt and settings (last time it was Flux), and quote it first:\n\na cat"
   );
 });
 

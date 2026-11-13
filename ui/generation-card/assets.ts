@@ -189,6 +189,11 @@ export function assetsForModel(picked: Pick<PickedAsset, "asset_id" | "label" | 
   );
 }
 
+/** 消息里的文件清单（Claude 这类模型看不到上下文的宿主用），一行一个：名字、类型和尺寸、asset:// 编号。 */
+export function assetRefLines(picked: Pick<PickedAsset, "asset_id" | "label" | "kind" | "shape">[]): string {
+  return picked.map((a) => `- ${a.label} (${KIND_WORD[a.kind]}${a.shape ? `, ${a.shape}` : ""}): asset://${a.asset_id}`).join("\n");
+}
+
 export interface LibraryDeps {
   app: App;
   render(): void;
@@ -563,7 +568,12 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
         return;
       }
       const labels = ready.map((a) => a.label).join(", ");
-      const outcome = await handOff(deps.app, assetsForModel(ready), say.pickedFromLibrary(userLang(deps.app), ready.length, labels));
+      const outcome = await handOff(
+        deps.app,
+        assetsForModel(ready),
+        say.pickedFromLibrary(userLang(deps.app), ready.length, labels),
+        assetRefLines(ready)
+      );
       if (outcome === "sent" || outcome === "context") {
         handedOff = selectionKey();
         deps.onHandedOff?.();

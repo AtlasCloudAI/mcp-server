@@ -63,7 +63,7 @@ export async function billingAccount(
     name,
     ...(type ? { type } : {}),
     ...(account?.user?.name ? { user_name: account.user.name } : {}),
-    ...(account?.user?.email ? { user_email: account.user.email } : {}),
+    // 不带邮箱：设计稿 v3（11-10）卡上去掉了，纯文字客户端（GrokBot，11-13）却从报价文字里把邮箱照抄给用户。
     ...(usd ? { available_usd: available } : {}),
   };
 }
@@ -77,9 +77,9 @@ export function formatBalanceUsd(value: number): string {
   return cents < 0 ? `-$${(-cents / 100).toFixed(2)}` : `$${(cents / 100).toFixed(2)}`;
 }
 
-/** 报价文字里的一行：「Lovelace Studio (personal account, ada@example.com) · $8.50 available」。 */
+/** 报价文字里的一行：「Lovelace Studio (personal account) · $8.50 available」。不写邮箱。 */
 export function describeBillingAccount(account: BillingAccount): string {
-  const who = [account.type ? `${account.type} account` : null, account.user_email ?? null].filter(Boolean);
+  const who = [account.type ? `${account.type} account` : null].filter(Boolean);
   return (
     `${account.name}${who.length > 0 ? ` (${who.join(", ")})` : ""}` +
     (account.available_usd !== undefined ? ` · ${formatBalanceUsd(account.available_usd)} available` : "")

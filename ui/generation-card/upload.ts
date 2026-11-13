@@ -310,7 +310,14 @@ export interface Uploader {
   useFiles(): Promise<void>;
 }
 
-const CONCURRENCY = 2;
+/**
+ * 同时传几个。资产库按上传请求到达的先后排（毫秒级，Jia 11-13 第 13 条：pic-01～10 一次传完排成 10、9、8、7、5、6…），
+ * 两个一起传时谁先到不固定，顺序就乱了。图片、音频一个个传，资产库里的顺序等于选的顺序，多几秒；批里有视频时
+ * 仍然两个一起传，免得 100 MB 的视频排队等太久（这时顺序可能不完全按选的）。
+ */
+export function uploadConcurrency(kinds: readonly UploadKind[]): number {
+  return kinds.includes("video") ? 2 : 1;
+}
 // 超过这么多个文件时列表收起，只露前几个。
 const COLLAPSE_OVER = 4;
 const COLLAPSE_SHOWN = 3;
@@ -659,7 +666,8 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   async function pump(): Promise<void> {
-    while (inflight.size < CONCURRENCY) {
+    const pending = items.filter((i) => i.status === "queued" || i.status === "uploading" || i.status === "saving");
+    while (inflight.size < uploadConcurrency(pending.map((i) => i.kind))) {
       const next = items.find((i) => i.status === "queued" && !i.checking);
       if (!next) return;
       if (linkExpired) {

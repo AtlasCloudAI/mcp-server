@@ -76,7 +76,7 @@ test("balances are cut to the cent, never rounded up, on the card and in the quo
   assert.equal(formatBalanceUsd(-1.234), "-$1.24");
   assert.equal(
     describeBillingAccount({ name: "Lucas Zhu", type: "personal", user_email: "lucas@example.com", available_usd: 45.3967 }),
-    "Lucas Zhu (personal account, lucas@example.com) · $45.39 available"
+    "Lucas Zhu (personal account) · $45.39 available"
   );
 });
 

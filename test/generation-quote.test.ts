@@ -522,12 +522,11 @@ test("报价补上主要参数和扣费账户：文字和结构化结果都有�
     );
     const extra = (result.content[1] as { text: string }).text;
     assert.match(extra, /\*\*Settings\*\*: 720p · 5 s · 16:9/);
-    assert.match(extra, /\*\*Billing account\*\*: Ada Lovelace \(personal account, ada@example\.com\) · \$8\.50 available/);
+    assert.match(extra, /\*\*Billing account\*\*: Ada Lovelace \(personal account\) · \$8\.50 available/);
     assert.deepEqual((result.structuredContent as Record<string, unknown>).billing_account, {
       name: "Ada Lovelace",
       type: "personal",
       user_name: "Ada Lovelace",
-      user_email: "ada@example.com",
       available_usd: 8.5,
     });
     assert.equal(calls.length, 2);
@@ -572,7 +571,7 @@ test("扣费账户查不到：后端没上 /account 时退回余额接口里的�
       { ...QUOTE_WITH_PARAMS, content: [...QUOTE_WITH_PARAMS.content] },
       { fetcher: accountFetcher([], { balance: 403 }) }
     );
-    assert.match((noBalance.content[1] as { text: string }).text, /ada@example\.com\)\nInclude/);
+    assert.match((noBalance.content[1] as { text: string }).text, /Ada Lovelace \(personal account\)\nInclude/);
 
     const calls: string[] = [];
     const submitted = { structuredContent: { status: "submitted", prediction_id: "p" }, content: [] };
@@ -609,7 +608,7 @@ test("个人账户没有名字时用用户名兜底（test 上实测 account.nam
     );
     assert.match(
       (result.content[1] as { text: string }).text,
-      /Billing account\*\*: Ada Lovelace \(personal account, ada@example\.com\) · \$8\.50 available/
+      /Billing account\*\*: Ada Lovelace \(personal account\) · \$8\.50 available/
     );
   } finally {
     restore();

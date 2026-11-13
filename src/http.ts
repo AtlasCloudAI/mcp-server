@@ -29,7 +29,7 @@ import {
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
 import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
-import { isKnownCardClient } from "./services/card-clients.js";
+import { declaresMcpApps, isKnownCardClient, rememberUiDeclaration, uiDeclaration } from "./services/card-clients.js";
 import { clientProfile } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
@@ -236,7 +236,18 @@ export function createHttpApp(
         throw error;
       }
 
-      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId });
+      // 认不出的客户端：initialize 时记下它声明没声明 MCP Apps，之后的请求据此决定列不列卡片专用工具（GrokBot）。
+      let noCards = false;
+      if (generationCardEnabled() && clientProfile(req.auth?.clientId) === "other") {
+        const declared = declaresMcpApps(req.body);
+        if (declared !== undefined) {
+          await rememberUiDeclaration(req.auth?.clientId, declared, quoteStore);
+          noCards = !declared;
+        } else {
+          noCards = (await uiDeclaration(req.auth?.clientId, quoteStore)) === false;
+        }
+      }
+      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId, noCards });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

@@ -30,6 +30,11 @@ export type ServerProfile = "stdio" | "remote";
 export interface ServerClient {
   /** OAuth client_id of the remote client; decides which client-specific tools to list. */
   clientId?: string;
+  /**
+   * 认不出的客户端在 initialize 时明确没声明 MCP Apps（GrokBot）：不列卡片专用工具。
+   * 没记录（老会话、存储不可用）时照旧列。
+   */
+  noCards?: boolean;
 }
 
 const SERVER_ICON_URL =
@@ -61,7 +66,7 @@ export function createAtlasCloudServer(
         "If a call submits straight away instead (a charge under a configured auto-submit limit), tell the user the amount. " +
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
         "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
-        (generationCardEnabled() && (profile === "stdio" || rendersCards(client.clientId))
+        (generationCardEnabled() && (profile === "stdio" || (rendersCards(client.clientId) && !client.noCards))
           ? "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. "
           : "") +
         "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
@@ -92,7 +97,7 @@ export function createAtlasCloudServer(
   if (generationCardEnabled()) {
     registerGenerationCardResource(server);
     // 卡片专用工具只给会显示卡片的客户端；不显示卡片的会把它们当普通工具列给模型（问题 48）。
-    if (profile === "stdio" || rendersCards(client.clientId)) {
+    if (profile === "stdio" || (rendersCards(client.clientId) && !client.noCards)) {
       registerCardStatusTool(server);
       registerCardCheckTool(server);
       // 用户拒绝或改需求时作废旧报价，旧卡不能再确认（11-13 Jia A12/A14）。

@@ -61,3 +61,46 @@ export async function isKnownCardClient(clientId: string | undefined, store: Upl
     return false;
   }
 }
+
+/**
+ * 客户端在 initialize 里有没有声明 MCP Apps（capabilities.extensions["io.modelcontextprotocol/ui"]）。
+ * GrokBot 自报的名字也是「Cursor」，按 OAuth 客户端认不出，卡片专用工具（上传卡、作废报价…）照样列给它，
+ * 它却显示不了卡片（11-12 回归）。Cursor 3.29 声明了这个扩展（cursor-mcp 的 createSdkClient），GrokBot 没有。
+ * 服务无状态，列工具时看不到 initialize，所以 initialize 时按 client_id 记下来。
+ */
+const UI_KEY_PREFIX = "client-ui-ext:";
+export const MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui";
+
+function uiKeyOf(clientId: string): string {
+  return UI_KEY_PREFIX + createHash("sha256").update(clientId).digest("hex");
+}
+
+/** initialize 请求的 params 里有没有声明 MCP Apps 扩展。不是 initialize 返回 undefined。 */
+export function declaresMcpApps(body: unknown): boolean | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const message = body as { method?: unknown; params?: { capabilities?: { extensions?: Record<string, unknown> } } };
+  if (message.method !== "initialize") return undefined;
+  const extensions = message.params?.capabilities?.extensions;
+  return Boolean(extensions && typeof extensions === "object" && MCP_APPS_EXTENSION in extensions);
+}
+
+/** 记下这个客户端声明了还是没声明。失败不影响请求。 */
+export async function rememberUiDeclaration(clientId: string | undefined, declared: boolean, store: UploadTicketStore | undefined): Promise<void> {
+  if (!clientId || !store) return;
+  try {
+    await withTimeout(store.put(uiKeyOf(clientId), declared ? "1" : "0", TTL_SECONDS));
+  } catch {
+    // 记不下来就照旧当会显示卡片。
+  }
+}
+
+/** 这个客户端上次 initialize 时声明了吗：true / false；没记录或查不到是 undefined。 */
+export async function uiDeclaration(clientId: string | undefined, store: UploadTicketStore | undefined): Promise<boolean | undefined> {
+  if (!clientId || !store) return undefined;
+  try {
+    const value = await withTimeout(store.get(uiKeyOf(clientId)));
+    return value === null ? undefined : value === "1";
+  } catch {
+    return undefined;
+  }
+}

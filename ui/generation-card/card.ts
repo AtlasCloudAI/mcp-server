@@ -85,6 +85,8 @@ export interface CardData {
   submitted_at?: string;
   completed_at?: string;
   media_expired?: boolean;
+  /** 这一单的提示词原文（服务端查结果时带回，最长 2000 字）：历史详情「Reuse prompt」在列表没给完整提示词时用它。 */
+  prompt?: string;
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
   sample_signed_out?: boolean;
@@ -271,8 +273,10 @@ export function cardFromToolResult(
   const structured = record(r.structuredContent);
   if (!structured) return undefined;
   if (isCardData(structured.card)) return structured.card;
+  // 自检卡的样例标记：宿主没转 _meta 时也要认出来，诊断区和「样例卡不发消息」都靠它。
+  const sample = structured.sample === true ? { sample: true as const } : {};
   const quote = quoteFromStructured(structured, call);
-  if (quote) return quote;
+  if (quote) return { ...quote, ...sample };
   if (typeof structured.prediction_id !== "string" || typeof structured.status !== "string") {
     return undefined;
   }
@@ -288,6 +292,7 @@ export function cardFromToolResult(
     ...(typeof structured.price_usd === "number" ? { price_usd: structured.price_usd } : {}),
     ...(typeof structured.charge_status === "string" ? { charge_status: structured.charge_status } : {}),
     open_url: SITE_URL,
+    ...sample,
   };
 }
 

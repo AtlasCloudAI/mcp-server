@@ -297,6 +297,11 @@ export interface GenerationCardData {
   completed_at?: string;
   /** 结果链接已经打不开了（存储过期或被删），卡片显示「链接过期」。 */
   media_expired?: boolean;
+  /**
+   * 这一单的提示词原文（最长 2000 字），来自查结果带回的原始请求。历史详情的「Reuse prompt」用：
+   * Cursor 不转 _meta，历史列表只能从 structuredContent 推，那里的提示词是截断的片段（11-13 实测详情没有 Reuse prompt）。
+   */
+  prompt?: string;
   /** 测试卡片的示例数据：卡片不去刷新，也不往对话里发消息。 */
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
@@ -381,6 +386,7 @@ export function buildGenerationCardData(input: {
   createdAt?: string;
   completedAt?: string;
   mediaExpired?: boolean;
+  prompt?: string;
 }): GenerationCardData {
   const state = cardStateOf(input.status, input.transferPending);
   const price = priceOf(input.price);
@@ -400,6 +406,7 @@ export function buildGenerationCardData(input: {
     ...(input.createdAt ? { submitted_at: input.createdAt } : {}),
     ...(input.completedAt ? { completed_at: input.completedAt } : {}),
     ...(input.mediaExpired ? { media_expired: true } : {}),
+    ...(input.prompt ? { prompt: input.prompt } : {}),
   };
 }
 
@@ -421,6 +428,17 @@ export async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** 卡片数据里提示词的上限，和历史卡「Reuse prompt」一致。 */
+const CARD_PROMPT_MAX = 2000;
+
+/** 原始请求里的提示词，去掉首尾空白、超长截断；没有就是 undefined。 */
+export function cardPrompt(input: Record<string, unknown> | undefined): string | undefined {
+  const prompt = input?.prompt;
+  if (typeof prompt !== "string" || !prompt.trim()) return undefined;
+  const text = prompt.trim();
+  return text.length > CARD_PROMPT_MAX ? `${text.slice(0, CARD_PROMPT_MAX - 1)}…` : text;
 }
 
 /** 查结果带回的原始请求（?include_input=1）：对象或 JSON 字符串；老网关不给。 */
@@ -474,6 +492,7 @@ export async function predictionCardData(
     price: data.price,
     chargeStatus: data.charge_status,
     settings: settingsChips(requestInput(data.input)),
+    prompt: cardPrompt(requestInput(data.input)),
     error: result.data?.error || undefined,
     createdAt: isoOf(createdAtOf(result)),
     completedAt,

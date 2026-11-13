@@ -109,6 +109,11 @@ function stateOfStatus(status: string): CardState {
   return "failed";
 }
 
+/** atlas_list_predictions 结构化结果里的提示词超过 160 字时截成 157 字 + "..."（src/tools/predictions.ts）。 */
+export function isTruncatedSnippet(text: string): boolean {
+  return text.length >= 160 && text.endsWith("...");
+}
+
 /** 工具结果 → 历史卡数据。优先读 _meta，宿主没转过来就从 structuredContent 推。 */
 export function historyFromToolResult(result: unknown): HistoryCardData | undefined {
   const r = record(result);
@@ -121,6 +126,10 @@ export function historyFromToolResult(result: unknown): HistoryCardData | undefi
     const p = record(entry);
     if (!p || typeof p.prediction_id !== "string") return [];
     const outputs = Array.isArray(p.outputs) ? p.outputs.filter((u): u is string => typeof u === "string") : [];
+    // Cursor 不转 _meta（11-13 实测）：列表行的实扣、详情的「Reuse prompt」都从这里取。提示词在结构化结果里是片段，
+    // 截断过的（157 字 + "..."）不当原文用，点开详情时由 atlas_card_status 带回的完整提示词补上。
+    const snippet = typeof p.prompt === "string" ? p.prompt.trim() : "";
+    const prompt = snippet && !isTruncatedSnippet(snippet) ? snippet : undefined;
     return [
       {
         prediction_id: p.prediction_id,
@@ -129,7 +138,9 @@ export function historyFromToolResult(result: unknown): HistoryCardData | undefi
         ...(typeof p.created_at === "string" ? { created_at: p.created_at } : {}),
         ...(outputs[0] ? { thumb: { url: outputs[0], kind: kindOfUrl(outputs[0]) } } : {}),
         outputs: outputs.length,
+        ...(typeof p.charged_usd === "number" && Number.isFinite(p.charged_usd) ? { price_usd: p.charged_usd } : {}),
         ...(typeof p.error === "string" ? { error: p.error } : {}),
+        ...(prompt ? { prompt } : {}),
       },
     ];
   });

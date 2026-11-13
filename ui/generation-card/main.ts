@@ -555,7 +555,8 @@ function h2(...children: HTMLElement[]): HTMLElement {
 function withHistoryActions(detail: HTMLElement): HTMLElement {
   if (!card || viewOptions().signedOut) return detail;
   const item = history?.data.items.find((entry) => entry.prediction_id === (pendingId ?? card?.prediction_id));
-  const prompt = item?.prompt;
+  // 列表给的提示词优先；没有（Cursor 只给截断片段）就用点开时 atlas_card_status 带回的原文。
+  const prompt = item?.prompt ?? card.prompt;
   const model = item?.model_name ?? item?.model_id ?? "";
   const sample = history?.data.sample === true;
   // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。

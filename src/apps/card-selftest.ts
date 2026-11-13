@@ -524,7 +524,8 @@ export function registerCardSelftestTool(server: McpServer): void {
         const card = quoteSample(variant as keyof typeof QUOTE_VARIANTS);
         return {
           _meta: { [CARD_META_KEY]: { ...card, sample: true } },
-          structuredContent: { status: "confirmation_required", model_id: card.model_id, model_name: card.model_name },
+          // sample：Cursor 不转 _meta，卡片从这里认出是样例，才会挂上诊断区（11-13 实测 Cursor 自检卡没有诊断区）。
+          structuredContent: { status: "confirmation_required", model_id: card.model_id, model_name: card.model_name, sample: true },
           content: [
             { type: "text", text: `Self-test quote card "${variant}" rendered with sample data. Nothing was quoted, generated or billed.` },
           ],
@@ -556,7 +557,7 @@ export function registerCardSelftestTool(server: McpServer): void {
             ...(variant === "running_stalled" ? { sample_stalled: true } : {}),
           },
         },
-        structuredContent: { prediction_id: predictionId, status: sample.status, outputs: [...sample.outputs] },
+        structuredContent: { prediction_id: predictionId, status: sample.status, outputs: [...sample.outputs], sample: true },
         content: [
           {
             type: "text",

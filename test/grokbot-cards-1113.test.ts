@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAtlasCloudServer } from "../src/server.js";
 import { describeBillingAccount } from "../src/services/billing-account.js";
-import { declaresMcpApps, rememberUiDeclaration, uiDeclaration } from "../src/services/card-clients.js";
+import { declaresMcpApps, initializeSummary, rememberUiDeclaration, uiDeclaration } from "../src/services/card-clients.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
 import { uploadConcurrency } from "../ui/generation-card/upload.js";
 
@@ -37,7 +37,8 @@ test("按 client_id 记下声明，之后的请求查得到；没记录是 undef
   assert.equal(await uiDeclaration("someone-else", store), undefined);
 });
 
-test("明确没声明 MCP Apps 的客户端不列卡片专用工具（上传卡、作废报价…）", () => {
+// http.ts 暂不按声明拦（WorkBuddy 显示卡片却不声明），server 的 noCards 开关留着，等认得出 GrokBot 再用。
+test("server 的 noCards：不列卡片专用工具（上传卡、作废报价…）", () => {
   const saved = process.env.MCP_UI_CARDS;
   process.env.MCP_UI_CARDS = "1";
   try {
@@ -64,4 +65,13 @@ test("上传卡：图片、音频一个个传（资产库顺序等于选的顺�
   assert.equal(uploadConcurrency(["image", "image", "audio"]), 1);
   assert.equal(uploadConcurrency(["image", "video"]), 2);
   assert.equal(uploadConcurrency([]), 1);
+});
+
+test("initialize 日志摘要：名字、版本、协议、能力，不含别的", () => {
+  const line = initializeSummary(
+    { method: "initialize", params: { protocolVersion: "2025-06-18", clientInfo: { name: "cursor-vscode", version: "1.0.0" }, capabilities: { roots: {}, extensions: {} } } },
+    true
+  );
+  assert.equal(line, "client=cursor-vscode version=1.0.0 protocol=2025-06-18 caps=roots,extensions mcp_apps=true");
+  assert.equal(initializeSummary({ method: "initialize", params: {} }, false), "client=? version=? protocol=? caps=(none) mcp_apps=false");
 });

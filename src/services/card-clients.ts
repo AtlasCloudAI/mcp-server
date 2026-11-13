@@ -104,3 +104,11 @@ export async function uiDeclaration(clientId: string | undefined, store: UploadT
     return undefined;
   }
 }
+
+/** initialize 的一行摘要（日志用）：客户端自报的名字、版本、协议版本、声明了哪些能力。不含令牌和用户信息。 */
+export function initializeSummary(body: unknown, declared: boolean): string {
+  const params = (body as { params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown }; capabilities?: Record<string, unknown> } })?.params;
+  const text = (value: unknown) => (typeof value === "string" ? value.slice(0, 80) : "?");
+  const caps = params?.capabilities ? Object.keys(params.capabilities).join(",") : "";
+  return `client=${text(params?.clientInfo?.name)} version=${text(params?.clientInfo?.version)} protocol=${text(params?.protocolVersion)} caps=${caps || "(none)"} mcp_apps=${declared}`;
+}

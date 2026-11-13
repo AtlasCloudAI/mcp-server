@@ -29,7 +29,7 @@ import {
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
 import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
-import { declaresMcpApps, isKnownCardClient, rememberUiDeclaration, uiDeclaration } from "./services/card-clients.js";
+import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration } from "./services/card-clients.js";
 import { clientProfile } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
@@ -236,18 +236,17 @@ export function createHttpApp(
         throw error;
       }
 
-      // 认不出的客户端：initialize 时记下它声明没声明 MCP Apps，之后的请求据此决定列不列卡片专用工具（GrokBot）。
-      let noCards = false;
+      // 认不出的客户端：initialize 时记下它声明没声明 MCP Apps，并打一行日志（名字、版本、声明）。
+      // 不据此拿掉卡片工具：WorkBuddy（CodeBuddy 引擎）显示卡片却不声明这个扩展（11-13 查安装包），
+      // 按声明拦会把它的卡片弄坏。GrokBot 怎么认，等日志里看到它 initialize 报了什么再定。
       if (generationCardEnabled() && clientProfile(req.auth?.clientId) === "other") {
         const declared = declaresMcpApps(req.body);
         if (declared !== undefined) {
           await rememberUiDeclaration(req.auth?.clientId, declared, quoteStore);
-          noCards = !declared;
-        } else {
-          noCards = (await uiDeclaration(req.auth?.clientId, quoteStore)) === false;
+          console.log(`[initialize] ${initializeSummary(req.body, declared)}`);
         }
       }
-      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId, noCards });
+      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

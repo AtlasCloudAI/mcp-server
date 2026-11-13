@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/ext-apps";
 import { handOff, messagingAvailable } from "./handoff.js";
 import { cardTransport } from "./echo-transport.js";
+import { canExpandIn, fullscreenWasRefused, toolResultKey } from "./display.js";
 import {
   type CardData,
   type CardMedia,
@@ -78,6 +79,12 @@ let history: HistoryView | undefined;
 let uploader: Uploader | undefined;
 // 资产库卡：有它时盖在上传卡上面（从上传卡打开的），或者它本身就是这张卡（atlas_search_assets 的结果）。
 let library: Library | undefined;
+// 第几个资产库实例：渲染去重键带上它，换了实例一定重画（旧格子绑的是旧实例的点击）。
+let libraryGen = 0;
+// 上一个资产库工具结果：宿主重复发同一个结果时不重建（11-13 WorkBuddy 发了两次，选中被新实例吞掉）。
+let lastAssetsResult = "";
+// 宿主声明了全屏但请求时没给：之后按不能全屏显示（翻页条），见 display.ts。
+let fullscreenRefused = false;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -164,7 +171,7 @@ function displayInfo(): { fullscreen: boolean; canExpand: boolean } {
   const context = app.getHostContext();
   return {
     fullscreen: context?.displayMode === "fullscreen",
-    canExpand: (context?.availableDisplayModes ?? []).includes("fullscreen") && context?.displayMode !== "fullscreen",
+    canExpand: canExpandIn(context, fullscreenRefused),
   };
 }
 
@@ -172,8 +179,13 @@ function displayInfo(): { fullscreen: boolean; canExpand: boolean } {
 function requestMode(mode: "inline" | "fullscreen"): void {
   const context = app.getHostContext();
   if (context?.displayMode === mode) return;
-  if (mode === "fullscreen" && !(context?.availableDisplayModes ?? []).includes("fullscreen")) return;
-  void app.requestDisplayMode({ mode }).catch(() => undefined);
+  if (mode === "fullscreen" && (fullscreenRefused || !(context?.availableDisplayModes ?? []).includes("fullscreen"))) return;
+  const refused = (response: { mode?: string } | "error") => {
+    if (mode !== "fullscreen" || !fullscreenWasRefused(response)) return;
+    fullscreenRefused = true;
+    render(true);
+  };
+  void app.requestDisplayMode({ mode }).then(refused, () => refused("error"));
 }
 
 /**
@@ -195,7 +207,7 @@ function render(force = false): void {
   document.documentElement.style.setProperty("--ac-safe-bottom", `${fullscreenBottomInset()}px`);
   if (library) {
     const display = displayInfo();
-    const key = `assets:${library.version}:${notice ?? ""}:${display.fullscreen}:${display.canExpand}`;
+    const key = `assets:${libraryGen}:${library.version}:${notice ?? ""}:${display.fullscreen}:${display.canExpand}`;
     if (!force && key === renderedKey) return;
     renderedKey = key;
     // 资产库全屏时放宽到 720（设计稿全屏视图宽 720）。
@@ -520,6 +532,7 @@ async function chooseReplacement(missing: string[]): Promise<void> {
     }
   }
   const gone = missing.length > 0 ? missing.join(", ") : "the deleted file";
+  libraryGen += 1;
   library = createLibrary(
     initial,
     libraryDeps({
@@ -645,7 +658,7 @@ function historyOptions() {
   const context = app.getHostContext();
   return {
     fullscreen: context?.displayMode === "fullscreen",
-    canExpand: (context?.availableDisplayModes ?? []).includes("fullscreen") && context?.displayMode !== "fullscreen",
+    canExpand: canExpandIn(context, fullscreenRefused),
     canQuery: hostCaps().serverTools !== undefined,
   };
 }
@@ -777,6 +790,7 @@ async function openLibraryFromUpload(): Promise<void> {
       return;
     }
   }
+  libraryGen += 1;
   library = createLibrary(
     initial,
     libraryDeps({
@@ -857,7 +871,11 @@ app.ontoolresult = (params) => {
   }
   const assets = params.isError ? undefined : assetsFromToolResult(params);
   if (assets) {
-    library = createLibrary(
+    const resultKey = toolResultKey(params);
+    if (library && resultKey === lastAssetsResult) return;
+    lastAssetsResult = resultKey;
+    libraryGen += 1;
+  library = createLibrary(
       assets,
       libraryDeps({ uploadInstead: () => void switchToUpload(), onHandedOff: () => requestMode("inline") })
     );

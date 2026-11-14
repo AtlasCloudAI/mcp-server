@@ -816,6 +816,7 @@ button.history-row:focus-visible {
 
 .upload-thumb {
   flex: none;
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 8px;
@@ -825,7 +826,12 @@ button.history-row:focus-visible {
   place-items: center;
 }
 
+/* 绝对定位铺满方框：以前是 100% 宽高放在 grid 里，竖图（1:3、2:3）会按自身比例把图片元素撑成
+   40×120 / 40×60，object-fit: contain 管的是元素内部，方框 overflow 一裁就只剩中间一块方形
+   （11-14 Jia：1:3 竖图缩略图被裁成方形，宽图没事因为它的元素高度本来就是 40）。 */
 .upload-thumb img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;

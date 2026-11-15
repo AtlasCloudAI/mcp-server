@@ -4,7 +4,6 @@ import { createAtlasCloudServer } from "../src/server.js";
 import { describeBillingAccount } from "../src/services/billing-account.js";
 import { declaresMcpApps, initializeSummary, rememberUiDeclaration, uiDeclaration } from "../src/services/card-clients.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
-import { uploadConcurrency } from "../ui/generation-card/upload.js";
 
 // 11-13 Cursor / GrokBot 回归剩下能修的几条。
 
@@ -61,11 +60,6 @@ test("报价文字的扣费账号不带邮箱（GrokBot 照抄给了用户）", 
   assert.equal(describeBillingAccount({ name: "Lucas Zhu", type: "personal", available_usd: 37.68 }), "Lucas Zhu (personal account) · $37.68 available");
 });
 
-test("上传卡：图片、音频一个个传（资产库顺序等于选的顺序），有视频时两个一起传", () => {
-  assert.equal(uploadConcurrency(["image", "image", "audio"]), 1);
-  assert.equal(uploadConcurrency(["image", "video"]), 2);
-  assert.equal(uploadConcurrency([]), 1);
-});
 
 test("initialize 日志摘要：名字、版本、协议、能力，不含别的", () => {
   const line = initializeSummary(

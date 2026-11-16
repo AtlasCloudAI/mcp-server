@@ -310,7 +310,13 @@ function historySample(): HistoryCardData {
       outputs: sample.outputs.length,
       ...(sample.price && state === "succeeded" ? { price_usd: Number.parseFloat(sample.price) } : {}),
       ...(variant === "failed" ? { error: "Upstream timeout" } : {}),
-      prompt: "A glass perfume bottle on wet black stone, soft rim light, studio product shot",
+      // 视频那条是没填提示词的图生视频：详情里是「Reuse settings」（11-16 Jia #57）。
+      ...(variant === "video"
+        ? {
+            inputs: [{ name: "perfume-bottle.jpg", ref: "asset://asset_sample_input", field: "image" }],
+            settings: { resolution: "1080p", duration: 10, aspect_ratio: "9:16" },
+          }
+        : { prompt: "A glass perfume bottle on wet black stone, soft rim light, studio product shot" }),
     };
   };
   const items = [

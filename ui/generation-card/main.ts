@@ -586,15 +586,26 @@ function withHistoryActions(detail: HTMLElement): HTMLElement {
   const model = item?.model_name ?? item?.model_id ?? "";
   const sample = history?.data.sample === true;
   // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
-  const wanted = historyDetailButtons(card.state, Boolean(prompt), messagingAvailable());
+  const inputs = item?.inputs ?? [];
+  const unavailable = item?.inputs_unavailable ?? 0;
+  const settings = item?.settings ?? {};
+  const hasSettings = inputs.length > 0 || unavailable > 0 || Object.keys(settings).length > 0;
+  const modelId = item?.model_id ?? card.model_id;
+  const wanted = historyDetailButtons(card.state, Boolean(prompt), messagingAvailable(), hasSettings);
   const make = (kind: DetailButton, variant: "primary" | "secondary"): HTMLElement | null => {
     switch (kind) {
       case "reuse":
         return button("Reuse prompt", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
           else if (prompt) {
-            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0, item?.settings ?? {}, item?.model_id ?? card.model_id), setNotice);
+            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0, item?.settings ?? {}, modelId), setNotice);
           }
+        });
+      case "reuse-settings":
+        // 没提示词的单：带上原图、模型和参数，照常先出报价卡；原图被删了服务端报「素材失效」。
+        return button("Reuse settings", variant, () => {
+          if (sample) setNotice("This is a sample card, so nothing was sent.");
+          else sendForUser(app, say.reuseSettings(userLang(app), model, inputs, unavailable, settings, modelId), setNotice);
         });
       case "copy":
         return button("Copy prompt", variant, () => {

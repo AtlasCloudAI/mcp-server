@@ -45,3 +45,31 @@ test("历史详情的按钮按设计 11-12：成功 Download + Reuse prompt，�
   assert.deepEqual(historyDetailButtons("succeeded", false, true), ["keep-download"]);
   assert.deepEqual(historyDetailButtons("failed", false, true), ["view-request"]);
 });
+
+test("没填提示词的单（11-16 Jia #57）：有原图或参数就给 Reuse settings，带上原图、模型和参数", async () => {
+  const { historyDetailButtons } = await import("../ui/generation-card/history.js");
+  assert.deepEqual(historyDetailButtons("succeeded", false, true, true), ["keep-download", "reuse-settings"]);
+  assert.deepEqual(historyDetailButtons("failed", false, true, true), ["reuse-settings", "view-request"]);
+  // 有提示词时仍是 Reuse prompt；不能发消息时没提示词可复制，就不放。
+  assert.deepEqual(historyDetailButtons("succeeded", true, true, true), ["keep-download", "reuse"]);
+  assert.deepEqual(historyDetailButtons("succeeded", false, false, true), ["keep-download"]);
+  assert.deepEqual(historyDetailButtons("running", false, true, true), ["view-request"]);
+
+  const { say } = await import("../ui/generation-card/voice.js");
+  const text = say.reuseSettings(
+    "en",
+    "Seedance 2.5",
+    [{ name: "product.jpg", ref: "asset://asset_1", field: "image" }],
+    0,
+    { resolution: "720p", duration: 5 },
+    "bytedance/seedance-2.5/image-to-video"
+  );
+  assert.match(text, /same model, settings and input files/);
+  assert.match(text, /no prompt/);
+  assert.match(text, /Seedance 2\.5 \(bytedance\/seedance-2\.5\/image-to-video\)/);
+  assert.match(text, /resolution: 720p, duration: 5/);
+  assert.match(text, /product\.jpg \(image\): asset:\/\/asset_1/);
+  assert.match(text, /quote it first/);
+  assert.match(say.reuseSettings("en", "M", [], 1, {}), /expired: ask me to pick it again/);
+  assert.match(say.reuseSettings("zh", "M", [], 0, { a: 1 }), /没有填提示词/);
+});

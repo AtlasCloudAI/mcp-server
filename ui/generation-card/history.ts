@@ -309,7 +309,7 @@ export function renderHistory(view: HistoryView, opts: HistoryOptions, actions: 
 }
 
 /** 历史详情底部的按钮。keep-download：保留结果卡自己的下载按钮（单个 Download，多张 Download all）。 */
-export type DetailButton = "keep-download" | "reuse" | "copy" | "view-request";
+export type DetailButton = "keep-download" | "reuse" | "reuse-settings" | "copy" | "view-request";
 
 /**
  * 历史详情的按钮（设计 11-12 Figma 06 页「历史 · 点开…的记录」）：成功的 Download + Reuse prompt，
@@ -317,8 +317,19 @@ export type DetailButton = "keep-download" | "reuse" | "copy" | "view-request";
  * 换成 Copy prompt。Reuse prompt 不再当结果卡按钮行的第三个按钮。没有提示词的条目（内容过了保留期）
  * 不放这一个按钮。
  */
-export function historyDetailButtons(state: string | undefined, hasPrompt: boolean, canMessage: boolean): DetailButton[] {
-  const prompt: DetailButton[] = hasPrompt ? [canMessage ? "reuse" : "copy"] : [];
+export function historyDetailButtons(
+  state: string | undefined,
+  hasPrompt: boolean,
+  canMessage: boolean,
+  hasSettings = false
+): DetailButton[] {
+  // 有提示词：Reuse prompt（不能替用户发消息时 Copy prompt）。没提示词但有原图、参数：Reuse settings
+  // （11-16 Jia），没法发消息时没有可复制的提示词，就不放。
+  const prompt: DetailButton[] = hasPrompt
+    ? [canMessage ? "reuse" : "copy"]
+    : hasSettings && canMessage
+      ? ["reuse-settings"]
+      : [];
   switch (state) {
     case "queued":
     case "running":

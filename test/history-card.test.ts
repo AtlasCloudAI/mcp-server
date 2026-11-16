@@ -196,3 +196,23 @@ test("列表带这一页的实扣合计：模型不用自己加（11-12 Jia P4 �
   const text = (result.content as Array<{ text?: string }>)[0]?.text ?? "";
   assert.match(text, /Charged on this page in total: \$0\.003\./);
 });
+
+test("历史卡：没提示词的单也带输入素材和参数（Reuse settings 用，11-16 Jia）", async () => {
+  const { historyCardData } = await import("../src/apps/history-card.js");
+  const raw = [
+    {
+      ID: "np1",
+      model: "bytedance/seedance-2.5/image-to-video",
+      status: "completed",
+      createdAt: 1793072162,
+      result: { outputs: ["https://atlas-media.oss-us-west-1.aliyuncs.com/np1.mp4"] },
+      requestBody: '{"model":"bytedance/seedance-2.5/image-to-video","image":"assetd://asset_abcd1234","resolution":"720p","duration":5}',
+    },
+  ];
+  const summaries = [{ prediction_id: "np1", model: raw[0]!.model, status: "completed", outputs: raw[0]!.result.outputs }];
+  const data = await historyCardData(raw as never, summaries as never, { page: 1, size: 1, total: 1, hasMore: false });
+  const item = data.items[0] as Record<string, unknown>;
+  assert.equal(item.prompt, undefined);
+  assert.deepEqual(item.inputs, [{ name: "Input 1", ref: "asset://asset_abcd1234", field: "image" }]);
+  assert.ok(item.settings && Object.keys(item.settings as object).length > 0, JSON.stringify(item.settings));
+});

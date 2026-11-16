@@ -153,6 +153,33 @@ export const say = {
         : "";
     return `${head}\n\n${prompt}${sameEn}${files}${missing}`;
   },
+  /** 「Reuse settings」：这一单没有提示词（只传了图、填了参数），带上原图、模型和参数再来一次（11-16 Jia）。 */
+  reuseSettings(
+    lang: Lang,
+    model: string,
+    inputs: { name: string; ref: string; field?: string }[] = [],
+    unavailable = 0,
+    settings: Record<string, string | number | boolean> = {},
+    modelId?: string
+  ): string {
+    const list = inputs.map((input) => `- ${input.name}${input.field ? ` (${input.field})` : ""}: ${input.ref}`).join("\n");
+    const params = Object.entries(settings).map(([key, value]) => `${key}: ${value}`).join(", ");
+    if (lang === "zh") {
+      const modelLine = modelId && modelId !== model ? `${model}（${modelId}）` : model;
+      const files = inputs.length > 0 ? `\n\n输入素材（照原来的字段填）：\n${list}` : "";
+      const same = params ? `\n\n参数（照原来的填）：${params}` : "";
+      const missing = unavailable > 0 ? `\n\n还有 ${unavailable} 个输入文件的链接已经失效，请先让我重新选一下。` : "";
+      return `用同样的模型、参数和输入素材再生成一次（上次用的是 ${modelLine}，没有填提示词），先给我报价。${same}${files}${missing}`;
+    }
+    const modelLine = modelId && modelId !== model ? `${model} (${modelId})` : model;
+    const same = params ? `\n\nSettings (use the same values): ${params}` : "";
+    const files = inputs.length > 0 ? `\n\nInput files (use them in the same fields):\n${list}` : "";
+    const missing =
+      unavailable > 0
+        ? `\n\n${unavailable === 1 ? "One input file's link has" : `${unavailable} input files' links have`} expired: ask me to pick ${unavailable === 1 ? "it" : "them"} again first.`
+        : "";
+    return `Generate this again with the same model, settings and input files (last time it was ${modelLine}; it had no prompt), and quote it first.${same}${files}${missing}`;
+  },
   failedSwitchModel(lang: Lang): string {
     return lang === "zh"
       ? "刚才的生成失败了。请换一个模型做同样的需求。"

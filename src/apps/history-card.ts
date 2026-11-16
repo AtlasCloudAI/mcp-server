@@ -197,16 +197,15 @@ export async function historyCardData(
 ): Promise<HistoryCardData> {
   const models = await settleWithin(getModels(), MODEL_LOOKUP_TIMEOUT_MS);
   const byId = new Map((models ?? []).map((model) => [model.model, model]));
-  // 输入素材只有带提示词的条目才用得上（Reuse prompt），没有提示词的不查。
-  const reuse = await Promise.all(
-    raw.map((item) => (fullPrompt(item) ? reusableInputs(item) : Promise.resolve({ inputs: [], unavailable: 0 })))
-  );
+  // 输入素材和参数：有提示词的给「Reuse prompt」，没提示词的（如只传图的编辑、图生视频）给「Reuse settings」
+  // （11-16 Jia：#57 那单没填提示词也该能复用）。
+  const reuse = await Promise.all(raw.map((item) => reusableInputs(item)));
   const items = summaries.map((summary, index): HistoryCardItem => {
     const model = byId.get(summary.model);
     const first = summary.outputs[0];
     const price = billingAmount(raw[index]!);
     const prompt = fullPrompt(raw[index]!);
-    const settings = prompt ? reusableSettings(raw[index]!) : undefined;
+    const settings = reusableSettings(raw[index]!);
     const { inputs, unavailable } = reuse[index] ?? { inputs: [], unavailable: 0 };
     return {
       prediction_id: summary.prediction_id,
@@ -220,8 +219,8 @@ export async function historyCardData(
       ...(price !== undefined ? { price_usd: price } : {}),
       ...(summary.error ? { error: summary.error } : {}),
       ...(prompt ? { prompt } : {}),
-      ...(prompt && inputs.length > 0 ? { inputs } : {}),
-      ...(prompt && unavailable > 0 ? { inputs_unavailable: unavailable } : {}),
+      ...(inputs.length > 0 ? { inputs } : {}),
+      ...(unavailable > 0 ? { inputs_unavailable: unavailable } : {}),
       ...(settings ? { settings } : {}),
     };
   });

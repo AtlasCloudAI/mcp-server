@@ -545,6 +545,8 @@ test("11-16 ChatGPT 回归 S12：卡片已显示结果时，查结果的文字�
     try {
       const done = await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "done" } });
       assert.equal(textOf(done).includes(RESULT_CARD_NOTE), rendersCards, `rendersCards=${rendersCards}`);
+      // ChatGPT 只读结构化结果：同一句也要在 card_note 里。
+      assert.equal((done.structuredContent as { card_note?: string }).card_note, rendersCards ? RESULT_CARD_NOTE : undefined);
     } finally {
       await close();
     }

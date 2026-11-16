@@ -37,7 +37,14 @@ const REOPENED_AFTER_MS = 15_000;
  * 之后只在用户切回这个页面时问一次。用户在对话里打字确认时，提交的是模型那次调用，结果出在新卡里，
  * 这张旧卡自己不知道，还挂着「Confirm and generate」（11-12 Jia 第二轮 G2）。
  */
-const WATCH_GAPS_MS = [10_000, 20_000, 30_000];
+const WATCH_FIRST_MS = 10_000;
+/**
+ * 前 5 分钟每 15 秒问一次，之后每分钟一次。原来是 10/20/30 秒后就改成每分钟：用户看报价、打字确认多半在
+ * 一分钟以后，提交刚好落在两次检查之间时，旧卡要再挂将近一分钟（11-16 ChatGPT 回归 G02：提交后 38 秒
+ * 还是报价，70 秒才变）。问一次只查幂等记录（on_load），很便宜。
+ */
+const WATCH_FAST_MS = 15_000;
+const WATCH_FAST_FOR_MS = 5 * 60_000;
 const WATCH_EVERY_MS = 60_000;
 export const WATCH_FOR_MS = 10 * 60_000;
 /** 切回页面时，离上次问不到这么久就不再问。 */
@@ -230,7 +237,7 @@ export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): bo
 
 /** 第 n 次（从 0 数）后台检查前等多久；加上已经问了的时长超过 WATCH_FOR_MS 就不再定时问（undefined）。 */
 export function watchGap(n: number, elapsedMs: number): number | undefined {
-  const gap = WATCH_GAPS_MS[n] ?? WATCH_EVERY_MS;
+  const gap = n === 0 ? WATCH_FIRST_MS : elapsedMs < WATCH_FAST_FOR_MS ? WATCH_FAST_MS : WATCH_EVERY_MS;
   return elapsedMs + gap > WATCH_FOR_MS ? undefined : gap;
 }
 

@@ -27,6 +27,8 @@ function productionEnv(): NodeJS.ProcessEnv {
   return {
     ...developmentEnv(),
     NODE_ENV: "production",
+    // 本机跑生产模式：显式允许共享凭据（部署环境不设它，见下面的 A2 用例）。
+    MCP_ALLOW_SHARED_CREDENTIAL: "1",
     HOST: "0.0.0.0",
     MCP_PUBLIC_URL: "https://plugin.example.com/mcp",
     MCP_OAUTH_ISSUER: "https://auth.example.com",
@@ -209,4 +211,14 @@ test("production rejects URL credentials, non-canonical resources, and host port
     () => loadHttpServerConfig(localEndpointHost),
     /private or local host/
   );
+});
+
+test("A2: a deployed service (NODE_ENV=production) refuses shared-credential modes", () => {
+  for (const mode of ["service-account", "subject-map"]) {
+    const env = productionEnv();
+    delete env.MCP_ALLOW_SHARED_CREDENTIAL;
+    env.MCP_CREDENTIAL_MODE = mode;
+    if (mode === "subject-map") env.MCP_ATLAS_SUBJECT_KEYS_JSON = JSON.stringify({ "user-1": "key-1" });
+    assert.throws(() => loadHttpServerConfig(env), /bills every caller to a shared credential/, mode);
+  }
 });

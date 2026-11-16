@@ -43,6 +43,7 @@ import {
   type AnalyticsSink,
 } from "./http/tool-call-analytics.js";
 import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
+import { disableEnvironmentApiKey } from "./services/api-client.js";
 import { MEDIA_NAME_REDIS_PREFIX } from "./services/media-names.js";
 import { prewarmDocSearch } from "./services/doc-search.js";
 import {
@@ -144,6 +145,7 @@ export function createHttpApp(
     "/.well-known/oauth-protected-resource",
     config.publicMcpUrl
   ).toString();
+  disableEnvironmentApiKey();
   const app = createMcpExpressApp({
     host: config.listenHost,
     allowedHosts: config.allowedHosts,

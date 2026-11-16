@@ -36,15 +36,15 @@ function withEnv(t: import("node:test").TestContext, vars: Record<string, string
   });
 }
 
-test("阈值默认 20，写坏了退回 0（= 全部要确认）而不是放行", (t) => {
+test("阈值默认 1，写坏了退回 0（= 全部要确认）而不是放行", (t) => {
   withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: undefined });
-  assert.equal(autoSubmitThresholdUsd(), 20);
+  assert.equal(autoSubmitThresholdUsd(), 1);
 
   // 一个配错的阈值绝不能把闸门开得更大。
   for (const bad of ["", "  ", "abc", "-1", "NaN"]) {
     process.env.MCP_AUTOSUBMIT_MAX_USD = bad;
     const value = autoSubmitThresholdUsd();
-    assert.ok(value === 0 || value === 20, `${bad} → ${value}`);
+    assert.ok(value === 0 || value === 1, `${bad} → ${value}`);
     if (bad.trim() !== "") assert.equal(value, 0, `${bad} 应当退回 0`);
   }
 
@@ -132,10 +132,10 @@ test("生成类阈值为 0 且报价失败：照样要确认，价格标为未�
   assert.equal(decision.quotedUsd, null);
 });
 
-test("生成类默认每次确认；对话保留 20 美元的自动上限", (t) => {
+test("生成类默认每次确认；对话保留 1 美元的自动上限", (t) => {
   withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: undefined, MCP_AUTOSUBMIT_MAX_USD: undefined });
   assert.equal(generationAutoSubmitThresholdUsd(), 0);
-  assert.equal(autoSubmitThresholdUsd(), 20);
+  assert.equal(autoSubmitThresholdUsd(), 1);
   for (const bad of ["abc", "-1", "NaN"]) {
     process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD = bad;
     assert.equal(generationAutoSubmitThresholdUsd(), 0, `${bad} 应当退回 0`);

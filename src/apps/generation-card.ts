@@ -10,6 +10,8 @@ import {
 import { z } from "zod";
 import { generationApi, headStillServes } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
+import { isAtlasStorageUrl } from "../services/owned-storage.js";
+import { publicUrlStillServes } from "../services/input-link-check.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
 import type { MediaSource } from "../services/media-names.js";
@@ -426,6 +428,14 @@ export function buildGenerationCardData(input: {
   };
 }
 
+/**
+ * 自家存储照旧直接 HEAD。别的地址（S3 bridge、转存失败只剩上游签名链接）来自上游模型，
+ * 走挡内网的探测，不能替人去连任意主机（SSRF，11-16 review）。
+ */
+function mediaStillServes(url: string): Promise<boolean | null> {
+  return isAtlasStorageUrl(url) ? headStillServes(url) : publicUrlStillServes(url);
+}
+
 // 上游临时链接 24 小时过期，Atlas 存储约 15 天。刚完成的结果不用查，
 // 放了快一天的才发一次 HEAD 确认还能打开，打不开就让卡片显示「链接过期」。
 const EXPIRY_CHECK_AFTER_SECONDS = 20 * 60 * 60;
@@ -511,7 +521,7 @@ export async function predictionCardData(
   const [model, stillServes] = await Promise.all([
     // 查不到名字时卡片退回显示模型 ID。
     modelId ? settleWithin(findModelByExactId(modelId), MODEL_LOOKUP_TIMEOUT_MS) : undefined,
-    checkExpiry ? (options.checkExpiry ?? ((url: string) => headStillServes(url)))(outputs[0]) : null,
+    checkExpiry ? (options.checkExpiry ?? mediaStillServes)(outputs[0]!) : null,
   ]);
   const mediaExpired = stillServes === false;
   // 历史卡那套取法（history-card.ts 引用了本文件，按需动态引入避免循环依赖）。

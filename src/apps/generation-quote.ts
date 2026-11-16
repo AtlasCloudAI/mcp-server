@@ -7,7 +7,7 @@ import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
 import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
 import { currentClientIsChatGpt } from "../services/client-profile.js";
 import { rememberedMedia } from "../services/media-names.js";
-import { rememberNotStarted } from "../services/not-started.js";
+import { mayHaveStarted, rememberNotStarted } from "../services/not-started.js";
 import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
@@ -347,9 +347,15 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
 ): (args: Args, extra: Extra) => Promise<CallToolResult> {
   return async (args, extra) => {
     const result = await withQuoteDetails(await handler(args, extra), options);
-    if (result.isError && (args.confirmed === true || typeof args.confirmation_token === "string")) {
+    const errorText = result.content.find((block) => block.type === "text");
+    if (
+      result.isError &&
+      (args.confirmed === true || typeof args.confirmation_token === "string") &&
+      !(errorText?.type === "text" && mayHaveStarted(errorText.text))
+    ) {
       // 确认了却没开始：记下原因，模型之后查历史时能看到（not-started.ts）。
-      const text = result.content.find((block) => block.type === "text");
+      // 可能已经提交了的不记，那种要先查历史。
+      const text = errorText;
       await rememberNotStarted(
         typeof args.model === "string" ? args.model : tool,
         text?.type === "text" ? text.text : "Did not start."

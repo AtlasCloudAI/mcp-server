@@ -74,6 +74,15 @@ function reasonOf(text: string): string {
   return first.length > MAX_REASON_LENGTH ? `${first.slice(0, MAX_REASON_LENGTH - 3)}...` : first;
 }
 
+/**
+ * 这条报错说明请求可能已经到了平台（没拿到确定答复、上一次还在提交、收下了却没给任务号）。
+ * 这些不能记成「没开始、没扣钱」：模型会照着告诉用户没扣费，甚至重新报价再交一单。
+ * 措辞分别来自 error-handler.ts（UnconfirmedRequestError）、idempotency.ts、generation.ts / quick-generate.ts。
+ */
+export function mayHaveStarted(errorText: string): boolean {
+  return /without a confirmed response|still in progress|did not return a prediction ID/i.test(errorText);
+}
+
 export async function rememberNotStarted(
   model: string,
   errorText: string,

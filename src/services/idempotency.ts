@@ -216,19 +216,9 @@ export class RedisIdempotencyStore implements IdempotencyStore {
       return existingResult(JSON.parse(raw) as StoredRecord<T>, fingerprint);
     }
 
+    let result: T;
     try {
-      const result = await operation();
-      const completed: StoredRecord<T> = {
-        fingerprint,
-        state: "completed",
-        createdAt,
-        result,
-      };
-      await this.client.set(redisKey, JSON.stringify(completed), {
-        EX: ttlSeconds,
-        XX: true,
-      });
-      return result;
+      result = await operation();
     } catch (error) {
       const settled: StoredRecord<T> = {
         fingerprint,
@@ -243,6 +233,17 @@ export class RedisIdempotencyStore implements IdempotencyStore {
         .catch(() => undefined);
       throw error;
     }
+    // 提交已经成功：写回失败不能当成提交失败报出去（那会让人再交一单）。记录停在 pending，
+    // 同一个键的重试报「还在提交」，不会重复提交。
+    const completed: StoredRecord<T> = { fingerprint, state: "completed", createdAt, result };
+    await this.client
+      .set(redisKey, JSON.stringify(completed), { EX: ttlSeconds, XX: true })
+      .catch((error: unknown) => {
+        console.error(
+          `Redis idempotency store: could not record a completed request: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    return result;
   }
 
   async peek(key: string): Promise<StoredRecord<unknown> | undefined> {

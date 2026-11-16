@@ -10,7 +10,9 @@ import {
 import { executeIdempotently } from "../services/idempotency.js";
 import {
   chatUsageCostUsd,
+  applyDailyAutoSubmitBudget,
   evaluateChatSpend,
+  recordAutoSpend,
   formatUsd,
   type SpendDecision,
   confirmationValidSeconds,
@@ -239,7 +241,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           };
           let spend: SpendDecision | undefined;
           if (!confirmation_token && !confirmed) {
-            spend = evaluateChatSpend(found, { messages, max_tokens });
+            spend = await applyDailyAutoSubmitBudget(evaluateChatSpend(found, { messages, max_tokens }));
           }
           if (spend && !spend.autoSubmit) {
             const confirmation = await issueGenerationConfirmation(
@@ -251,7 +253,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             const bound =
               spend.quotedUsd === null
                 ? "- **Worst-case cost**: unknown — the catalog has no complete per-token rates or output limit for this model, so it cannot be bounded in advance."
-                : `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request (input size, max_tokens and the highest rate tier), at or above the ${formatUsd(spend.thresholdUsd)} auto-submit limit. The real charge follows actual token usage and is usually far lower; setting a smaller max_tokens lowers this bound.`;
+                : spend.dailyBudget
+                  ? `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request. It is under the per-request limit, but chat requests that ran without confirmation today already add up to ${formatUsd(spend.dailyBudget.usedUsd === Number.POSITIVE_INFINITY ? spend.dailyBudget.budgetUsd : spend.dailyBudget.usedUsd)} of the ${formatUsd(spend.dailyBudget.budgetUsd)} daily allowance, so this one needs the user's confirmation.`
+                  : `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request (input size, max_tokens and the highest rate tier), at or above the ${formatUsd(spend.thresholdUsd)} auto-submit limit. The real charge follows actual token usage and is usually far lower; setting a smaller max_tokens lowers this bound.`;
             return {
               structuredContent: {
                 status: "confirmation_required" as const,
@@ -294,6 +298,12 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                 responseSchema: chatCompletionResponseSchema,
               })
           );
+
+          if (spend?.autoSubmit) {
+            // 记进今天的自动执行总账（空回答也扣了钱）；算不出实际用量就按最坏情况记。
+            const used = response.usage ? chatUsageCostUsd(found, response.usage) : null;
+            await recordAutoSpend(used ?? spend.quotedUsd ?? 0);
+          }
 
           const choice = response.choices?.[0];
           if (!choice || choice.message.content.trim() === "") {

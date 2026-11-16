@@ -189,6 +189,7 @@ const envSchema = z.object({
     .enum(["service-account", "subject-map", "redis-subject-map", "oauth-exchange"])
     .default("service-account"),
   ATLASCLOUD_API_KEY: z.string().min(1).optional(),
+  MCP_ALLOW_SHARED_CREDENTIAL: z.enum(["0", "1"]).optional(),
   MCP_ATLAS_SUBJECT_KEYS_JSON: z.string().optional(),
   MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON: z.string().optional(),
   MCP_CREDENTIAL_REDIS_PREFIX: z
@@ -427,6 +428,19 @@ export function loadHttpServerConfig(
     }
   }
 
+  // 部署出去的服务（NODE_ENV=production，test 也是）不许用一把共享 key 记所有人的账：
+  // service-account 和 subject-map 只给本机开发用。以前只在 PLUGIN_RELEASE_TIER=production 时拦，
+  // test 的档位是 staging，有人配上 ATLASCLOUD_API_KEY 就等于让所有登录的人花服务器的钱
+  // （11-16 安全审查 A2）。MCP_ALLOW_SHARED_CREDENTIAL=1 是给本机跑生产模式的显式开关。
+  if (
+    env.NODE_ENV === "production" &&
+    (env.MCP_CREDENTIAL_MODE === "service-account" || env.MCP_CREDENTIAL_MODE === "subject-map") &&
+    env.MCP_ALLOW_SHARED_CREDENTIAL !== "1"
+  ) {
+    throw new Error(
+      `MCP_CREDENTIAL_MODE=${env.MCP_CREDENTIAL_MODE} bills every caller to a shared credential and is not allowed when NODE_ENV=production; use oauth-exchange or redis-subject-map`
+    );
+  }
   const scopesSupported = commaList(env.MCP_OAUTH_SCOPES);
   const finalScopes = scopesSupported.length > 0 ? scopesSupported : [...REMOTE_SCOPES];
   const unknownScopes = finalScopes.filter(

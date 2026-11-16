@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { lstat, readFile, realpath } from "fs/promises";
+import { looksLikeMedia, uploadExtensionAllowed } from "./media-files.js";
 import { basename, isAbsolute, relative, resolve } from "path";
 import { fetch, FormData, ProxyAgent, type Dispatcher } from "undici";
 import type { ZodTypeAny } from "zod";
@@ -109,9 +110,18 @@ export interface ApiRequestOptions {
   fetcher?: typeof fetch;
 }
 
+// 远程服务里凭据只能来自这次请求（调用者自己的身份）。没有请求上下文时退回 ATLASCLOUD_API_KEY
+// 是 stdio 的用法；放在远程服务里，任何漏掉上下文的路径都会悄悄花服务器自己那把 key 的钱
+// （11-16 安全审查 A2）。远程入口启动时关掉这条退路。
+let environmentKeyAllowed = true;
+
+export function disableEnvironmentApiKey(): void {
+  environmentKeyAllowed = false;
+}
+
 export function getApiKey(): string {
   const key =
-    getRequestContext()?.atlasApiKey ?? process.env.ATLASCLOUD_API_KEY;
+    getRequestContext()?.atlasApiKey ?? (environmentKeyAllowed ? process.env.ATLASCLOUD_API_KEY : undefined);
   if (!key) {
     throw new ApiRequestError(
       "No Atlas Cloud credential is available for this authenticated request"
@@ -350,9 +360,19 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   if (!allowed) {
     throw new ApiRequestError("Upload path is outside ATLASCLOUD_UPLOAD_ROOTS");
   }
+  // 只收媒体文件。上传后的地址是公开的，而默认根目录就是当前工作目录（多半是项目目录）：
+  // 不挡的话，被注入的 agent 一句话就能把 .env、私钥发布成公网链接（11-16 安全审查 M3）。
+  const fileName = basename(resolvedFile);
+  if (fileName.startsWith(".") || !uploadExtensionAllowed(fileName)) {
+    throw new ApiRequestError(
+      "Only image, video, audio and GLB files can be uploaded (jpg, png, webp, gif, mp4, mov, webm, mp3, wav, m4a, aac, ogg, flac, glb)"
+    );
+  }
   const apiKey = getApiKey();
   const fileBuffer = await readFile(resolvedFile);
-  const fileName = basename(resolvedFile);
+  if (!looksLikeMedia(fileBuffer)) {
+    throw new ApiRequestError("The file's contents are not a recognised image, video, audio or GLB file");
+  }
   return uploadMediaBuffer(fileBuffer, fileName, apiKey);
 }
 

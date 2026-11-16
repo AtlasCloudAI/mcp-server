@@ -19,6 +19,9 @@ import {
 } from "./api-client.js";
 import { rememberMediaName } from "./media-names.js";
 import { BufferSlotsBusyError, withBufferSlot } from "./buffer-slots.js";
+import { sniffExtension } from "./media-files.js";
+
+export { sniffExtension };
 
 /** 下载附件用的 fetch：默认走 undici + 出站代理，测试里换成假的。 */
 export type DownloadFetcher = (
@@ -339,36 +342,6 @@ async function downloadChatFile(
   } finally {
     clearTimeout(timer);
   }
-}
-
-function ascii(bytes: Uint8Array, start: number, length: number): string {
-  return String.fromCharCode(...bytes.subarray(start, start + length));
-}
-
-/** 名字和类型都没说清时，按文件头认几种常见格式。认不出返回 undefined。 */
-export function sniffExtension(bytes: Uint8Array): string | undefined {
-  if (bytes.length < 12) return undefined;
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
-  if (bytes[0] === 0x89 && ascii(bytes, 1, 3) === "PNG") return "png";
-  if (ascii(bytes, 0, 4) === "GIF8") return "gif";
-  if (ascii(bytes, 0, 4) === "RIFF") {
-    const kind = ascii(bytes, 8, 4);
-    if (kind === "WEBP") return "webp";
-    if (kind === "WAVE") return "wav";
-    return undefined;
-  }
-  if (ascii(bytes, 4, 4) === "ftyp") {
-    const brand = ascii(bytes, 8, 4);
-    if (["heic", "heix", "hevc", "heim", "heis", "mif1", "msf1"].includes(brand)) return "heic";
-    if (brand === "qt  ") return "mov";
-    if (brand === "M4A ") return "m4a";
-    return "mp4";
-  }
-  if (ascii(bytes, 0, 4) === "OggS") return "ogg";
-  if (ascii(bytes, 0, 4) === "fLaC") return "flac";
-  if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
-  if (ascii(bytes, 0, 3) === "ID3" || (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0)) return "mp3";
-  return undefined;
 }
 
 export function formatBytes(bytes: number): string {

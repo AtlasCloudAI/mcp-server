@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
+import { getRequestContext } from "./request-context.js";
+import { InMemoryUploadTicketStore } from "./upload-ticket-store.js";
 import { schemaDefaults } from "../utils/schema-validator.js";
 import type { Model, PromptThresholdPrice } from "../types.js";
 
@@ -71,6 +74,8 @@ export interface SpendDecision {
   estimateReason?: string;
   /** What a partial quote left out. */
   estimateMissing?: string[];
+  /** Set when the per-request limit passed but the user's daily auto-run budget did not. */
+  dailyBudget?: { budgetUsd: number; usedUsd: number };
 }
 
 export interface Quote {
@@ -117,7 +122,7 @@ function estimateDetails(quote: Quote | null): Pick<SpendDecision, "estimateReas
  * after testers found jobs had started — and been billed — before they knew which
  * model was used or what it cost. MCP_GENERATION_AUTOSUBMIT_MAX_USD raises it.
  * atlas_chat keeps its own limit (autoSubmitThresholdUsd): a per-message
- * confirmation would make chat unusable, and its worst case is cents.
+ * confirmation would make chat unusable.
  */
 export function generationAutoSubmitThresholdUsd(): number {
   const raw = process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD;
@@ -127,9 +132,17 @@ export function generationAutoSubmitThresholdUsd(): number {
   return parsed;
 }
 
+/**
+ * Per-request auto-run limit for atlas_chat (worst-case bound, not the real charge).
+ *
+ * Was $20. A prompt-injected agent can call atlas_chat in a loop, and every call
+ * under the limit ran without the user seeing anything (11-16 security review M1).
+ * $1 still covers ordinary chat — its real cost is usually cents — and anything
+ * bigger stops for a confirmation. MCP_AUTOSUBMIT_MAX_USD overrides it.
+ */
 export function autoSubmitThresholdUsd(): number {
   const raw = process.env.MCP_AUTOSUBMIT_MAX_USD;
-  if (raw === undefined || raw.trim() === "") return 20;
+  if (raw === undefined || raw.trim() === "") return 1;
   const parsed = Number.parseFloat(raw);
   // A malformed threshold must not silently widen the gate. Fall back to
   // confirming everything, which is the behaviour this replaced.
@@ -291,6 +304,97 @@ export function evaluateChatSpend(model: Model, request: ChatRequestShape): Spen
     return { autoSubmit: false, quotedUsd: worst, thresholdUsd, reason: "worst-case cost is at or above the threshold" };
   }
   return { autoSubmit: true, quotedUsd: worst, thresholdUsd, reason: "worst-case cost is below the threshold" };
+}
+
+// ---- 对话自动执行的每日额度 ----
+//
+// 单次上限只管一次调用。被注入的 agent 可以一次次调 atlas_chat，每次都在上限以下，用户一次确认
+// 都看不到（11-16 安全审查 M1）。所以每个用户每天（UTC）自动执行的花费再记一笔总账，超过就和
+// 单次超限一样停下来要确认。记账按实际用量；算不出实际用量时按最坏情况记。存储和报价记录同一个
+// （有 Redis 时多副本共用）；读不出来时按「已经用完」处理，宁可多问一次。
+
+const DEFAULT_DAILY_AUTO_SUBMIT_USD = 5;
+const AUTO_SPEND_TTL_SECONDS = 26 * 3600;
+const AUTO_SPEND_STORE_TIMEOUT_MS = 800;
+const localAutoSpend = new InMemoryUploadTicketStore();
+
+/** 每个用户每天自动执行的总额度（美元）。MCP_AUTOSUBMIT_DAILY_MAX_USD 覆盖；写坏了按 0（全部要确认）。 */
+export function dailyAutoSubmitBudgetUsd(): number {
+  const raw = process.env.MCP_AUTOSUBMIT_DAILY_MAX_USD;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_DAILY_AUTO_SUBMIT_USD;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+}
+
+function autoSpendKey(now: Date): string {
+  const subject = getRequestContext()?.subject ?? "stdio";
+  const digest = createHash("sha256").update(subject).digest("hex");
+  return `auto-spend:${digest}:${now.toISOString().slice(0, 10)}`;
+}
+
+function autoSpendStore() {
+  return getRequestContext()?.quoteStore ?? localAutoSpend;
+}
+
+function withStoreTimeout<T>(operation: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("auto-spend store timed out")), AUTO_SPEND_STORE_TIMEOUT_MS);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+/** 今天已经自动执行了多少（美元）；存储出错时返回 Infinity（按用完处理）。 */
+export async function autoSpentTodayUsd(now: Date = new Date()): Promise<number> {
+  try {
+    const raw = await withStoreTimeout(autoSpendStore().get(autoSpendKey(now)));
+    if (!raw) return 0;
+    const value = Number.parseFloat(raw);
+    return Number.isFinite(value) && value >= 0 ? value : Number.POSITIVE_INFINITY;
+  } catch (error) {
+    console.error(`[auto-spend] read failed: ${error instanceof Error ? error.message : String(error)}`);
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** 自动执行完一次，把花费记进今天的总账。并发时可能少记一点，额度本来就是兜底。 */
+export async function recordAutoSpend(usd: number, now: Date = new Date()): Promise<void> {
+  if (!Number.isFinite(usd) || usd <= 0) return;
+  try {
+    const store = autoSpendStore();
+    const key = autoSpendKey(now);
+    const current = Number.parseFloat((await withStoreTimeout(store.get(key))) ?? "0");
+    const next = (Number.isFinite(current) && current > 0 ? current : 0) + usd;
+    await withStoreTimeout(store.put(key, String(next), AUTO_SPEND_TTL_SECONDS));
+  } catch (error) {
+    console.error(`[auto-spend] write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * 单次闸门放行之后再过每日额度：今天已用 + 这次最坏情况超过额度，就改成要确认。
+ * 不放行的决定原样返回。
+ */
+export async function applyDailyAutoSubmitBudget(decision: SpendDecision): Promise<SpendDecision> {
+  if (!decision.autoSubmit || decision.quotedUsd === null) return decision;
+  const budgetUsd = dailyAutoSubmitBudgetUsd();
+  const usedUsd = await autoSpentTodayUsd();
+  if (usedUsd + decision.quotedUsd <= budgetUsd) return decision;
+  return {
+    ...decision,
+    autoSubmit: false,
+    dailyBudget: { budgetUsd, usedUsd },
+    reason: "daily auto-run budget reached",
+  };
 }
 
 /** 按实际用量算这次对话的花费：输入超过阶梯门槛就用那一档的单价。 */

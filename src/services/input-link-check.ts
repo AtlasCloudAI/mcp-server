@@ -42,10 +42,15 @@ export function inputLinkCheckEnabled(): boolean {
 }
 
 /** 取参数里的素材链接：字段名 + 链接，按出现顺序去重，最多 8 条。 */
-export function inputLinks(params: Record<string, unknown>): Array<{ field: string; url: string }> {
+export function inputLinks(
+  params: Record<string, unknown>,
+  limits: { maxLinks?: number; maxDepth?: number } = {}
+): Array<{ field: string; url: string }> {
+  const maxLinks = limits.maxLinks ?? MAX_LINKS;
+  const maxDepth = limits.maxDepth ?? 3;
   const out: Array<{ field: string; url: string }> = [];
   const visit = (field: string, value: unknown, depth: number): void => {
-    if (out.length >= MAX_LINKS || depth > 3) return;
+    if (out.length >= maxLinks || depth > maxDepth) return;
     if (typeof value === "string") {
       const trimmed = value.trim();
       // 按「字段 + 链接」去重：同一个链接放在图片和视频两个字段里，两边的要求不一样，都要判。
@@ -244,15 +249,60 @@ function judge(field: string, found: Probe): string | undefined {
   return undefined;
 }
 
+const PRIVATE_REASON = "it points to a private or local address, which Atlas cannot reach";
+// 只挡内网时最多看多少条、嵌多深：参数里本来就不会有这么多链接。
+const MAX_GUARDED_LINKS = 64;
+const MAX_GUARDED_DEPTH = 8;
+
+/** 主机名解析到的地址里有没有内网地址。解析失败或超时当作不是（之后网关也下载不了）。 */
+async function resolvesToPrivate(hostname: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    dnsLookup(hostname, { all: true }, (err, addresses: LookupAddress[]) => {
+      clearTimeout(timer);
+      resolve(!err && addresses.some((a) => isBlockedAddress(a.address)));
+    });
+  });
+}
+
+/** 探测上限之外的链接（以及嵌得更深的）：指向内网的报出来。 */
+async function privateLinksBeyondProbe(params: Record<string, unknown>, timeoutMs: number): Promise<InputLinkProblem[]> {
+  const probed = new Set(inputLinks(params).map((link) => `${link.field}\0${link.url}`));
+  const rest = inputLinks(params, { maxLinks: MAX_GUARDED_LINKS, maxDepth: MAX_GUARDED_DEPTH }).filter(
+    (link) => !probed.has(`${link.field}\0${link.url}`)
+  );
+  const results = await Promise.all(
+    rest.map(async ({ field, url }) => {
+      let host: string;
+      try {
+        host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+      } catch {
+        return undefined;
+      }
+      const blocked =
+        host === "localhost" ||
+        (net.isIP(host) ? isBlockedAddress(host) : await resolvesToPrivate(host, Math.min(timeoutMs, 2_000)));
+      return blocked ? { field, url, reason: PRIVATE_REASON } : undefined;
+    })
+  );
+  return results.filter((r): r is InputLinkProblem => r !== undefined);
+}
+
 /** 逐条检查素材链接，返回不能用的那些；全部能用时返回空数组。 */
 export async function checkInputLinks(
   params: Record<string, unknown>,
   options: InputLinkCheckOptions = {}
 ): Promise<InputLinkProblem[]> {
-  const links = inputLinks(params);
-  if (links.length === 0) return [];
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const allowPrivate = options.allowPrivateAddresses === true;
+  // 只完整探前 8 条；更多的、嵌得更深的也要挡内网（只解析地址，不连），
+  // 不然把内网地址放在第 9 条就绕过去了，网关照样会去下载它（11-16 review）。
+  if (!allowPrivate) {
+    const blocked = await privateLinksBeyondProbe(params, timeoutMs);
+    if (blocked.length > 0) return blocked;
+  }
+  const links = inputLinks(params);
+  if (links.length === 0) return [];
   const agent = guardedAgent(allowPrivate, timeoutMs);
   // 同一个链接只探一次，结果给用到它的每个字段共用。
   const probes = new Map<string, ReturnType<typeof probe>>();

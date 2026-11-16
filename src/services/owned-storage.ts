@@ -49,6 +49,21 @@ export function isAtlasStorageUrl(url: string): boolean {
 }
 
 /**
+ * 运维在 MCP_OWNED_MEDIA_HOSTS 里显式配置的存储主机。只有这些主机允许解析到内网地址
+ * （集群内的存储、测试里起在 127.0.0.1 的假服务）；按域名后缀和桶名前缀认出来的「自家存储」
+ * 前缀谁都能注册，探测时照样挡内网（11-16 安全审查 L1）。
+ */
+export function isConfiguredMediaHost(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return extraHosts().some((allowed) => (allowed.startsWith(".") ? host.endsWith(allowed) : host === allowed));
+}
+
+/**
  * Hosts whose outputs the platform hands over first and copies to Atlas storage
  * a little later. Only aiproxy's slow-CDN path does that (Volcengine/BytePlus
  * TOS, used by Seedance and Seedream); every other adapter copies before it

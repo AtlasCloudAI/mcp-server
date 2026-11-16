@@ -516,3 +516,38 @@ test("卡片打开时查结果要原始请求，结果卡显示主要参数；�
     restore();
   }
 });
+
+test("11-16 ChatGPT 回归 S32/S50：模板报价样例有 Atlas 图标；没搜到的样例列最近素材", async () => {
+  const restore = withEnv({ MCP_UI_CARDS: "1", MCP_UI_SELFTEST: "1" });
+  const { client, close } = await connect({ rendersCards: true });
+  const metaOf = (result: unknown, key: string) =>
+    ((result as { _meta?: Record<string, unknown> })._meta?.[key] ?? {}) as Record<string, unknown>;
+  try {
+    const template = cardOf(await client.callTool({ name: "atlas_card_selftest", arguments: { variant: "quote_template" } }));
+    assert.match(String(template?.model_icon), /atlascloud/);
+    assert.equal(template?.model_reason, undefined);
+
+    const noMatch = metaOf(await client.callTool({ name: "atlas_card_selftest", arguments: { variant: "assets_no_match" } }), "atlascloud/assets");
+    assert.equal(noMatch.unmatched_query, "red sneaker");
+    assert.equal(noMatch.query, undefined);
+    assert.ok((noMatch.items as unknown[]).length > 0, "要和真实搜索一样列出最近素材");
+  } finally {
+    await close();
+    restore();
+  }
+});
+
+test("11-16 ChatGPT 回归 S12：卡片已显示结果时，查结果的文字叫模型别另画示意图", async () => {
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  const { RESULT_CARD_NOTE } = await import("../src/tools/llm.js");
+  for (const rendersCards of [true, false]) {
+    const { client, close } = await connect({ rendersCards });
+    try {
+      const done = await client.callTool({ name: "atlas_get_prediction", arguments: { prediction_id: "done" } });
+      assert.equal(textOf(done).includes(RESULT_CARD_NOTE), rendersCards, `rendersCards=${rendersCards}`);
+    } finally {
+      await close();
+    }
+  }
+  restore();
+});

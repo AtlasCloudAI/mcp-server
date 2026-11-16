@@ -404,7 +404,9 @@ function assetsSample(variant: string): AssetCardData {
   const day = 86_400_000;
   if (variant === "assets_locked") return { view: "assets", items: [], max_pick: ASSETS_MAX_PICK, locked: true, sample: true };
   if (variant === "assets_signed_out") return { ...assetsSample("assets"), sample_signed_out: true };
-  if (variant === "assets_no_match") return { view: "assets", query: "red sneaker", items: [], max_pick: ASSETS_MAX_PICK, sample: true };
+  // 和真实搜索一致（tools/assets.ts）：搜不到但库里有东西时，列最近的素材，顶上写「Nothing matched …」。
+  // 原来给的是空列表，只能看到「No matches」空状态（11-13 Claude、11-16 ChatGPT 回归 S50）。
+  if (variant === "assets_no_match") return { ...assetsSample("assets"), unmatched_query: "red sneaker" };
   const items: AssetCardItem[] =
     variant === "assets_empty"
       ? []
@@ -455,8 +457,9 @@ function quoteSample(variant: keyof typeof QUOTE_VARIANTS): GenerationCardData {
       modelType: template ? "Image" : "Video",
     }),
     // 设计稿 v3 的模型行：厂商图标 + 选模型的理由（模板没有理由：是用户点的模板）。
+    // 模板也有图标：和真实报价一样用 Atlas 自家图标（11-16 ChatGPT 回归 S32：样例模板行没图标）。
     ...(template
-      ? {}
+      ? { model_icon: brandIconUrl(base.model) }
       : {
           model_icon: brandIconUrl("bytedance/seedance-2.5/image-to-video"),
           model_reason: "Keeps the product sharp while animating it, and follows the photo's framing.",

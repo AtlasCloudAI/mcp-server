@@ -77,6 +77,12 @@ function chargeUsd(value: number): string {
   return `$${(trimmed.split(".")[1]?.length ?? 0) < 2 ? value.toFixed(2) : trimmed}`;
 }
 
+/** 卡片已经显示出结果时，提醒模型别另画、另生成一张「示意图」（11-16 ChatGPT 回归 S12）。 */
+export const RESULT_CARD_NOTE =
+  "The user already sees this result in the Atlas card above, with the real media and a Download button. " +
+  "Do not draw, generate or embed any other picture of it (no illustrative or placeholder preview); " +
+  "answer in a sentence or two with the status and what was actually charged.";
+
 /**
  * 查结果里给模型看的一行扣费（需求文档 6.3：结算完才写实际费用，没结算完写待结算，
  * 不把未知费用说成 $0）。老网关没有 charge_status 时只在有价格时写价格。
@@ -495,6 +501,10 @@ Examples:
               `will pick it up with the same ID — never imply it is finished or stuck. Do not submit ` +
               `the job again — that would start and bill a second one.`
           );
+        } else if (isFinished(status) && !transferPending && outputUrls.length > 0 && clientRendersCards(server)) {
+          // 11-16 ChatGPT 回归 S12：卡片已经显示了结果，ChatGPT 还自己画了一张「Illustrative preview, not the
+          // actual generated image」的示意图放在下面，看着像生成结果。
+          lines.push(`\n${RESULT_CARD_NOTE}`);
         }
 
         if (!isActive(status) && !isFinished(status) && status !== "failed" && status !== "unknown") {

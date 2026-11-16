@@ -63,19 +63,25 @@ test("P6 设计 2：自己挑模型时要写 why_this_model，工具说明和服
   assert.match(defaultRouteSummary(), /why_this_model/);
 });
 
-test("第二轮 G2：打字确认后旧报价卡在后台问几次交过没有——先密后疏，问满 10 分钟停", async () => {
+test("第二轮 G2：打字确认后旧报价卡在后台问几次交过没有——前 5 分钟每 15 秒，之后每分钟，问满 10 分钟停", async () => {
   const { watchGap, WATCH_FOR_MS } = await import("../ui/generation-card/quote.js");
   assert.equal(watchGap(0, 0), 10_000);
-  assert.equal(watchGap(1, 10_000), 20_000);
-  assert.equal(watchGap(2, 30_000), 30_000);
-  assert.equal(watchGap(3, 60_000), 60_000);
-  assert.equal(watchGap(12, WATCH_FOR_MS - 60_000), 60_000);
-  assert.equal(watchGap(13, WATCH_FOR_MS - 30_000), undefined);
-  // 10 分钟内一共问不到 15 次。
+  assert.equal(watchGap(1, 10_000), 15_000);
+  assert.equal(watchGap(5, 85_000), 15_000);
+  assert.equal(watchGap(20, 5 * 60_000), 60_000);
+  assert.equal(watchGap(24, WATCH_FOR_MS - 60_000), 60_000);
+  assert.equal(watchGap(25, WATCH_FOR_MS - 30_000), undefined);
+  // 11-16 ChatGPT 回归 G02：打字确认多在一分钟后，前 5 分钟两次检查最多隔 15 秒。
   let n = 0;
   let elapsed = 0;
-  for (let gap = watchGap(n, elapsed); gap !== undefined; gap = watchGap(++n, elapsed)) elapsed += gap;
-  assert.ok(n <= 15, `问了 ${n} 次`);
+  const times: number[] = [];
+  for (let gap = watchGap(n, elapsed); gap !== undefined; gap = watchGap(++n, elapsed)) {
+    elapsed += gap;
+    times.push(elapsed);
+  }
+  for (let i = 1; i < times.length && times[i]! <= 5 * 60_000; i++) assert.ok(times[i]! - times[i - 1]! <= 15_000);
+  // 10 分钟内一共问不到 30 次。
+  assert.ok(n <= 30, `问了 ${n} 次`);
 });
 
 test("第二轮 G2：只在卡上还是一份等确认、没过期的真报价时才问", async () => {

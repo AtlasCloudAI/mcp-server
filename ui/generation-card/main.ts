@@ -326,7 +326,10 @@ async function refreshOnce(): Promise<void> {
   refreshing = true;
   render();
   try {
-    const result = await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: card.prediction_id } });
+    const asked = card.prediction_id;
+    const result = await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: asked } });
+    // 等回答时用户在历史里换了一条（或返回了列表）：这个回答作废。
+    if (card?.prediction_id !== asked) return;
     if (result.isError) {
       const text = errorTextOf(result);
       if (isSignedOut(text)) signedOut = true;
@@ -358,11 +361,15 @@ async function pollLoop(): Promise<void> {
       }
       const started = Date.now();
       let failed = false;
+      const asked: string = card.prediction_id;
       try {
         const result = await app.callServerTool({
           name: STATUS_TOOL,
-          arguments: { prediction_id: card.prediction_id },
+          arguments: { prediction_id: asked },
         });
+        // 服务端会等一会儿才回答：这期间用户在历史里换了一条或返回了列表，迟到的回答不能把卡片
+        // 改回旧任务。下一轮按现在这张卡接着查（没有卡就停）。
+        if (card?.prediction_id !== asked) continue;
         failed = result.isError === true || !accept(result);
         if (result.isError && isSignedOut(errorTextOf(result))) signedOut = true;
       } catch (error) {
@@ -383,6 +390,15 @@ async function pollLoop(): Promise<void> {
   }
 }
 
+function isWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 /** 工具错误结果里的那句话。 */
 function errorTextOf(result: { content?: Array<{ type: string; text?: unknown }> }): string {
   const text = result.content?.find((c) => c.type === "text");
@@ -390,6 +406,11 @@ function errorTextOf(result: { content?: Array<{ type: string; text?: unknown }>
 }
 
 async function openUrl(url: string): Promise<void> {
+  // 输出地址来自上游模型：只打开 http(s)，别把 javascript: 之类交给宿主或浏览器。
+  if (!isWebUrl(url)) {
+    setNotice("Couldn't open that link.");
+    return;
+  }
   if (hostCaps().openLinks !== undefined) {
     try {
       const { isError } = await app.openLink({ url });
@@ -719,6 +740,8 @@ async function openDetail(predictionId: string): Promise<void> {
     const result = sample
       ? await app.callServerTool({ name: "atlas_card_selftest", arguments: { variant: predictionId.slice("selftest_".length) } })
       : await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: predictionId } });
+    // 等回答时用户点开了别的、或返回了列表：这个回答作废。
+    if (pendingId !== predictionId) return;
     if (!result.isError && accept(result)) {
       if (history) history = { ...history, loading: false };
       render();
@@ -727,6 +750,7 @@ async function openDetail(predictionId: string): Promise<void> {
     }
     throw new Error("bad result");
   } catch {
+    if (pendingId !== predictionId) return;
     if (history) history = { ...history, loading: false, error: "Couldn't open that generation. Try again in a moment." };
     pendingId = undefined;
     render();
@@ -736,6 +760,8 @@ async function openDetail(predictionId: string): Promise<void> {
 function closeDetail(): void {
   card = undefined; // 停掉这一条的轮询
   pendingId = undefined;
+  // 还没打开就返回：那次打开的加载状态在这里收掉，它迟到的回答会被丢弃（openDetail）。
+  if (history?.loading) history = { ...history, loading: false };
   render();
 }
 

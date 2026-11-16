@@ -91,18 +91,55 @@ export function isBlockedAddress(address: string): boolean {
     );
   }
   if (version === 6) {
-    const v6 = address.toLowerCase();
-    const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return isBlockedAddress(mapped[1]!);
+    const groups = ipv6Groups(address);
+    if (!groups) return true;
+    // 内嵌 IPv4 的写法按里面那个 IPv4 判：URL 会把 [::ffff:127.0.0.1] 规范成 ::ffff:7f00:1，
+    // 只认点分写法的话内网地址就漏过去了。
+    const embedded = embeddedIpv4(groups);
+    if (embedded) return isBlockedAddress(embedded);
+    const first = groups[0]!;
     return (
-      v6 === "::" ||
-      v6 === "::1" ||
-      /^f[cd][0-9a-f]{2}:/.test(v6) ||
-      /^fe[89ab][0-9a-f]:/.test(v6) ||
-      /^ff[0-9a-f]{2}:/.test(v6)
+      groups.every((group) => group === 0) || // ::
+      (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) || // ::1
+      (first & 0xfe00) === 0xfc00 || // fc00::/7 唯一本地
+      (first & 0xffc0) === 0xfe80 || // fe80::/10 链路本地
+      (first & 0xff00) === 0xff00 // ff00::/8 组播
     );
   }
   return true;
+}
+
+/** 把 IPv6 地址展开成 8 个 16 位整数；末尾是点分 IPv4 的写法也认。解析不了返回 undefined。 */
+function ipv6Groups(address: string): number[] | undefined {
+  let text = address.toLowerCase().replace(/%.*$/, "");
+  const dotted = text.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    if (net.isIP(dotted[2]!) !== 4) return undefined;
+    const [a, b, c, d] = dotted[2]!.split(".").map(Number) as [number, number, number, number];
+    text = `${dotted[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return undefined;
+  const parse = (part: string) => (part === "" ? [] : part.split(":").map((group) => parseInt(group, 16)));
+  const head = parse(halves[0]!);
+  const tail = halves.length === 2 ? parse(halves[1]!) : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return undefined;
+  const groups = [...head, ...Array<number>(halves.length === 2 ? missing : 0).fill(0), ...tail];
+  return groups.length === 8 && groups.every((group) => Number.isInteger(group) && group >= 0 && group <= 0xffff)
+    ? groups
+    : undefined;
+}
+
+/** IPv4 映射（::ffff:0:0/96）、IPv4 兼容（::/96）、NAT64（64:ff9b::/96）、6to4（2002::/16）里的那个 IPv4。 */
+function embeddedIpv4(groups: number[]): string | undefined {
+  const quad = (high: number, low: number) => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  const zeros = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0);
+  if (zeros(0, 5) && groups[5] === 0xffff) return quad(groups[6]!, groups[7]!);
+  if (zeros(0, 6) && (groups[6] !== 0 || groups[7]! > 1)) return quad(groups[6]!, groups[7]!);
+  if (groups[0] === 0x64 && groups[1] === 0xff9b && zeros(2, 6)) return quad(groups[6]!, groups[7]!);
+  if (groups[0] === 0x2002) return quad(groups[1]!, groups[2]!);
+  return undefined;
 }
 
 class BlockedAddressError extends Error {}
@@ -236,6 +273,24 @@ export async function checkInputLinks(
       })
     );
     return results.filter((r): r is InputLinkProblem => r !== undefined);
+  } finally {
+    await agent.close().catch(() => undefined);
+  }
+}
+
+/**
+ * 外部媒体地址还能不能打开（结果卡的过期检查）：true 能打开，false 明确 403/404/410，null 说不准。
+ * 地址来自上游模型，探之前和素材预检一样挡内网（字面量和 DNS 解析结果都查），跳转逐跳重查，不走代理。
+ */
+export async function publicUrlStillServes(raw: string, timeoutMs = 3_000): Promise<boolean | null> {
+  const agent = guardedAgent(false, timeoutMs);
+  try {
+    const found = await probe(raw, false, agent, timeoutMs);
+    if ("reason" in found) return null;
+    if (found.status >= 200 && found.status < 300) return true;
+    return [403, 404, 410].includes(found.status) ? false : null;
+  } catch {
+    return null;
   } finally {
     await agent.close().catch(() => undefined);
   }

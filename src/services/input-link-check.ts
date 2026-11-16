@@ -174,6 +174,8 @@ function guardedAgent(allowPrivate: boolean, timeoutMs: number): Agent {
 interface Probe {
   status: number;
   contentType: string;
+  /** Content-Length 响应头；没有或不是数字时 undefined。 */
+  contentLength?: number;
 }
 
 async function probeOnce(url: URL, method: "HEAD" | "GET", agent: Agent, timeoutMs: number): Promise<Probe & { location?: string }> {
@@ -192,10 +194,22 @@ async function probeOnce(url: URL, method: "HEAD" | "GET", agent: Agent, timeout
     const v = res.headers[name];
     return Array.isArray(v) ? (v[0] ?? "") : (v ?? "");
   };
-  return { status: res.statusCode, contentType: header("content-type").toLowerCase(), location: header("location") || undefined };
+  const length = Number(header("content-length"));
+  return {
+    status: res.statusCode,
+    contentType: header("content-type").toLowerCase(),
+    ...(header("content-length") !== "" && Number.isSafeInteger(length) && length >= 0 ? { contentLength: length } : {}),
+    location: header("location") || undefined,
+  };
 }
 
-async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs: number): Promise<Probe | { reason: string }> {
+async function probe(
+  raw: string,
+  allowPrivate: boolean,
+  agent: Agent,
+  timeoutMs: number,
+  options: { headOnly?: boolean } = {}
+): Promise<Probe | { reason: string }> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -212,7 +226,7 @@ async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs
     try {
       result = await probeOnce(url, "HEAD", agent, timeoutMs);
       // 有些存储不接 HEAD（405、403），或者 HEAD 不给类型：退回只取一个字节的 GET 再看一次。
-      if (result.status >= 400 || (result.status < 300 && !result.contentType)) {
+      if (!options.headOnly && (result.status >= 400 || (result.status < 300 && !result.contentType))) {
         result = await probeOnce(url, "GET", agent, timeoutMs);
       }
     } catch (err) {
@@ -228,7 +242,11 @@ async function probe(raw: string, allowPrivate: boolean, agent: Agent, timeoutMs
       url = new URL(result.location, url);
       continue;
     }
-    return { status: result.status, contentType: result.contentType };
+    return {
+      status: result.status,
+      contentType: result.contentType,
+      ...(result.contentLength !== undefined ? { contentLength: result.contentLength } : {}),
+    };
   }
   return { reason: "it redirects too many times" };
 }
@@ -254,18 +272,26 @@ const PRIVATE_REASON = "it points to a private or local address, which Atlas can
 const MAX_GUARDED_LINKS = 64;
 const MAX_GUARDED_DEPTH = 8;
 
-/** 主机名解析到的地址里有没有内网地址。解析失败或超时当作不是（之后网关也下载不了）。 */
-async function resolvesToPrivate(hostname: string, timeoutMs: number): Promise<boolean> {
+const UNRESOLVED_REASON = "its host name could not be found";
+
+/**
+ * 主机名解析的结果：有内网地址、全是公网地址、还是解析不出来。
+ *
+ * 解析不出来不能当作「不是内网」放过去：只在后端内网 DNS 里才有的名字（*.internal…），
+ * 在 MCP 这边查不到，到了网关那边却解析成内网地址（11-16 安全审查 M2）。
+ */
+async function resolveHost(hostname: string, timeoutMs: number): Promise<"private" | "public" | "unresolved"> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
+    const timer = setTimeout(() => resolve("unresolved"), timeoutMs);
     dnsLookup(hostname, { all: true }, (err, addresses: LookupAddress[]) => {
       clearTimeout(timer);
-      resolve(!err && addresses.some((a) => isBlockedAddress(a.address)));
+      if (err || addresses.length === 0) resolve("unresolved");
+      else resolve(addresses.some((a) => isBlockedAddress(a.address)) ? "private" : "public");
     });
   });
 }
 
-/** 探测上限之外的链接（以及嵌得更深的）：指向内网的报出来。 */
+/** 探测上限之外的链接（以及嵌得更深的）：指向内网的、解析不出来的都报出来。 */
 async function privateLinksBeyondProbe(params: Record<string, unknown>, timeoutMs: number): Promise<InputLinkProblem[]> {
   const probed = new Set(inputLinks(params).map((link) => `${link.field}\0${link.url}`));
   const rest = inputLinks(params, { maxLinks: MAX_GUARDED_LINKS, maxDepth: MAX_GUARDED_DEPTH }).filter(
@@ -277,15 +303,62 @@ async function privateLinksBeyondProbe(params: Record<string, unknown>, timeoutM
       try {
         host = new URL(url).hostname.replace(/^\[|\]$/g, "");
       } catch {
-        return undefined;
+        return { field, url, reason: "it is not a valid link" };
       }
-      const blocked =
-        host === "localhost" ||
-        (net.isIP(host) ? isBlockedAddress(host) : await resolvesToPrivate(host, Math.min(timeoutMs, 2_000)));
-      return blocked ? { field, url, reason: PRIVATE_REASON } : undefined;
+      if (host === "localhost") return { field, url, reason: PRIVATE_REASON };
+      if (net.isIP(host)) return isBlockedAddress(host) ? { field, url, reason: PRIVATE_REASON } : undefined;
+      const resolved = await resolveHost(host, Math.min(timeoutMs, 2_000));
+      if (resolved === "private") return { field, url, reason: PRIVATE_REASON };
+      if (resolved === "unresolved") return { field, url, reason: UNRESOLVED_REASON };
+      return undefined;
     })
   );
   return results.filter((r): r is InputLinkProblem => r !== undefined);
+}
+
+// ---------- 不是网址的素材值 ----------
+
+// 网关和下载器认得、但服务端绝不该替用户去读的写法：本机文件和各种非 http 协议。
+// data:（内联）、assetd:// 和 asset://（资产库、上游资产引用）是正常写法，不在这里。
+const LOCAL_SCHEMES = /^(?:file|gopher|ftp|ftps|sftp|tftp|dict|ldap|ldaps|smb|jar|netdoc|unix|phar|php|expect|glob|ws|wss):/i;
+// 本机路径：~/、./、../、Windows 盘符、UNC、以及像路径的绝对路径。base64 的 JPEG 以 "/9j/" 开头，
+// base64 的 MP3 可能以 "//" 开头，都不是路径，所以绝对路径只认「/ 后面跟路径字符」且不太长的串。
+const LOCAL_PATH = /^(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\)|^\/(?!9j\/|\/)[\w.\-~/%@]{0,511}$/;
+// 只看素材类字段：文字字段里的路径是写给模型看的。
+const SOURCE_FIELD = /url|uri|file|path|src|source|ref|input|media|asset/i;
+
+function isSourceField(field: string): boolean {
+  return expectedKind(field) !== undefined || SOURCE_FIELD.test(field);
+}
+
+/**
+ * 素材字段里写成本机路径或非 http 协议的值（file:///etc/passwd、/etc/passwd、gopher://…）。
+ * 这些值链接预检从来不看（它只认 http/https），却会原样送到网关；后端下载器只要开着本地路径或
+ * 认这些协议，就是读服务器上的文件（11-16 安全审查 M2）。
+ */
+export function localInputValues(params: Record<string, unknown>): InputLinkProblem[] {
+  const out: InputLinkProblem[] = [];
+  const visit = (field: string, value: unknown, depth: number): void => {
+    if (out.length >= MAX_GUARDED_LINKS || depth > MAX_GUARDED_DEPTH) return;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!isSourceField(field)) return;
+      if (LOCAL_SCHEMES.test(trimmed)) {
+        out.push({ field, url: trimmed, reason: "only http and https links can be used" });
+      } else if (LOCAL_PATH.test(trimmed)) {
+        out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(field, item, depth + 1);
+    } else if (value && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) visit(`${field}.${key}`, item, depth + 1);
+    }
+  };
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "model" || TEXT_FIELDS.has(key)) continue;
+    visit(key, value, 0);
+  }
+  return out;
 }
 
 /** 逐条检查素材链接，返回不能用的那些；全部能用时返回空数组。 */
@@ -295,6 +368,8 @@ export async function checkInputLinks(
 ): Promise<InputLinkProblem[]> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const allowPrivate = options.allowPrivateAddresses === true;
+  const local = localInputValues(params);
+  if (local.length > 0) return local;
   // 只完整探前 8 条；更多的、嵌得更深的也要挡内网（只解析地址，不连），
   // 不然把内网地址放在第 9 条就绕过去了，网关照样会去下载它（11-16 review）。
   if (!allowPrivate) {
@@ -339,6 +414,23 @@ export async function publicUrlStillServes(raw: string, timeoutMs = 3_000): Prom
     if ("reason" in found) return null;
     if (found.status >= 200 && found.status < 300) return true;
     return [403, 404, 410].includes(found.status) ? false : null;
+  } catch {
+    return null;
+  } finally {
+    await agent.close().catch(() => undefined);
+  }
+}
+
+/**
+ * 产出文件的字节数（下载完整性检查用），读不到返回 null。和 publicUrlStillServes 一样挡内网、
+ * 逐跳重判重定向；只发 HEAD。原来的实现用全局 fetch，自动跟随重定向、不挡内网（11-16 安全审查 L1）。
+ */
+export async function publicContentLength(raw: string, timeoutMs = 3_000): Promise<number | null> {
+  const agent = guardedAgent(false, timeoutMs);
+  try {
+    const found = await probe(raw, false, agent, timeoutMs, { headOnly: true });
+    if ("reason" in found || found.status < 200 || found.status >= 300) return null;
+    return found.contentLength && found.contentLength > 0 ? found.contentLength : null;
   } catch {
     return null;
   } finally {

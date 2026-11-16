@@ -1,4 +1,4 @@
-import { headContentLength } from "./api-client.js";
+import { publicContentLength } from "./input-link-check.js";
 import { classifyOutput } from "./media-preview.js";
 import { isAtlasStorageUrl, isPendingTransfer } from "./owned-storage.js";
 import type { PredictionResponse } from "../response-schemas.js";
@@ -147,7 +147,7 @@ export async function probeSizes(urls: string[]): Promise<Map<string, number>> {
   const sizes = new Map<string, number>();
   // Images too: half-written storyboards and edits were reproduced, not just videos.
   const targets = urls.filter((url) => classifyOutput(url) !== "other" && isAtlasStorageUrl(url));
-  const settled = await Promise.all(targets.slice(0, 4).map((url) => headContentLength(url)));
+  const settled = await Promise.all(targets.slice(0, 4).map((url) => publicContentLength(url)));
   targets.slice(0, 4).forEach((url, i) => {
     const size = settled[i];
     if (size) sizes.set(url, size);

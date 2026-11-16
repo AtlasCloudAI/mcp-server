@@ -18,6 +18,7 @@ import {
   type UploadBufferOptions,
 } from "./api-client.js";
 import { rememberMediaName } from "./media-names.js";
+import { BufferSlotsBusyError, withBufferSlot } from "./buffer-slots.js";
 
 /** 下载附件用的 fetch：默认走 undici + 出站代理，测试里换成假的。 */
 export type DownloadFetcher = (
@@ -389,15 +390,19 @@ export async function importChatFiles(
   for (const file of files) {
     try {
       rejectDeclaredNonMedia(file);
-      const { bytes, contentType } = await downloadChatFile(file.download_url, {
-        fetcher,
-        timeoutMs,
-        maxBytes: options.maxBytes,
-        allowedHosts: options.allowedHosts,
-      });
-      const { fileName, mediaType } = resolveChatFileName(file, contentType, bytes);
-      const result = await uploadMediaBuffer(bytes, fileName, options.apiKey, {
-        ...(options.uploadFetcher ? { fetcher: options.uploadFetcher } : {}),
+      // 下载和转存时整个文件在内存里：和上传中转共用并发名额（buffer-slots.ts）。
+      const { fileName, mediaType, result, sizeBytes } = await withBufferSlot(async () => {
+        const { bytes, contentType } = await downloadChatFile(file.download_url, {
+          fetcher,
+          timeoutMs,
+          maxBytes: options.maxBytes,
+          allowedHosts: options.allowedHosts,
+        });
+        const resolved = resolveChatFileName(file, contentType, bytes);
+        const uploaded = await uploadMediaBuffer(bytes, resolved.fileName, options.apiKey, {
+          ...(options.uploadFetcher ? { fetcher: options.uploadFetcher } : {}),
+        });
+        return { ...resolved, result: uploaded, sizeBytes: bytes.byteLength };
       });
       // 存进 Atlas 的地址里是随机编号；记下聊天里的原文件名，报价卡按它显示，并标上「From chat」（media-names.ts）。
       await rememberMediaName(result.data.download_url, safeBaseName(file.file_name) ?? fileName, undefined, {
@@ -409,7 +414,7 @@ export async function importChatFiles(
         file_name: fileName,
         url: result.data.download_url,
         media_type: mediaType,
-        size_bytes: result.data.size || bytes.byteLength,
+        size_bytes: result.data.size || sizeBytes,
       });
     } catch (error) {
       failed.push({
@@ -423,7 +428,7 @@ export async function importChatFiles(
 }
 
 function failureReason(error: unknown): string {
-  if (error instanceof ChatFileError) return error.message;
+  if (error instanceof ChatFileError || error instanceof BufferSlotsBusyError) return error.message;
   if (error instanceof ApiRequestError) {
     if (error.statusCode === 401 || error.statusCode === 403) {
       return "Atlas Cloud rejected the sign-in while storing the file. Reconnect Atlas Cloud and try again.";

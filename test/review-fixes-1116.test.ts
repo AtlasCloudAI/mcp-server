@@ -73,3 +73,18 @@ test("a failed completed-record write still returns the submission result", asyn
   }
   assert.equal(calls.length, 2);
 });
+
+// 只完整探前 8 条：第 9 条、嵌得更深的内网地址也要挡下，不然放在后面就绕过去了。
+test("private addresses past the probe limit are still rejected", async () => {
+  const { checkInputLinks } = await import("../src/services/input-link-check.js");
+  const images = Array.from({ length: 8 }, (_, i) => `https://cdn${i}.example.invalid/${i}.jpg`);
+  const problems = await checkInputLinks({
+    images: [...images, "http://[::ffff:a9fe:a9fe]/latest/meta-data/"],
+    nested: { a: { b: { c: { d: { url: "http://127.0.0.1:8080/x.png" } } } } },
+  });
+  assert.deepEqual(
+    problems.map((p) => p.url).sort(),
+    ["http://127.0.0.1:8080/x.png", "http://[::ffff:a9fe:a9fe]/latest/meta-data/"].sort()
+  );
+  assert.ok(problems.every((p) => /private or local address/.test(p.reason)));
+});

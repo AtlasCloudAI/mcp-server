@@ -219,6 +219,38 @@ function calledToolNames(req: Request): string[] {
   return names;
 }
 
+/** 一个 JSON-RPC 批量请求最多几条消息。 */
+export const MAX_JSONRPC_BATCH = 10;
+
+/**
+ * 限流按 HTTP 请求计数，而一个 JSON-RPC 批量请求能塞上千个 tools/call、由 SDK 并发执行：
+ * 每分钟 60 次的限额就被放大上千倍（11-16 review）。现行 MCP 协议已经去掉了批量，
+ * 客户端都是一条一个请求。这里只放行小批量、且最多一个工具调用。
+ */
+export function limitJsonRpcBatches(): RequestHandler {
+  return (req, res, next) => {
+    if (!Array.isArray(req.body)) {
+      next();
+      return;
+    }
+    const toolCalls = req.body.filter(
+      (message: unknown) => message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call"
+    ).length;
+    if (req.body.length > MAX_JSONRPC_BATCH || toolCalls > 1) {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32600,
+          message: `Batch requests may carry at most ${MAX_JSONRPC_BATCH} messages and one tools/call. Send tool calls one per request.`,
+        },
+      });
+      return;
+    }
+    next();
+  };
+}
+
 export function enforceToolScopes(
   config: HttpServerConfig,
   resourceMetadataUrl: string

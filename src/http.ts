@@ -52,6 +52,7 @@ import {
   createUploadRateLimiter,
   enforceExactHost,
   enforceToolScopes,
+  limitJsonRpcBatches,
   restrictedCors,
   uploadCors,
   securityHeaders,
@@ -195,6 +196,7 @@ export function createHttpApp(
   app.post(
     config.publicMcpUrl.pathname,
     createPreAuthRateLimiter(config),
+    limitJsonRpcBatches(),
     requireAuthorizationServerReady(dependencies),
     ensureChallengeScope(),
     requireBearerAuth({

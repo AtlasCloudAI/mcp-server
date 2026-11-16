@@ -375,7 +375,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       const before = uploads.length;
       const tooBig = await fetch(`${small.baseUrl}${smallPath}`, {
         method: "POST",
-        headers: { "x-atlas-filename": "big.bin" },
+        headers: { "x-atlas-filename": "big.png" },
         body: Buffer.alloc(1_048_577),
       });
       assert.equal(tooBig.status, 413);

@@ -58,6 +58,9 @@ export interface TokenExchanger {
   invalidate(cacheKey: string): void;
 }
 
+/** 一个副本最多缓存多少份换好的令牌（每份约 1~2KB）。 */
+export const MAX_CACHE_ENTRIES = 10_000;
+
 interface CacheEntry {
   token: ExchangedToken;
   inflight?: Promise<ExchangedToken>;
@@ -77,6 +80,22 @@ export function createTokenExchanger(
   // 这个函数刚被抄错过一次——invalidate 里写成了空格，于是删不掉 exchange 写进去的
   // 那一条，缓存永远清不掉。要改分隔符就改这里，两边自然一致。
   const cacheKeyFor = (cacheKey: string): string => `${cacheKey}\0${config.resource}`;
+
+  // 刷新令牌每次换新 jti，旧键不会再被访问：不清就一直留在内存里（11-16 review）。
+  // 写入时超过上限先清过期的，还超就从最早写入的开始丢（正在换的不丢）。
+  const store = (key: string, entry: CacheEntry): void => {
+    cache.delete(key);
+    cache.set(key, entry);
+    if (cache.size <= MAX_CACHE_ENTRIES) return;
+    const at = now();
+    for (const [existing, value] of cache) {
+      if (!value.inflight && value.token.expiresAt <= at) cache.delete(existing);
+    }
+    for (const [existing, value] of cache) {
+      if (cache.size <= MAX_CACHE_ENTRIES) break;
+      if (!value.inflight && existing !== key) cache.delete(existing);
+    }
+  };
 
   async function request(subjectToken: string): Promise<ExchangedToken> {
     const body = new URLSearchParams({
@@ -163,14 +182,14 @@ export function createTokenExchanger(
 
       const inflight = request(subjectToken)
         .then((token) => {
-          cache.set(key, { token });
+          store(key, { token });
           return token;
         })
         .catch((error: unknown) => {
           cache.delete(key);
           throw error;
         });
-      cache.set(key, {
+      store(key, {
         token: { accessToken: "", expiresAt: 0 },
         inflight,
       });

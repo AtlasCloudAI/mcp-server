@@ -11,6 +11,7 @@ import { z } from "zod";
 import { generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
 import { publicUrlStillServes } from "../services/input-link-check.js";
+import { isConfiguredMediaHost } from "../services/owned-storage.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
 import type { MediaSource } from "../services/media-names.js";
@@ -433,7 +434,7 @@ export function buildGenerationCardData(input: {
  * （11-16 安全审查 L1）。
  */
 function mediaStillServes(url: string): Promise<boolean | null> {
-  return publicUrlStillServes(url);
+  return publicUrlStillServes(url, 3_000, { allowPrivate: isConfiguredMediaHost(url) });
 }
 
 // 上游临时链接 24 小时过期，Atlas 存储约 15 天。刚完成的结果不用查，

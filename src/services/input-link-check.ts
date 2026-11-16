@@ -407,10 +407,15 @@ export async function checkInputLinks(
  * 外部媒体地址还能不能打开（结果卡的过期检查）：true 能打开，false 明确 403/404/410，null 说不准。
  * 地址来自上游模型，探之前和素材预检一样挡内网（字面量和 DNS 解析结果都查），跳转逐跳重查，不走代理。
  */
-export async function publicUrlStillServes(raw: string, timeoutMs = 3_000): Promise<boolean | null> {
-  const agent = guardedAgent(false, timeoutMs);
+export async function publicUrlStillServes(
+  raw: string,
+  timeoutMs = 3_000,
+  options: { allowPrivate?: boolean } = {}
+): Promise<boolean | null> {
+  const allowPrivate = options.allowPrivate === true;
+  const agent = guardedAgent(allowPrivate, timeoutMs);
   try {
-    const found = await probe(raw, false, agent, timeoutMs);
+    const found = await probe(raw, allowPrivate, agent, timeoutMs);
     if ("reason" in found) return null;
     if (found.status >= 200 && found.status < 300) return true;
     return [403, 404, 410].includes(found.status) ? false : null;
@@ -425,10 +430,15 @@ export async function publicUrlStillServes(raw: string, timeoutMs = 3_000): Prom
  * 产出文件的字节数（下载完整性检查用），读不到返回 null。和 publicUrlStillServes 一样挡内网、
  * 逐跳重判重定向；只发 HEAD。原来的实现用全局 fetch，自动跟随重定向、不挡内网（11-16 安全审查 L1）。
  */
-export async function publicContentLength(raw: string, timeoutMs = 3_000): Promise<number | null> {
-  const agent = guardedAgent(false, timeoutMs);
+export async function publicContentLength(
+  raw: string,
+  timeoutMs = 3_000,
+  options: { allowPrivate?: boolean } = {}
+): Promise<number | null> {
+  const allowPrivate = options.allowPrivate === true;
+  const agent = guardedAgent(allowPrivate, timeoutMs);
   try {
-    const found = await probe(raw, false, agent, timeoutMs, { headOnly: true });
+    const found = await probe(raw, allowPrivate, agent, timeoutMs, { headOnly: true });
     if ("reason" in found || found.status < 200 || found.status >= 300) return null;
     return found.contentLength && found.contentLength > 0 ? found.contentLength : null;
   } catch {

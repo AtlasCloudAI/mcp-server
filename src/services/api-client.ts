@@ -659,6 +659,40 @@ export async function fetchExternal(
 // No retry loop here. A preview is decoration — if the first attempt does not
 // land, the caller drops the picture and still returns the URL, and retrying
 // would only make a slow tool call slower.
+async function readAtMost(
+  response: { body: ReadableStream<Uint8Array> | null; arrayBuffer(): Promise<ArrayBuffer> },
+  maxBytes: number,
+  controller: AbortController
+): Promise<Uint8Array> {
+  const tooLarge = () => new ApiRequestError(`Media exceeds the ${maxBytes} byte preview limit`, 413);
+  if (!response.body) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    if (whole.byteLength > maxBytes) throw tooLarge();
+    return whole;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 export async function fetchExternalBinary(
   url: string,
   options: {
@@ -701,70 +735,10 @@ export async function fetchExternalBinary(
     if (declaredLength > maxBytes) {
       throw new ApiRequestError(`Media exceeds the ${maxBytes} byte preview limit`, 413);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > maxBytes) {
-      throw new ApiRequestError(`Media exceeds the ${maxBytes} byte preview limit`, 413);
-    }
+    // 读的时候就数字节：没有 Content-Length（分块传输）时，arrayBuffer() 会先把整个响应读进
+    // 内存才轮到下面的判断（11-16 安全审查 L2）。
+    const bytes = await readAtMost(response, maxBytes, controller);
     return { bytes, contentType: response.headers.get("content-type") };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Byte size of an object on Atlas storage, read with a HEAD request, or null.
- *
- * Used so an agent can check that the copy it saved is complete before showing it
- * (a shell that returns early leaves a half-written file that looks "corrupt").
- * Only Atlas storage is probed — the caller passes URLs that isAtlasStorageUrl
- * already accepted — and every failure is silent: the size is a check, not a
- * requirement.
- */
-export async function headContentLength(
-  url: string,
-  options: { fetcher?: typeof fetch; timeoutMs?: number } = {}
-): Promise<number | null> {
-  const fetcher = options.fetcher ?? fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3_000);
-  try {
-    const response = await fetcher(url, {
-      method: "HEAD",
-      signal: controller.signal,
-      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
-    });
-    if (!response.ok) return null;
-    const length = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-    return Number.isFinite(length) && length > 0 ? length : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Whether a media URL still answers a HEAD request: true for 2xx, false for an
- * explicit 403/404/410 (an expired or deleted object), null when it could not be
- * told (network error, timeout, any other status). Callers treat null as "fine".
- */
-export async function headStillServes(
-  url: string,
-  options: { fetcher?: typeof fetch; timeoutMs?: number } = {}
-): Promise<boolean | null> {
-  const fetcher = options.fetcher ?? fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 3_000);
-  try {
-    const response = await fetcher(url, {
-      method: "HEAD",
-      signal: controller.signal,
-      ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
-    });
-    if (response.ok) return true;
-    return [403, 404, 410].includes(response.status) ? false : null;
-  } catch {
-    return null;
   } finally {
     clearTimeout(timer);
   }

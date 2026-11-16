@@ -8,9 +8,8 @@ import {
   registerAppResource,
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
-import { generationApi, headStillServes } from "../services/api-client.js";
+import { generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
-import { isAtlasStorageUrl } from "../services/owned-storage.js";
 import { publicUrlStillServes } from "../services/input-link-check.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
@@ -429,11 +428,12 @@ export function buildGenerationCardData(input: {
 }
 
 /**
- * 自家存储照旧直接 HEAD。别的地址（S3 bridge、转存失败只剩上游签名链接）来自上游模型，
- * 走挡内网的探测，不能替人去连任意主机（SSRF，11-16 review）。
+ * 地址一律走挡内网、逐跳重判重定向的探测。原来自家存储（按主机名认）直接用全局 fetch HEAD，
+ * 会自动跟随重定向、不挡内网；而「自家」的判断只看域名和桶名前缀，前缀谁都能注册
+ * （11-16 安全审查 L1）。
  */
 function mediaStillServes(url: string): Promise<boolean | null> {
-  return isAtlasStorageUrl(url) ? headStillServes(url) : publicUrlStillServes(url);
+  return publicUrlStillServes(url);
 }
 
 // 上游临时链接 24 小时过期，Atlas 存储约 15 天。刚完成的结果不用查，

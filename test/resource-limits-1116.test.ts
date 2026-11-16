@@ -97,3 +97,14 @@ test("the token exchange cache stays bounded", async () => {
   await exchanger.exchange("subject-token", "user jti-0");
   assert.equal(calls, MAX_CACHE_ENTRIES + 2);
 });
+
+// 长亭 11-09：/model/uploadMedia 收任意类型并托管在 OSS 上。MCP 上传中转只放行媒体。
+test("the upload relay only accepts media file extensions", async () => {
+  const { uploadExtensionAllowed } = await import("../src/http/upload-relay.js");
+  for (const name of ["a.jpg", "B.PNG", "clip.mov", "voice.m4a", "song.flac", "model.glb", "x.y.webp"]) {
+    assert.equal(uploadExtensionAllowed(name), true, name);
+  }
+  for (const name of ["page.html", "logo.svg", "shell.php", "notes.txt", "noext", ".png", "a.png.exe"]) {
+    assert.equal(uploadExtensionAllowed(name), false, name);
+  }
+});

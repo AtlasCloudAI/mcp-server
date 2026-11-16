@@ -235,7 +235,9 @@ function render(force = false): void {
   if (history && historyOpts && !card && !pendingId) view = renderHistory(history, historyOpts, historyActions);
   else if (history) view = h2(backLink(closeDetail), card ? withHistoryActions(renderCard(card, opts, actions)) : loadingCard(pendingId));
   else if (card?.state === "quote") view = renderQuoteCard(card, quoteState, opts, quoteActions);
-  else if (card) view = renderCard(card, opts, actions);
+  // 按 ID 打开的结果卡和历史详情同一套按钮（11-16 Jia）：成功 Download + Reuse，失败 Reuse + View request。
+  // 没有能复用的（老网关不带原始请求、样例卡）就保留结果卡自己的 Download + View request。
+  else if (card) view = (card.state === "succeeded" || card.state === "failed") && canReuse(card) ? withHistoryActions(renderCard(card, opts, actions)) : renderCard(card, opts, actions);
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
   // 全屏时放宽到 720（设计稿全屏视图宽 720：历史列表、全部结果），其余照旧 560。
@@ -578,17 +580,24 @@ function h2(...children: HTMLElement[]): HTMLElement {
  * 成功的保留结果卡的下载按钮、去掉 View request、加 Reuse prompt；失败的 Reuse prompt + View request；
  * 生成中只有 View request（卡片自己会接着刷新）。Atlas 登录失效时保留卡片自己的 Reconnect。
  */
+/** 结果卡自己带了能复用的东西（提示词或原图、参数），且卡片能替用户发消息。 */
+function canReuse(c: CardData): boolean {
+  const has = Boolean(c.prompt) || (c.reuse_inputs?.length ?? 0) > 0 || (c.reuse_inputs_unavailable ?? 0) > 0 || Object.keys(c.reuse_settings ?? {}).length > 0;
+  return has && messagingAvailable();
+}
+
 function withHistoryActions(detail: HTMLElement): HTMLElement {
   if (!card || viewOptions().signedOut) return detail;
   const item = history?.data.items.find((entry) => entry.prediction_id === (pendingId ?? card?.prediction_id));
   // 列表给的提示词优先；没有（Cursor 只给截断片段）就用点开时 atlas_card_status 带回的原文。
   const prompt = item?.prompt ?? card.prompt;
-  const model = item?.model_name ?? item?.model_id ?? "";
-  const sample = history?.data.sample === true;
+  const model = item?.model_name ?? item?.model_id ?? card.model_name ?? card.model_id ?? "";
+  const sample = history?.data.sample === true || card.sample === true;
   // 不用 viewOptions 的 canMessage：样例卡那里为了把按钮都摆出来，会当成能发消息。
-  const inputs = item?.inputs ?? [];
-  const unavailable = item?.inputs_unavailable ?? 0;
-  const settings = item?.settings ?? {};
+  // 列表给的优先；按 ID 直接打开（没有历史列表）时用结果卡自己带的。
+  const inputs = item?.inputs ?? card.reuse_inputs ?? [];
+  const unavailable = item?.inputs_unavailable ?? card.reuse_inputs_unavailable ?? 0;
+  const settings = item?.settings ?? card.reuse_settings ?? {};
   const hasSettings = inputs.length > 0 || unavailable > 0 || Object.keys(settings).length > 0;
   const modelId = item?.model_id ?? card.model_id;
   const wanted = historyDetailButtons(card.state, Boolean(prompt), messagingAvailable(), hasSettings);
@@ -598,7 +607,7 @@ function withHistoryActions(detail: HTMLElement): HTMLElement {
         return button("Reuse prompt", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
           else if (prompt) {
-            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, item?.inputs ?? [], item?.inputs_unavailable ?? 0, item?.settings ?? {}, modelId), setNotice);
+            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, inputs, unavailable, settings, modelId), setNotice);
           }
         });
       case "reuse-settings":

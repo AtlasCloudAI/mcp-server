@@ -33,6 +33,7 @@ import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { ATLAS_SITE_URL } from "../constants.js";
 import { handleError } from "../utils/error-handler.js";
+import type { HistoryItem } from "../response-schemas.js";
 
 // 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
 // ChatGPT 和 Claude 都按 _meta.ui.resourceUri 认它。设计稿见 Figma「MCP 对话内组件 · 跟随宿主」
@@ -302,6 +303,13 @@ export interface GenerationCardData {
    * Cursor 不转 _meta，历史列表只能从 structuredContent 推，那里的提示词是截断的片段（11-13 实测详情没有 Reuse prompt）。
    */
   prompt?: string;
+  /**
+   * 复用这一单要的原图和参数（和历史卡同一套取法）：按 ID 打开的结果卡也给 Reuse prompt / Reuse settings，
+   * 不只历史详情有（11-16 Jia）。
+   */
+  reuse_inputs?: { name: string; ref: string; field?: string }[];
+  reuse_inputs_unavailable?: number;
+  reuse_settings?: Record<string, string | number | boolean>;
   /** 测试卡片的示例数据：卡片不去刷新，也不往对话里发消息。 */
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
@@ -387,6 +395,11 @@ export function buildGenerationCardData(input: {
   completedAt?: string;
   mediaExpired?: boolean;
   prompt?: string;
+  reuse?: {
+    inputs: { name: string; ref: string; field?: string }[];
+    unavailable: number;
+    settings?: Record<string, string | number | boolean>;
+  };
 }): GenerationCardData {
   const state = cardStateOf(input.status, input.transferPending);
   const price = priceOf(input.price);
@@ -407,6 +420,9 @@ export function buildGenerationCardData(input: {
     ...(input.completedAt ? { completed_at: input.completedAt } : {}),
     ...(input.mediaExpired ? { media_expired: true } : {}),
     ...(input.prompt ? { prompt: input.prompt } : {}),
+    ...(input.reuse && input.reuse.inputs.length > 0 ? { reuse_inputs: input.reuse.inputs } : {}),
+    ...(input.reuse && input.reuse.unavailable > 0 ? { reuse_inputs_unavailable: input.reuse.unavailable } : {}),
+    ...(input.reuse?.settings && Object.keys(input.reuse.settings).length > 0 ? { reuse_settings: input.reuse.settings } : {}),
   };
 }
 
@@ -456,6 +472,23 @@ function requestInput(raw: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** 原始请求 → 复用要的原图、参数。拿不到原始请求（老网关）或出错就不带，按钮退回 View request。 */
+async function reusableFromRequest(raw: unknown): Promise<
+  { inputs: { name: string; ref: string; field?: string }[]; unavailable: number; settings?: Record<string, string | number | boolean> } | undefined
+> {
+  const input = requestInput(raw);
+  if (!input) return undefined;
+  try {
+    const { reusableInputs, reusableSettings } = await import("./history-card.js");
+    const item = { requestBody: input } as unknown as HistoryItem;
+    const { inputs, unavailable } = await reusableInputs(item);
+    const settings = reusableSettings(item);
+    return { inputs, unavailable, ...(settings ? { settings } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 /** 卡片要的查结果参数：带回原始请求，结果卡才能显示主要参数。 */
 export const CARD_PREDICTION_PARAMS = { include_input: 1 } as const;
 
@@ -481,6 +514,8 @@ export async function predictionCardData(
     checkExpiry ? (options.checkExpiry ?? ((url: string) => headStillServes(url)))(outputs[0]) : null,
   ]);
   const mediaExpired = stillServes === false;
+  // 历史卡那套取法（history-card.ts 引用了本文件，按需动态引入避免循环依赖）。
+  const reuse = await reusableFromRequest(data.input);
   return buildGenerationCardData({
     predictionId,
     status,
@@ -493,6 +528,7 @@ export async function predictionCardData(
     chargeStatus: data.charge_status,
     settings: settingsChips(requestInput(data.input)),
     prompt: cardPrompt(requestInput(data.input)),
+    ...(reuse ? { reuse } : {}),
     error: result.data?.error || undefined,
     createdAt: isoOf(createdAtOf(result)),
     completedAt,

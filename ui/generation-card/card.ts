@@ -87,6 +87,10 @@ export interface CardData {
   media_expired?: boolean;
   /** 这一单的提示词原文（服务端查结果时带回，最长 2000 字）：历史详情「Reuse prompt」在列表没给完整提示词时用它。 */
   prompt?: string;
+  /** 复用要的原图、参数（服务端查结果时带回）：按 ID 打开的结果卡也给 Reuse 按钮，和历史详情一致。 */
+  reuse_inputs?: { name: string; ref: string; field?: string }[];
+  reuse_inputs_unavailable?: number;
+  reuse_settings?: Record<string, string | number | boolean>;
   sample?: boolean;
   /** 只在测试卡片上用：直接显示「需要重新连接」。 */
   sample_signed_out?: boolean;

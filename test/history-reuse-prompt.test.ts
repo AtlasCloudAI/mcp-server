@@ -73,3 +73,24 @@ test("没填提示词的单（11-16 Jia #57）：有原图或参数就给 Reuse 
   assert.match(say.reuseSettings("en", "M", [], 1, {}), /expired: ask me to pick it again/);
   assert.match(say.reuseSettings("zh", "M", [], 0, { a: 1 }), /没有填提示词/);
 });
+
+test("按 ID 打开的结果卡也带复用要的原图和参数（11-16 Jia：和历史详情统一）", async () => {
+  const { predictionCardData } = await import("../src/apps/generation-card.js");
+  const result = {
+    data: {
+      id: "eac3f325",
+      model: "bytedance/seedance-2.5/image-to-video",
+      status: "completed",
+      outputs: ["https://atlas-media.oss-us-west-1.aliyuncs.com/eac3f325.mp4"],
+      input: '{"image":"assetd://asset_abcd1234","resolution":"720p","duration":5}',
+    },
+  };
+  const card = await predictionCardData("eac3f325", result as never, { checkExpiry: async () => true });
+  assert.equal(card.prompt, undefined);
+  assert.deepEqual(card.reuse_inputs, [{ name: "Input 1", ref: "asset://asset_abcd1234", field: "image" }]);
+  assert.ok(card.reuse_settings && Object.keys(card.reuse_settings).length > 0);
+  // 老网关不带原始请求：不给复用信息，卡片退回 View request。
+  const bare = await predictionCardData("x", { data: { ...result.data, input: undefined } } as never, { checkExpiry: async () => true });
+  assert.equal(bare.reuse_inputs, undefined);
+  assert.equal(bare.reuse_settings, undefined);
+});

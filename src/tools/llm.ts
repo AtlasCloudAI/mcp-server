@@ -77,11 +77,14 @@ function chargeUsd(value: number): string {
   return `$${(trimmed.split(".")[1]?.length ?? 0) < 2 ? value.toFixed(2) : trimmed}`;
 }
 
-/** 卡片已经显示出结果时，提醒模型别另画、另生成一张「示意图」（11-16 ChatGPT 回归 S12）。 */
+/**
+ * 卡片已经显示出结果时，提醒模型别另画、另生成、另搜一张图（11-16 ChatGPT 回归 S12）。ChatGPT 用自己的
+ * 图片搜索组件放了一张不相干的纸飞机，而且它只读结构化结果，所以这句也放进 structuredContent.card_note。
+ */
 export const RESULT_CARD_NOTE =
   "The user already sees this result in the Atlas card above, with the real media and a Download button. " +
-  "Do not draw, generate or embed any other picture of it (no illustrative or placeholder preview); " +
-  "answer in a sentence or two with the status and what was actually charged.";
+  "Do not show any other picture of it: no image search results, no generated, illustrative or placeholder image. " +
+  "Answer in a sentence or two with the status and what was actually charged.";
 
 /**
  * 查结果里给模型看的一行扣费（需求文档 6.3：结算完才写实际费用，没结算完写待结算，
@@ -397,6 +400,7 @@ Examples:
         price_usd: z.number().optional(),
         price_to_tell_user: z.string().optional(),
         charge_status: z.string().optional(),
+        card_note: z.string().optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
       ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
@@ -475,6 +479,7 @@ Examples:
           }
         }
 
+        const resultOnCard = isFinished(status) && !transferPending && outputUrls.length > 0 && clientRendersCards(server);
         // 宿主会渲染卡片时，卡片自己刷新到出结果；模型再查一次只会在对话里多一张卡。
         const cardTracksTask = isActive(status) && clientRendersCards(server);
         if (cardTracksTask) {
@@ -501,7 +506,7 @@ Examples:
               `will pick it up with the same ID — never imply it is finished or stuck. Do not submit ` +
               `the job again — that would start and bill a second one.`
           );
-        } else if (isFinished(status) && !transferPending && outputUrls.length > 0 && clientRendersCards(server)) {
+        } else if (resultOnCard) {
           // 11-16 ChatGPT 回归 S12：卡片已经显示了结果，ChatGPT 还自己画了一张「Illustrative preview, not the
           // actual generated image」的示意图放在下面，看着像生成结果。
           lines.push(`\n${RESULT_CARD_NOTE}`);
@@ -528,6 +533,8 @@ Examples:
         return {
           ...(cardMeta ? { _meta: cardMeta } : {}),
           structuredContent: {
+            // 排在最前面，只读结构化结果的 ChatGPT 先看到。
+            ...(resultOnCard ? { card_note: RESULT_CARD_NOTE } : {}),
             prediction_id,
             status,
             // 转存还没完成时，上游的临时链接不放进 outputs，另放 temporary_outputs，并在 next_step 里写明

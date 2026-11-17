@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { api, generationApi } from "../services/api-client.js";
+import { type ApiRequestOptions, api, generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
 import { type QuoteCancelReason, cancelIdempotent, peekIdempotent } from "../services/idempotency.js";
 import {
@@ -13,7 +13,7 @@ import {
 import { idempotencyKeySchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { handleError } from "../utils/error-handler.js";
-import { CARD_META_KEY, buildGenerationCardData, predictionCardData } from "./generation-card.js";
+import { CARD_META_KEY, CARD_PREDICTION_PARAMS, buildGenerationCardData, predictionCardData } from "./generation-card.js";
 import { CARD_GENERATION_TOOLS } from "./generation-quote.js";
 import { asRecord } from "../services/json-record.js";
 
@@ -132,11 +132,21 @@ export async function checkSubmission(input: {
   return { outcome: "not_started", message: "Atlas Cloud has no record of this job, so it didn't start." };
 }
 
-/** 找到的任务拼成卡片数据，卡片直接接着显示进度。查不到详情就先给一张排队中的卡。 */
-async function startedCard(predictionId: string, model: string | undefined) {
+/**
+ * 找到的任务拼成卡片数据，卡片直接接着显示进度。查不到详情就先给一张排队中的卡。
+ * 和 atlas_card_status 一样带回原始请求（include_input）：页面刷新后卡片走的是这条路，不带的话
+ * 结果卡拿不到提示词和原图，Reuse prompt 退回 View request（11-17 Jia B6）。
+ */
+export async function startedCard(predictionId: string, model: string | undefined, options: { fetcher?: ApiRequestOptions["fetcher"] } = {}) {
   const result = await generationApi<PredictionResponse>(
     `/model/prediction/${encodeURIComponent(predictionId)}`,
-    { responseSchema: predictionResponseSchema, timeout: 10_000, maxRetries: 1 }
+    {
+      params: CARD_PREDICTION_PARAMS,
+      responseSchema: predictionResponseSchema,
+      timeout: 10_000,
+      maxRetries: 1,
+      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+    }
   ).catch(() => undefined);
   if (result) return predictionCardData(predictionId, result);
   return buildGenerationCardData({ predictionId, status: "queued", outputs: [], transferPending: false, modelId: model });

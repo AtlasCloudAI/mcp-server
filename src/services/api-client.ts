@@ -468,6 +468,15 @@ function assetdError(body: string, status: number, fallback: string): ApiRequest
 }
 
 /**
+ * Content-Disposition 里 filename*= 的值（RFC 5987 ext-value）：encodeURIComponent 不编码 ' ( ) *，
+ * 而它们不是合法的 attr-char。AssetD（Go 的 mime 解析）遇到括号就认为文件名无效、跳过这个文件，
+ * 回 400「file field is required」，于是「photo (1).png」这类名字传不进资产库（11-17 Jia D8）。
+ */
+export function rfc5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/**
  * 把字节边收边转给 AssetD 的 POST /api/assets/uploads（经 kubedl 的 /assetd 转发，kubedl 放行到
  * 101 MiB），不整个读进内存：100MB 的视频在 512Mi 的 pod 里经不起缓冲。超过 maxBytes 就中断。
  * AssetD 按内容认格式（JPG/PNG/WEBP/GIF、MP4/MOV/WEBM、MP3/WAV/M4A、GLB），按类型再查一次大小。
@@ -490,7 +499,7 @@ export async function uploadStreamToAssetLibrary(
   const boundary = `----atlas-mcp-${randomUUID()}`;
   const quoted = input.filename.replace(/["\\\r\n]/g, "_");
   const head = new TextEncoder().encode(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${quoted}"; filename*=UTF-8''${encodeURIComponent(input.filename)}\r\n` +
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${quoted}"; filename*=UTF-8''${rfc5987Value(input.filename)}\r\n` +
       `Content-Type: ${input.contentType}\r\n\r\n`
   );
   const tail = new TextEncoder().encode(`\r\n--${boundary}--\r\n`);

@@ -17,6 +17,8 @@ let notActivated = false;
 let quotaFull = false;
 /** 打开后上传回 AssetD 拒收超像素图片的 422。 */
 let tooManyPixels = false;
+/** 打开后上传回 AssetD 的 400「file field is required」（没解析出文件，比如文件名编码不合法）。 */
+let noFilePart = false;
 /** 收到的上传：Content-Type 和原始请求体。 */
 const received: Array<{ contentType: string; body: Buffer; authorization: string | undefined }> = [];
 const media: string[] = [];
@@ -43,6 +45,11 @@ before(async () => {
       if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST" && quotaFull) {
         res.statusCode = 413;
         res.end(JSON.stringify({ code: 413, msg: "upload_quota_exceeded", error: { code: "upload_quota_exceeded" } }));
+        return;
+      }
+      if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST" && noFilePart) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ code: 400, msg: "bad_request: file field is required", error: { code: "bad_request" } }));
         return;
       }
       if (url.pathname === "/api/v1/assetd/api/assets/uploads" && req.method === "POST" && tooManyPixels) {
@@ -359,6 +366,42 @@ test("超像素的图片：回 422 image_too_large，带尺寸和上限，不再
     assert.match(String(body.message), /52 MP\), over the 24 MP limit/);
   } finally {
     tooManyPixels = false;
+    await relay.close();
+  }
+});
+
+test("AssetD 没解析出文件（400 file field is required）：报上传失败，不说成格式不支持（11-17 Jia D8）", async () => {
+  notActivated = false;
+  noFilePart = true;
+  const relay = await startRelay();
+  try {
+    const { path } = await mint(relay.baseUrl);
+    const response = await fetch(`${relay.baseUrl}${path}?filename=${encodeURIComponent("photo (1).png")}`, { method: "POST", body: Buffer.from("png-bytes") });
+    assert.equal(response.status, 502);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.error, "upstream_upload_failed");
+    assert.doesNotMatch(String(body.message), /JPG, PNG/);
+  } finally {
+    noFilePart = false;
+    await relay.close();
+  }
+});
+
+test("带括号的文件名照常存进资产库，原名不变", async () => {
+  notActivated = false;
+  received.length = 0;
+  const relay = await startRelay();
+  try {
+    const { path } = await mint(relay.baseUrl);
+    const response = await fetch(`${relay.baseUrl}${path}?filename=${encodeURIComponent("photo (1).png")}`, {
+      method: "POST",
+      headers: { "content-type": "image/png" },
+      body: Buffer.from("png-bytes"),
+    });
+    assert.equal(response.status, 200);
+    const head = received.at(-1)!.body.toString("utf8");
+    assert.match(head, /filename\*=UTF-8''photo%20%281%29\.png/);
+  } finally {
     await relay.close();
   }
 });

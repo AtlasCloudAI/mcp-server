@@ -331,10 +331,58 @@ function isSourceField(field: string): boolean {
   return expectedKind(field) !== undefined || SOURCE_FIELD.test(field);
 }
 
+// ---------- 写得不规整、但下载器照样当网址的值 ----------
+// 链接预检只认以 http:// 或 https:// 开头的串。浏览器和不少下载器按 WHATWG URL 规则解析：先去掉
+// 首尾的控制字符和空格、删掉中间所有 tab 和换行，http/https 后面的 / 和 \ 一样算，少写斜杠也补上，
+// 没有协议的 //host 按当前页面的协议补。所以 http:/169.254.169.254、http:\\169.254.169.254、
+// h<tab>ttp://…、//169.254.169.254 在那边都是内网地址，在这边却不算链接，原样送到网关（11-17 实测）。
+const MALFORMED_LINK_REASON = "it is not a complete link; write it as https://… with two forward slashes";
+
+/** 按 WHATWG URL 解析前的预处理：去掉首尾 C0 控制字符和空格，删掉所有 tab、换行。 */
+function urlPreprocess(value: string): string {
+  return value.replace(/^[\u0000- ]+|[\u0000- ]+$/g, "").replace(/[\t\n\r]/g, "");
+}
+
+const BASE64_ONLY = /^[A-Za-z0-9+/=_-]+$/;
+
+/**
+ * 以 // 开头、只有 base64 字符的串可能是 base64 编码的 MP3（帧同步字节 0xFF 编码出来就是 "//"）。
+ * 只有开头 4 个字节是一个合法的 MP3 帧头才当音频数据放过；否则按「没写协议的网址」处理。
+ */
+function looksLikeBase64Mp3(value: string): boolean {
+  if (!BASE64_ONLY.test(value) || value.length < 8) return false;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(value.slice(0, 8).replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  } catch {
+    return false;
+  }
+  if (bytes.length < 4 || bytes[0] !== 0xff || (bytes[1]! & 0xe0) !== 0xe0) return false;
+  const version = (bytes[1]! >> 3) & 0b11;
+  const layer = (bytes[1]! >> 1) & 0b11;
+  const bitrate = bytes[2]! >> 4;
+  const sampleRate = (bytes[2]! >> 2) & 0b11;
+  return version !== 0b01 && layer !== 0b00 && bitrate !== 0b1111 && sampleRate !== 0b11;
+}
+
+/** 这个值是不是「写得不规整的网址」：http:/x、http:\x、中间夹 tab 换行、没写协议的 //x。 */
+function malformedLinkValue(raw: string, field: string): boolean {
+  const trimmed = raw.trim();
+  const cleaned = urlPreprocess(raw);
+  if (/^https?:/i.test(cleaned)) return !/^https?:\/\//i.test(trimmed);
+  // 没写协议的写法只在素材字段里判：别的字段里的 "//…" 多半是普通文字。
+  if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return false;
+  // base64 的 MP3 只会出现在音频字段；单段主机名（//backend/…）解码后也可能碰巧像帧头，
+  // 所以别的素材字段不放这个口子。
+  return !(expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned));
+}
+
 /**
  * 素材字段里写成本机路径或非 http 协议的值（file:///etc/passwd、/etc/passwd、gopher://…）。
  * 这些值链接预检从来不看（它只认 http/https），却会原样送到网关；后端下载器只要开着本地路径或
  * 认这些协议，就是读服务器上的文件（11-16 安全审查 M2）。
+ * 另外，任何非文字字段里写得不规整的网址（http:/x、http:\x、夹 tab 换行；素材字段里还有没写协议的 //x）
+ * 一律退回，让用户写成完整的 https:// 链接，免得绕过下面的内网检查（11-17）。
  */
 export function localInputValues(params: Record<string, unknown>): InputLinkProblem[] {
   const out: InputLinkProblem[] = [];
@@ -342,11 +390,13 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
     if (out.length >= MAX_GUARDED_LINKS || depth > MAX_GUARDED_DEPTH) return;
     if (typeof value === "string") {
       const trimmed = value.trim();
-      if (!isSourceField(field)) return;
-      if (LOCAL_SCHEMES.test(trimmed)) {
+      const source = isSourceField(field);
+      if (source && LOCAL_SCHEMES.test(trimmed)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if (LOCAL_PATH.test(trimmed)) {
+      } else if (source && LOCAL_PATH.test(trimmed)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
+      } else if (malformedLinkValue(value, field)) {
+        out.push({ field, url: trimmed, reason: MALFORMED_LINK_REASON });
       }
     } else if (Array.isArray(value)) {
       for (const item of value) visit(field, item, depth + 1);

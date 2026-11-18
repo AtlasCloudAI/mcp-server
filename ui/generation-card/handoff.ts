@@ -4,8 +4,28 @@
 
 import type { App } from "@modelcontextprotocol/ext-apps";
 
-/** sent：消息发出去了；context：只进了上下文；failed：两样都没成；unsupported：宿主两样都不支持。 */
-export type HandOffResult = "sent" | "context" | "failed" | "unsupported";
+/**
+ * sent：消息发出去了；context：只进了上下文；failed：两样都没成；unsupported：宿主两样都不支持；
+ * unconfirmed：宿主没声明能发消息，请求超时或回了错，但多半已经发出去了（Cursor，见 sendFailure）。
+ */
+export type HandOffResult = "sent" | "context" | "failed" | "unsupported" | "unconfirmed";
+
+/** JSON-RPC「没有这个方法」：宿主明说不支持。 */
+const METHOD_NOT_FOUND = -32601;
+
+/**
+ * 发消息没拿到成功回答时，算哪一种。宿主声明过能发：真失败，可以重试。没声明（Cursor）：
+ * 11-18 Cursor 回归，资产库卡、上传卡点 Use 以后消息已经出现在对话里、模型也接着用了，卡上却因为
+ * 请求没有成功回答，显示「This app can't take files straight from the card…」、按钮也没变成 Added to chat。
+ * 所以没声明的宿主只有明说「没有这个方法」才算不支持；超时、回错都算「多半发出去了」，卡上照已发出处理，
+ * 再留一句没看到就怎么说。
+ */
+export function sendFailure(declared: boolean, error: unknown): "failed" | "unsupported" | "unconfirmed" {
+  if (declared) return "failed";
+  const code = (error as { code?: unknown } | undefined)?.code;
+  const message = error instanceof Error ? error.message : "";
+  return code === METHOD_NOT_FOUND || /method not found/i.test(message) ? "unsupported" : "unconfirmed";
+}
 
 /**
  * 写进上下文的内容模型看得到的宿主。ChatGPT 10-28 实测看得到。Claude 网页版 11-03 实测：写入不报错，
@@ -71,10 +91,13 @@ export async function handOff(
     const res = await withTimeout(app.sendMessage({ role: "user", content: [{ type: "text", text: message }] }), messageDeclared);
     if (res.isError) throw new Error("rejected");
     return "sent";
-  } catch {
+  } catch (error) {
+    const failure = sendFailure(messageDeclared, error);
+    // 多半已经发出去了：不当成不能发消息，别的按钮照旧摆。
+    if (failure === "unconfirmed") return "unconfirmed";
     if (!messageDeclared) messageRefused = true;
     if (inContext) return "context";
-    // 声明过却失败是真失败（可以重试）；没声明又失败，就当宿主不支持。
+    // 声明过却失败是真失败（可以重试）；没声明、宿主又明说没有这个方法，就当宿主不支持。
     return messageDeclared || contextDeclared ? "failed" : "unsupported";
   }
 }

@@ -580,6 +580,7 @@ async function chooseReplacement(missing: string[]): Promise<void> {
           if (claudeNote) setNotice(claudeNote);
           else if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
           if (outcome === "failed" || outcome === "unsupported") setNotice("Couldn't pass the file on. Tell the chat which file to use instead.");
+          if (outcome === "unconfirmed") setNotice("Sent to the chat. If it doesn't show up there, tell the chat which file to use instead.");
         });
       },
       uploadInstead() {

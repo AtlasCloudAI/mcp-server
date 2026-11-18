@@ -2,12 +2,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { App } from "@modelcontextprotocol/ext-apps";
 import { withGenerationCard } from "../src/apps/generation-quote.js";
 import { NOT_STARTED_META_KEY as SERVER_KEY, cardPrompt } from "../src/apps/generation-card.js";
 import { fullPrompt, reusableSettings } from "../src/apps/history-card.js";
 import { chargeFromBilling, withRecordedCharge } from "../src/services/recorded-charge.js";
 import type { HistoryItem, PredictionResponse } from "../src/response-schemas.js";
 import { NOT_STARTED_META_KEY, notStartedReason } from "../ui/generation-card/card.js";
+import { handOff, messagingAvailable, sendFailure } from "../ui/generation-card/handoff.js";
 
 function withEnv(values: Record<string, string | undefined>): () => void {
   const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
@@ -155,4 +157,43 @@ test("3 查结果没给扣费的已结束单：到历史账单里补上；给了
   } finally {
     restore();
   }
+});
+
+// ---------- 问题 5：Cursor 里点 Use，消息发出去了，卡上却说「This app can't take files…」 ----------
+
+function fakeApp(caps: Record<string, unknown>, send: () => Promise<unknown>): App {
+  return {
+    getHostCapabilities: () => caps,
+    getHostVersion: () => ({ name: "cursor", version: "3.30.14" }),
+    updateModelContext: async () => {
+      throw Object.assign(new Error("Method not found"), { code: -32601 });
+    },
+    sendMessage: send,
+  } as unknown as App;
+}
+
+const TEXT = { short: "short", ask: "ask", lead: "lead" };
+
+test("5 发消息没拿到成功回答：声明过算失败；没声明的只有「没有这个方法」才算不支持，其余算多半发出去了", () => {
+  assert.equal(sendFailure(true, new Error("rejected")), "failed");
+  assert.equal(sendFailure(false, Object.assign(new Error("Method not found"), { code: -32601 })), "unsupported");
+  assert.equal(sendFailure(false, new Error("host did not answer")), "unconfirmed");
+  assert.equal(sendFailure(false, new Error("rejected")), "unconfirmed");
+});
+
+test("5 handOff：Cursor 这种没声明、回 isError 的宿主算 unconfirmed，之后照样能发消息", async () => {
+  assert.equal(await handOff(fakeApp({}, async () => ({ isError: true })), "for model", TEXT, "- a: asset://asset_1"), "unconfirmed");
+  assert.equal(messagingAvailable(), true);
+  assert.equal(await handOff(fakeApp({}, async () => ({})), "for model", TEXT), "sent");
+  assert.equal(await handOff(fakeApp({ message: {} }, async () => ({ isError: true })), "for model", TEXT), "failed");
+  assert.equal(
+    await handOff(
+      fakeApp({}, async () => {
+        throw Object.assign(new Error("Method not found"), { code: -32601 });
+      }),
+      "for model",
+      TEXT
+    ),
+    "unsupported"
+  );
 });

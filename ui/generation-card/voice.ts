@@ -108,6 +108,12 @@ export const say = {
       ? `${missing.length > 0 ? missing.join("、") : "有一个文件"}已经不在我的资产库里了。请打开我的资产库，我重新选一个文件。`
       : `${missing.length > 0 ? missing.join(", ") : "One of my files"} is no longer in my Asset Library. Show me my Asset Library so I can choose another file.`;
   },
+  /** 确认提交那一次被取消（M10）：请模型先查最近的生成，别直接重新提交。 */
+  checkAfterCancel(lang: Lang): string {
+    return lang === "zh"
+      ? "刚才那次生成被取消了，不确定有没有提交。请先帮我查一下最近的生成记录，看它有没有提交、有没有扣费，先别重新生成。"
+      : "That generation was canceled and I'm not sure whether it was submitted. Please check my recent generations to see if it was submitted or charged, and don't start it again yet.";
+  },
   failedRequote(lang: Lang): string {
     return lang === "zh"
       ? "刚才的生成失败了。请重新给我报个价，我可能想先改点东西。"

@@ -8,7 +8,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { isLopsided } from "../../src/apps/card-params.js";
 import { ASSET_REF_NOTE, type PickedAsset, shapeText } from "./assets.js";
 import { RECONNECT_NOTE, isSignedOut } from "./card.js";
-import { handOff } from "./handoff.js";
+import { type HandOffResult, handOff } from "./handoff.js";
 import { prefillNote, say, userLang } from "./voice.js";
 import { thrownErrorText } from "./quote.js";
 import { badge, button, h, head } from "./view.js";
@@ -271,6 +271,16 @@ export function fileRefLines(items: Array<Pick<UploadItem, "name" | "kind" | "ur
 
 // ---------- 状态和动作 ----------
 
+/**
+ * 「Use N files」按钮的样子。交给模型（handOff：先写上下文、再发消息，没声明的宿主各最多等 8 秒）期间显示
+ * 「Sending…」并禁用，连点不会发出两条消息、出两张报价卡（M11）；交出去了显示「Added to chat」。
+ */
+export function useButtonState(doneCount: number, handed: boolean, sending: boolean): { label: string; disabled: boolean } {
+  if (handed) return { label: "Added to chat", disabled: true };
+  if (sending) return { label: "Sending…", disabled: true };
+  return { label: doneCount === 1 ? "Use 1 file" : `Use ${doneCount} files`, disabled: false };
+}
+
 export interface UploaderDeps {
   app: App;
   render(): void;
@@ -306,8 +316,10 @@ export interface Uploader {
   resume(): void;
   /** 资产库里选好的素材：作为已经传好的文件放进列表。 */
   addPicked(picked: PickedAsset[]): void;
-  /** 把传好的文件交给模型（「Use files」）。 */
+  /** 把传好的文件交给模型（「Use files」）。正在交的时候再调不重发。 */
   useFiles(): Promise<void>;
+  /** 正在交给模型（等宿主回答）。 */
+  readonly sending: boolean;
 }
 
 const CONCURRENCY = 2;
@@ -444,6 +456,8 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   let handedOff = "";
   // 宿主既不能代发消息、也不能把内容交给模型（Cursor）：卡片上留一句话，教用户在对话里怎么说。
   let manualHandOff: string | undefined;
+  /** 正在交给模型：handOff 没回来之前不再发第二次（M11）。 */
+  let sending = false;
   /** 文件多时列表收起，点「+N more files」展开。 */
   let expanded = false;
   /** 上一次选了多少个、超出上限没收进来的有几个（设计稿 v2「超出数量上限」）。 */
@@ -954,6 +968,7 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
   }
 
   async function useFiles(): Promise<void> {
+    if (sending) return;
     if (sample) {
       deps.notice("This is a sample card, so nothing was sent.");
       return;
@@ -961,10 +976,22 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const done = items.filter((i) => i.status === "done" && i.url);
     if (done.length === 0) return;
     const names = done.map((i) => i.name).join(", ");
-    // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
-    const outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names), fileRefLines(done));
+    // 交出去的是这一组：等宿主回答时用户改了文件，回来后不把新的那组标成已交。
+    const key = doneKey();
+    sending = true;
+    changed();
+    let outcome: HandOffResult;
+    try {
+      // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
+      outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names), fileRefLines(done));
+    } catch {
+      outcome = "failed";
+    } finally {
+      sending = false;
+    }
+    changed();
     if (outcome === "sent" || outcome === "context" || outcome === "unconfirmed") {
-      handedOff = doneKey();
+      handedOff = key;
       changed();
     }
     if (outcome === "sent" || outcome === "context") manualHandOff = undefined;
@@ -1172,10 +1199,10 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const phase = uploadPhase(items, gaveUp);
     const done = items.filter((i) => i.status === "done");
     const bad = items.filter((i) => i.status === "invalid");
-    const useLabel = done.length === 1 ? "Use 1 file" : `Use ${done.length} files`;
     const handed = handedOff !== "" && handedOff === doneKey();
+    const useState = useButtonState(done.length, handed, sending);
     const useButton = (variant: "primary" | "secondary") =>
-      handed ? button("Added to chat", variant, () => undefined, { disabled: true }) : button(useLabel, variant, () => void useFiles());
+      button(useState.label, variant, () => void useFiles(), { disabled: useState.disabled });
 
     let body: (HTMLElement | null)[];
     if (phase === "expired" && signedOut) {
@@ -1285,6 +1312,9 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     resume: uploadAgain,
     addPicked,
     useFiles,
+    get sending() {
+      return sending;
+    },
   };
 }
 

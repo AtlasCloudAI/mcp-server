@@ -38,3 +38,18 @@ export function toolResultKey(result: { structuredContent?: unknown; _meta?: unk
     return `unserializable:${Date.now()}:${Math.random()}`;
   }
 }
+
+/**
+ * 生成卡的工具结果重放：宿主（WorkBuddy）把同一个 tool-result 再发一次时，卡片已经往前走了（报价卡确认后
+ * 在 submitting / verifying、或已经是进度卡），不能被打回待确认。已经画出卡片、且结果和上一次一模一样，
+ * 就算重放；第一次（还没有卡片）照常处理。
+ */
+export function createReplayGuard(): (result: { structuredContent?: unknown; _meta?: unknown; isError?: boolean }, hasCard: boolean) => boolean {
+  let last: string | undefined;
+  return (result, hasCard) => {
+    const key = toolResultKey(result);
+    const replay = hasCard && key === last;
+    last = key;
+    return replay;
+  };
+}

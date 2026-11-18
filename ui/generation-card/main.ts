@@ -287,6 +287,19 @@ function accept(result: unknown, carry: Partial<CardData> = {}): boolean {
   if (history && !history.data.sample) {
     const listed = history.data.items.find((entry) => entry.prediction_id === next.prediction_id);
     if (listed) Object.assign(next, withBillingRecord(next, listed));
+    // 列表里还是 Generating、点进来已经出结果：把列表那一行也改过来，返回列表时不再显示 Generating / Cost pending
+    // （11-18 ChatGPT 回归 H01/H04）。
+    if (listed && UNSETTLED_STATES.has(listed.state) && !UNSETTLED_STATES.has(next.state)) {
+      const settled: typeof listed = {
+        ...listed,
+        state: next.state,
+        ...(next.price_usd !== undefined ? { price_usd: next.price_usd } : {}),
+      };
+      history = {
+        ...history,
+        data: { ...history.data, items: history.data.items.map((entry) => (entry === listed ? settled : entry)) },
+      };
+    }
   }
   // 刷新拿到的结果不带 sample 标记，示例卡保持示例。
   card = card?.sample
@@ -318,6 +331,25 @@ function watchQuote(quoteCard: CardData): void {
       render();
     }
   }, Math.max(0, at - Date.now()) + 250);
+}
+
+/**
+ * 「Reuse …」按一下就替用户发一条消息。ChatGPT 发出后卡片上没有任何反馈，过了 25 秒用户以为没点上又点一次，
+ * 结果两条一样的消息、两张报价卡（11-18 ChatGPT 回归 H05）。按下后按钮变成「Sent」并暂时禁用，期间再点不重发。
+ */
+const SENT_HOLD_MS = 15_000;
+
+function sendOnce(target: HTMLButtonElement, text: string): void {
+  if (target.disabled) return;
+  const label = target.textContent;
+  target.disabled = true;
+  target.textContent = "Sent";
+  sendForUser(app, text, setNotice);
+  setTimeout(() => {
+    if (!target.isConnected) return;
+    target.disabled = false;
+    target.textContent = label;
+  }, SENT_HOLD_MS);
 }
 
 async function refreshOnce(): Promise<void> {
@@ -624,19 +656,23 @@ function withHistoryActions(detail: HTMLElement): HTMLElement {
   const wanted = historyDetailButtons(card.state, Boolean(prompt), messagingAvailable(), hasSettings);
   const make = (kind: DetailButton, variant: "primary" | "secondary"): HTMLElement | null => {
     switch (kind) {
-      case "reuse":
-        return button("Reuse prompt", variant, () => {
+      case "reuse": {
+        const reuse: HTMLButtonElement = button("Reuse prompt", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
           else if (prompt) {
-            sendForUser(app, say.reusePrompt(userLang(app), model, prompt, inputs, unavailable, settings, modelId), setNotice);
+            sendOnce(reuse, say.reusePrompt(userLang(app), model, prompt, inputs, unavailable, settings, modelId));
           }
         });
-      case "reuse-settings":
+        return reuse;
+      }
+      case "reuse-settings": {
         // 没提示词的单：带上原图、模型和参数，照常先出报价卡；原图被删了服务端报「素材失效」。
-        return button("Reuse settings", variant, () => {
+        const reuse: HTMLButtonElement = button("Reuse settings", variant, () => {
           if (sample) setNotice("This is a sample card, so nothing was sent.");
-          else sendForUser(app, say.reuseSettings(userLang(app), model, inputs, unavailable, settings, modelId), setNotice);
+          else sendOnce(reuse, say.reuseSettings(userLang(app), model, inputs, unavailable, settings, modelId));
         });
+        return reuse;
+      }
       case "copy":
         return button("Copy prompt", variant, () => {
           if (prompt) void copyText(prompt).then((ok) => setNotice(ok ? "Prompt copied. Paste it in the chat." : "Couldn't copy the prompt."));
@@ -962,7 +998,16 @@ app.onteardown = async () => {
 render(true);
 systemTheme();
 darkQuery?.addEventListener?.("change", systemTheme);
-setInterval(() => tickTimers(root), 1000);
+setInterval(() => {
+  tickTimers(root);
+  // 到点切成「已过期」本来靠 watchQuote 的一次性定时器；卡片在后台时浏览器会节流或冻结 iframe 的定时器，
+  // 11-18 ChatGPT 回归 Q04 就看到「valid for 0:00」还停在待确认、按钮还能点。每秒的走字顺便兜底。
+  const waiting = quoteState.phase === "ready" || quoteState.phase === "price_changed";
+  if (card?.state === "quote" && waiting && !card.sample && quoteExpired(card.quote)) {
+    quoteState = { phase: "expired" };
+    render();
+  }
+}, 1000);
 
 app
   .connect(transport)

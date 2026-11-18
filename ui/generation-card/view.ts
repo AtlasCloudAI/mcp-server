@@ -536,7 +536,18 @@ function videoCard(card: CardData, media: CardMedia, actions: CardActions, fail:
     },
   });
   const frame = h("div", { class: "media" }, video, play);
+  // 元数据到之前先按参数里的比例（9:16 之类）摆成竖版：11-18 ChatGPT 回归 G04，竖版视频刚出来那几秒是横向黑框，
+  // 加载完才缩成竖版。读到真实尺寸后下面照旧以视频本身为准。
+  const declared = (card.settings ?? []).map((label) => /^(\d+):(\d+)$/.exec(label.trim())).find(Boolean);
+  if (declared && Number(declared[2]) > Number(declared[1])) {
+    frame.classList.add("portrait");
+    frame.style.setProperty("--media-ratio", String(Number(declared[1]) / Number(declared[2])));
+  }
   video.addEventListener("loadedmetadata", () => {
+    if (video.videoWidth > 0 && video.videoHeight <= video.videoWidth) {
+      frame.classList.remove("portrait");
+      frame.style.removeProperty("--media-ratio");
+    }
     // 竖版视频不塞进横版框：框收窄到视频本身的宽度（高度上限见样式），两侧不留黑边。
     if (video.videoWidth > 0 && video.videoHeight > video.videoWidth) {
       frame.classList.add("portrait");

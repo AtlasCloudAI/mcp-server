@@ -64,7 +64,7 @@ test("幂等记录有答案就直接用：提交成功、被拒收", async () =>
   assert.equal((await checkSubmission({ tool: "atlas_generate_image", idempotency_key: rejected })).outcome, "not_started");
 });
 
-test("记录说不准、又认不出任务：还在时间窗里就接着查，过了就算没开始", async () => {
+test("记录说不准、又认不出任务：还在时间窗里就接着查，过了只能说结果未知（11-18 审查 M3）；没有记录才算没开始", async () => {
   const key = "1c2a3b4d-0000-4000-8000-000000000004";
   await executeIdempotently("atlas_generate_video", { prompt: "x" }, key, async () => {
     throw new Error("fetch failed");
@@ -76,7 +76,9 @@ test("记录说不准、又认不出任务：还在时间窗里就接着查，�
     idempotency_key: key,
     now: Date.now() + NOT_STARTED_AFTER_MS + 1_000,
   });
-  assert.equal(later.outcome, "not_started");
+  // 请求到过平台（uncertain）：历史对不上不等于没开始，不能说「没开始、没扣费」。
+  assert.equal(later.outcome, "unknown");
+  assert.match((later as { message: string }).message, /may already be running/);
 
   // 没有记录（工具根本没跑到），按卡片给的提交时间算。
   const missing = await checkSubmission({

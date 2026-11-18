@@ -3,7 +3,7 @@ import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { type ApiRequestOptions, api, generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
-import { type QuoteCancelReason, cancelIdempotent, peekIdempotent } from "../services/idempotency.js";
+import { type QuoteCancelReason, cancelIdempotent, peekIdempotent, storedPredictionId } from "../services/idempotency.js";
 import {
   historyResponseSchema,
   predictionResponseSchema,
@@ -40,6 +40,11 @@ export type SubmissionOutcome =
   | { outcome: "started"; prediction_id: string }
   | { outcome: "not_started"; message: string }
   | { outcome: "checking" }
+  /**
+   * 请求到过平台（幂等记录是 pending / uncertain，或上游收下了却没给任务号），历史里又对不上：
+   * 不知道开没开始。卡片继续核实、最后显示「Not sure it started」，不能说「没开始、没扣费」（11-18 审查 M3）。
+   */
+  | { outcome: "unknown"; message: string }
   /** on_load：这张报价没有提交记录。 */
   | { outcome: "not_submitted" }
   /** 这份报价作废了（atlas_cancel_quote）：卡片改成 Canceled（declined）或 Settings changed（replaced）。 */
@@ -48,12 +53,6 @@ export type SubmissionOutcome =
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
 
-/** 幂等记录里存的提交结果：生成工具存 { ok, predictionId }，快速生成存原始响应 { data: { id } }。 */
-function storedPredictionId(result: unknown): string | undefined {
-  const record = asRecord(result);
-  const id = record?.predictionId ?? asRecord(record?.data)?.id;
-  return typeof id === "string" && id !== "" ? id : undefined;
-}
 
 function createdAtMs(item: HistoryItem): number | undefined {
   const raw = item.createdAt;
@@ -130,8 +129,16 @@ export async function checkSubmission(input: {
     if (id) return { outcome: "started", prediction_id: id };
   }
   if (now - since < NOT_STARTED_AFTER_MS) return { outcome: "checking" };
+  // 只有压根没有记录（过期了、工具没跑到）才能说没开始。记录是 pending / uncertain，或 completed 却没任务号，
+  // 说明请求到过平台：90 秒内历史对不上不等于没开始（历史可能晚到、提示词可能被改写），只能说结果未知。
+  if (record) return { outcome: "unknown", message: UNKNOWN_OUTCOME_MESSAGE };
   return { outcome: "not_started", message: "Atlas Cloud has no record of this job, so it didn't start." };
 }
+
+/** 结果未知时给模型和卡片的话：可能已经提交，先查历史，别再交一单。 */
+export const UNKNOWN_OUTCOME_MESSAGE =
+  "This request reached Atlas Cloud but it can't be confirmed whether the job started, so it may already be running " +
+  "and billed. Check atlas_list_predictions (or the generations page in Atlas) before submitting it again.";
 
 /**
  * 找到的任务拼成卡片数据，卡片直接接着显示进度。查不到详情就先给一张排队中的卡。
@@ -192,7 +199,9 @@ export function registerCardCheckTool(server: McpServer): void {
                 text:
                   result.outcome === "checking"
                     ? "Still checking whether it started."
-                    : result.outcome === "not_submitted"
+                    : result.outcome === "unknown"
+                      ? `Result unknown: ${result.message}`
+                      : result.outcome === "not_submitted"
                       ? "This quote hasn't been submitted."
                       : result.outcome === "canceled"
                         ? `This quote was canceled (${result.reason}).`
@@ -248,12 +257,30 @@ export function registerCancelQuoteTool(server: McpServer): void {
           };
         }
         const id = result.record.state === "completed" ? storedPredictionId(result.record.result) : undefined;
+        if (!id) {
+          // 提交还在进行、没拿到确定答复（uncertain），或上游收下了却没给任务号：可能已经在跑，也可能没有。
+          // 原来一律回「已提交」，模型据此告诉用户在跑了；其实要先查（11-18 上线前审查 M3）。
+          return {
+            structuredContent: {
+              status: "possibly_submitted",
+              next_step: "Check atlas_list_predictions for this job before telling the user whether it is running; do not submit it again.",
+            },
+            content: [
+              {
+                type: "text",
+                text:
+                  "This quote may already have been submitted: Atlas Cloud did not confirm whether the job started, so it can't be canceled. " +
+                  "Check atlas_list_predictions for it first, then tell the user what you find. Do not submit it again.",
+              },
+            ],
+          };
+        }
         return {
-          structuredContent: { status: "already_submitted", ...(id ? { prediction_id: id } : {}) },
+          structuredContent: { status: "already_submitted", prediction_id: id },
           content: [
             {
               type: "text",
-              text: `This quote was already submitted${id ? ` as prediction ${id}` : ""}, so it can't be canceled. Tell the user; check its status with atlas_get_prediction.`,
+              text: `This quote was already submitted as prediction ${id}, so it can't be canceled. Tell the user; check its status with atlas_get_prediction.`,
             },
           ],
         };

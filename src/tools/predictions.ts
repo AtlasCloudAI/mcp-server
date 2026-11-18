@@ -11,7 +11,7 @@ import {
 import { generationCardEnabled } from "../apps/generation-card.js";
 import { HISTORY_META_KEY, historyCardData } from "../apps/history-card.js";
 import { generationToolCardMeta } from "../apps/generation-quote.js";
-import { describeNotStarted, recentNotStarted } from "../services/not-started.js";
+import { NOT_STARTED_NOTE, describeNotStarted, recentNotStarted } from "../services/not-started.js";
 import { formatUsd } from "../services/spend-policy.js";
 import { asRecord } from "../services/json-record.js";
 
@@ -183,6 +183,14 @@ Notes:
       },
       outputSchema: {
         card_note: z.string(),
+        // 最近一小时确认了却没开始的（余额不足等），不在列表里：只读结构化结果的 ChatGPT 原来看不到，
+        // 会猜「卡片没收到点击」再交一次（11-18 上线前审查 M9）。
+        not_started: z
+          .object({
+            note: z.string(),
+            entries: z.array(z.object({ model: z.string(), reason: z.string(), at: z.string() })),
+          })
+          .optional(),
         total: z.number().int().nonnegative(),
         page: z.number().int().positive(),
         size: z.number().int().positive(),
@@ -249,10 +257,11 @@ Notes:
             : "This is the last page."
         );
         lines.push(
-          "Use atlas_get_prediction with a prediction_id for the full record. Failed tasks were not billed."
+          "Use atlas_get_prediction with a prediction_id for the full record. For what a task cost, go by its charged_usd: a failed task is usually not billed, but some are partly billed."
         );
         // 确认了却没开始的不会进历史：附在第一页后面，模型才不会猜「卡片没收到点击」。
-        const notStarted = page === 1 ? describeNotStarted(await recentNotStarted()) : undefined;
+        const notStartedEntries = page === 1 ? await recentNotStarted() : [];
+        const notStarted = describeNotStarted(notStartedEntries);
         if (notStarted) lines.push("", notStarted);
 
         // 卡片打开时，结果显示成历史列表卡（能展开全屏、筛选、点开单条）。
@@ -265,6 +274,14 @@ Notes:
           structuredContent: {
             // 排在最前面：只读结构化结果的 ChatGPT 先看到（11-18 回归：历史列表的回答里它自己配了一张示意图）。
             card_note: LIST_CARD_NOTE,
+            ...(notStarted
+              ? {
+                  not_started: {
+                    note: NOT_STARTED_NOTE,
+                    entries: notStartedEntries.map(({ model, reason, at }) => ({ model, reason, at })),
+                  },
+                }
+              : {}),
             total,
             page,
             size,

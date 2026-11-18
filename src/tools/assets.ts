@@ -470,6 +470,8 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
         cursor: z.string().min(1).max(1000).optional().describe("next_cursor from a previous page"),
       },
       outputSchema: {
+        // 资产库卡打开时的说明（ASSETS_CARD_NOTE），排在最前面：只读结构化结果的 ChatGPT 看不到文字（11-18 审查 M9）。
+        card_note: z.string().optional(),
         count: z.number().int().nonnegative(),
         next_cursor: z.string().optional(),
         /** 资产库没开通时为 false（充值后才能用）。 */
@@ -522,7 +524,8 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
             : `# Asset Library (${assets.length}${query ? ` matching "${query}"` : ""})`,
           "",
         ];
-        if (clientRendersCards(server)) lines.push(ASSETS_CARD_NOTE, "");
+        const rendersCards = clientRendersCards(server);
+        if (rendersCards) lines.push(ASSETS_CARD_NOTE, "");
         if (unmatched && items.length > 0) {
           lines.push(
             `No assets match "${unmatched}". Asset names are usually English file names or model IDs, so words in other ` +
@@ -561,6 +564,7 @@ To use assets as generation inputs, call atlas_use_assets with their asset_id va
         return {
           ...(card ? { _meta: { [ASSETS_META_KEY]: card } } : {}),
           structuredContent: {
+            ...(rendersCards ? { card_note: ASSETS_CARD_NOTE } : {}),
             count: assets.length,
             ...(nextCursor ? { next_cursor: nextCursor } : {}),
             ...(unmatched ? { unmatched_query: unmatched } : {}),

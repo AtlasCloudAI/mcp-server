@@ -401,7 +401,12 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
     return {
       ...result,
       _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
-      ...(onCard ? { structuredContent: withCardNote(result.structuredContent) } : {}),
+      ...(onCard
+        ? { structuredContent: withCardNote(result.structuredContent) }
+        : tracking
+          ? // 跟进卡的说明也放进结构化结果、排在最前面：只读结构化结果的 ChatGPT 看不到文字（11-18 审查 M9）。
+            { structuredContent: { card_note: TRACKING_CARD_NOTE, ...(record(result.structuredContent) ?? {}) } }
+          : {}),
       content: onCard
         ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: forClient(quoteCardNote(hasEstimate(record(result.structuredContent)))) }]
         : tracking

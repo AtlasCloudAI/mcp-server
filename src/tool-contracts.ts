@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Model, SubmitKind } from "./types.js";
 import { confirmationValidSeconds, formatUsd } from "./services/spend-policy.js";
 import { brandIconUrl } from "./services/brand-logo.js";
+import { type AlreadySubmitted, alreadySubmittedNotice } from "./services/generation-confirmation.js";
 
 export const idempotencyKeySchema = z
   .string()
@@ -169,7 +170,11 @@ export const generationOutputSchema = {
   // 模型目录里的厂商图标：卡片模型那一行放在名字前（设计稿 v3）
   model_avatar: z.string().optional(),
   kind: z.enum(["image", "video", "audio", "transcription"]),
-  status: z.enum(["confirmation_required", "submitted"]),
+  // completed：同步出结果的模型在提交响应里就带了成品，outputs 就是成品地址。schema 原来只允许
+  // confirmation_required/submitted，SDK 的输出校验把这类已扣费的成功结果换成报错，用户以为没成再交一次
+  // （11-18 上线前审查 H1）。
+  status: z.enum(["confirmation_required", "submitted", "completed"]),
+  outputs: z.array(z.string()).optional(),
   confirmation_token: z.string().min(32).optional(),
   confirmation_valid_seconds: z.number().int().nonnegative().optional(),
   idempotency_key: z.string().optional(),
@@ -198,6 +203,15 @@ export const generationOutputSchema = {
       })
     )
     .optional(),
+  // 同样的请求刚提交过（11-18 上线前审查 M5）：这份报价沿用那一单的幂等键，确认时拿回那一单，不另建、不另扣。
+  already_submitted: z
+    .object({
+      status: z.enum(["submitted", "in_progress", "unconfirmed"]),
+      submitted_at: z.string(),
+      prediction_id: z.string().optional(),
+      note: z.string(),
+    })
+    .optional(),
   // 客户端会渲染卡片时的一句话：卡片就是确认这一步，别自己再画报价卡（只走结构化结果的 ChatGPT 路径也能看到）
   card_note: z.string().optional(),
   // 扣费账户（需求文档 6.1）：查不到就不给
@@ -219,7 +233,8 @@ export type GenerationStructuredContent = Record<string, unknown> &
         model_id: string;
         model_name: string;
         kind: SubmitKind;
-        status: "submitted";
+        status: "submitted" | "completed";
+        outputs?: string[];
       }
     | {
         model_id: string;
@@ -298,6 +313,7 @@ export function generationConfirmationStructuredContent(
     expiresAt: string;
     idempotencyKey: string;
     pricing: z.infer<typeof generationPricingSchema>;
+    alreadySubmitted?: AlreadySubmitted;
   },
   estimate?: { usd: number | null; partial: boolean; reason?: string; missing?: string[] },
   body?: Record<string, unknown>
@@ -313,6 +329,16 @@ export function generationConfirmationStructuredContent(
     confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
     idempotency_key: confirmation.idempotencyKey,
     catalog_unit_pricing: confirmation.pricing,
+    ...(confirmation.alreadySubmitted
+      ? {
+          already_submitted: {
+            status: confirmation.alreadySubmitted.status,
+            submitted_at: confirmation.alreadySubmitted.submittedAt,
+            ...(confirmation.alreadySubmitted.predictionId ? { prediction_id: confirmation.alreadySubmitted.predictionId } : {}),
+            note: alreadySubmittedNotice(confirmation.alreadySubmitted).replace(/^- \*\*Already submitted\*\*: /, ""),
+          },
+        }
+      : {}),
     ...(estimate && estimate.usd !== null
       ? {
           estimated_cost_usd: estimate.usd,

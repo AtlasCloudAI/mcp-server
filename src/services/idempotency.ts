@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createClient, type RedisClientType } from "redis";
 import { ApiRequestError } from "./api-client.js";
+import { asRecord } from "./json-record.js";
 import { getRequestContext } from "./request-context.js";
 import { annotateToolCall } from "./tool-call-telemetry.js";
 
@@ -30,10 +31,21 @@ export function rejectedBeforeStart(error: unknown): boolean {
 /**
  * 请求发出去了却没等到能用的回答：超时、连接断开（undici 抛 TypeError）、5xx、响应读不懂。
  * 本地就失败的（文件读不到之类）不算：那一单根本没发出去，原样报原因。
+ * 响应读不懂在 api-client 里已经包成 ApiRequestError(502)；这里再认一次 SyntaxError，
+ * 免得别的路径直接 response.json() 时漏掉（11-18 上线前审查 M2）。
  */
-function sentWithoutAnswer(error: unknown): boolean {
+export function sentWithoutAnswer(error: unknown): boolean {
   if (error instanceof ApiRequestError) return !rejectedBeforeStart(error);
-  return error instanceof Error && (error.name === "AbortError" || error instanceof TypeError);
+  return (
+    error instanceof Error && (error.name === "AbortError" || error instanceof TypeError || error instanceof SyntaxError)
+  );
+}
+
+/** 幂等记录里存的提交结果：生成工具存 { ok, predictionId }，快速生成存原始响应 { data: { id } }。 */
+export function storedPredictionId(result: unknown): string | undefined {
+  const record = asRecord(result);
+  const id = record?.predictionId ?? asRecord(record?.data)?.id;
+  return typeof id === "string" && id !== "" ? id : undefined;
 }
 
 function settledState(error: unknown): "rejected" | "uncertain" {

@@ -56,6 +56,9 @@ function uploadNotes(profile: ClientProfile): string[] {
 }
 
 const UPLOAD_OUTPUT_SCHEMA = {
+  // 上传卡打开时的说明（UPLOAD_CARD_NOTE）：只读结构化结果的 ChatGPT 看不到文字，看到 curl_example 会自己去跑
+  // 上传命令、或叫用户在对话里贴附件（11-18 上线前审查 M9）。排在最前面。
+  card_note: z.string().optional(),
   upload_url: z.string().url(),
   method: z.literal("POST"),
   filename_header: z.string(),
@@ -264,7 +267,7 @@ ${RETURNS}`,
       }
       return {
         ...issued.cardMeta,
-        structuredContent: issued.structuredContent,
+        structuredContent: { card_note: UPLOAD_CARD_NOTE, ...issued.structuredContent },
         content: [{ type: "text", text: `# Upload card\n\n${UPLOAD_CARD_NOTE}\n\nMax size per file: ${issued.sizeLine}.` }],
       };
     }

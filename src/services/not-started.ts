@@ -114,6 +114,12 @@ export async function recentNotStarted(
   }
 }
 
+/** 结构化结果里 not_started.note：和文字版同一个意思（ChatGPT 只读结构化结果）。 */
+export const NOT_STARTED_NOTE =
+  "These were confirmed in the last hour but did not start, so they are not in predictions and nothing was charged for them. " +
+  "If the user asks about one, tell them why it did not start. Running it again fails the same way until that changes " +
+  "(for example a top-up, or another model).";
+
 /** 附在 atlas_list_predictions 结果后面的一段；没有记录就返回 undefined。 */
 export function describeNotStarted(entries: NotStarted[]): string | undefined {
   if (entries.length === 0) return undefined;

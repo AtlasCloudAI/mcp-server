@@ -275,6 +275,56 @@ const MAX_GUARDED_DEPTH = 8;
 const UNRESOLVED_REASON = "its host name could not be found";
 
 /**
+ * 参数里的链接超过 MAX_GUARDED_LINKS 条、或嵌套超过 MAX_GUARDED_DEPTH 层：整个请求退回。
+ * 下面几道检查都只看这个范围以内，原来超出的部分静默放过，把内网地址放在第 65 条或第 9 层就绕过去了，
+ * 网关照样会去下载（11-18 上线前审查 M7）。正常请求远到不了这个量。
+ */
+export function inputLimitProblems(params: Record<string, unknown>): InputLinkProblem[] {
+  const links = new Set<string>();
+  let tooDeep: string | undefined;
+  const visit = (field: string, value: unknown, depth: number): void => {
+    if (tooDeep !== undefined || links.size > MAX_GUARDED_LINKS) return;
+    if (typeof value === "string") {
+      if (/^https?:/i.test(urlPreprocess(value))) links.add(`${field}\0${value.trim()}`);
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    if (depth >= MAX_GUARDED_DEPTH) {
+      tooDeep = field;
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(field, item, depth + 1);
+    } else {
+      for (const [key, item] of Object.entries(value)) visit(`${field}.${key}`, item, depth + 1);
+    }
+  };
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "model" || TEXT_FIELDS.has(key)) continue;
+    visit(key, value, 0);
+  }
+  if (tooDeep !== undefined) {
+    return [
+      {
+        field: tooDeep,
+        url: "",
+        reason: `the inputs are nested more than ${MAX_GUARDED_DEPTH} levels deep, which can't be checked; flatten them`,
+      },
+    ];
+  }
+  if (links.size > MAX_GUARDED_LINKS) {
+    return [
+      {
+        field: "params",
+        url: "",
+        reason: `the request has more than ${MAX_GUARDED_LINKS} input links, which can't all be checked; split it into smaller requests`,
+      },
+    ];
+  }
+  return [];
+}
+
+/**
  * 主机名解析的结果：有内网地址、全是公网地址、还是解析不出来。
  *
  * 解析不出来不能当作「不是内网」放过去：只在后端内网 DNS 里才有的名字（*.internal…），
@@ -418,6 +468,8 @@ export async function checkInputLinks(
 ): Promise<InputLinkProblem[]> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const allowPrivate = options.allowPrivateAddresses === true;
+  const overLimit = inputLimitProblems(params);
+  if (overLimit.length > 0) return overLimit;
   const local = localInputValues(params);
   if (local.length > 0) return local;
   // 只完整探前 8 条；更多的、嵌得更深的也要挡内网（只解析地址，不连），
@@ -500,7 +552,7 @@ export async function publicContentLength(
 
 /** 写给模型和用户看的说明：哪条不能用、为什么、可以怎么换。不报价、不扣费。 */
 export function formatInputLinkProblems(problems: InputLinkProblem[]): string {
-  const lines = problems.map((p) => `- ${p.field}: ${p.url} — ${p.reason}.`);
+  const lines = problems.map((p) => `- ${p.field}${p.url ? `: ${p.url}` : ""} — ${p.reason}.`);
   return [
     `No quote was made and nothing was charged: ${problems.length === 1 ? "this input link can't" : "these input links can't"} be used.`,
     ...lines,

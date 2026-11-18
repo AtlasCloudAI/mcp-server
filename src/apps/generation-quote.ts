@@ -272,7 +272,13 @@ const quoteCardNoteStructured = (hasPrice: boolean) =>
 const CHATGPT_TYPED_CONFIRM_NOTE =
   " In ChatGPT a reply typed in the chat reaches these tools only when it mentions this app with @ (for example " +
   '"@Atlas Cloud confirm"); a plain "I confirm" can arrive in a turn where the tools are not available. If you ' +
-  "mention confirming in the chat, tell the user to include that @ mention; the card button works either way.";
+  "mention confirming in the chat, tell the user to include that @ mention; the card button works either way." +
+  // 11-18 ChatGPT 回归 G06：一次报了 4 张价，ChatGPT 一轮只显示 1 张卡；打字确认 4 张时模型把同一个
+  // idempotency_key 用了三次，前三次拿回同一单，第四次失败，ChatGPT 又逐张重新报价。
+  " ChatGPT shows only one Atlas card per reply. When the user wants several images or videos, make them in one " +
+  "request if the model has a count parameter (such as num_images), so one quote and one card cover all of them; " +
+  "otherwise quote one, let the user confirm it, then quote the next. Every quote has its own idempotency_key and " +
+  "confirmation_token: never confirm one quote with another quote's values.";
 
 function forClient(note: string): string {
   return currentClientIsChatGpt() ? `${note}${CHATGPT_TYPED_CONFIRM_NOTE}` : note;

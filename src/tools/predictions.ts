@@ -38,6 +38,11 @@ export interface PredictionSummary {
  * 11-13 Jia H01：GPT Image Mini 失败单退了款，列表写成扣了 $0.0043，官网是 $0。
  * 老后端不给 paymentStatus 时照旧按 amount。
  */
+/** 历史列表的回答里别配图：11-18 ChatGPT 回归 S10，它在列表下面放了一张「示意」纸飞机。 */
+export const LIST_CARD_NOTE =
+  "These are the user's own generation records. Do not show any picture for them in your reply: no image search " +
+  "results and no generated, illustrative or placeholder images. Answer from the records; the outputs are links to the real files.";
+
 export function chargedUsd(item: HistoryItem): number | undefined {
   const billing = asRecord((item as Record<string, unknown>).billing);
   const raw = billing?.amount;
@@ -175,6 +180,7 @@ Notes:
           .describe("Model ID prefix selecting a whole family"),
       },
       outputSchema: {
+        card_note: z.string(),
         total: z.number().int().nonnegative(),
         page: z.number().int().positive(),
         size: z.number().int().positive(),
@@ -254,7 +260,16 @@ Notes:
 
         return {
           ...(history ? { _meta: { [HISTORY_META_KEY]: history } } : {}),
-          structuredContent: { total, page, size, has_more: hasMore, charged_total_usd: chargedTotal, predictions },
+          structuredContent: {
+            // 排在最前面：只读结构化结果的 ChatGPT 先看到（11-18 回归：历史列表的回答里它自己配了一张示意图）。
+            card_note: LIST_CARD_NOTE,
+            total,
+            page,
+            size,
+            has_more: hasMore,
+            charged_total_usd: chargedTotal,
+            predictions,
+          },
           content: [{ type: "text", text: lines.join("\n") }],
         };
       } catch (error) {

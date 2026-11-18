@@ -88,6 +88,17 @@ export const RESULT_CARD_NOTE =
   "Do not show any other picture of it: no image search results, no generated, illustrative or placeholder image. " +
   "Answer in a sentence or two with the status and what was actually charged.";
 
+/** 查结果里没有扣费信息时：别说「没报」，去列表里看实扣。 */
+export const CHARGE_NOT_IN_RECORD =
+  "this record does not include the charge. atlas_list_predictions shows the amount actually charged " +
+  "(charged_usd) for this prediction_id; check it there before telling the user what it cost.";
+
+/** 对话回答停在 max_tokens 时给模型的下一步（11-18 ChatGPT 回归 O04）。 */
+export const CHAT_TRUNCATED_NEXT_STEP =
+  "This answer stopped at max_tokens (finish_reason: length) and is incomplete. Reasoning models spend part of " +
+  "max_tokens on hidden reasoning. Tell the user the answer was cut off; to get the full answer, ask again with a " +
+  "larger max_tokens (at least 1024).";
+
 /**
  * 查结果里给模型看的一行扣费（需求文档 6.3：结算完才写实际费用，没结算完写待结算，
  * 不把未知费用说成 $0）。老网关没有 charge_status 时只在有价格时写价格。
@@ -137,7 +148,7 @@ Args:
   - messages (array, required): Array of message objects with "role" and "content" fields.
     Roles: "system", "user", "assistant"
   - temperature (number, optional): Sampling temperature, 0-2. Default: 1
-  - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound.
+  - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound. Reasoning models spend part of it on hidden reasoning, so do not set it below about 1024 for them, or the answer is cut off.
   - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1
 
 Returns:
@@ -183,6 +194,8 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           model: z.string(),
           message: z.string().optional(),
           finish_reason: z.string().optional(),
+          truncated: z.boolean().optional(),
+          next_step: z.string().optional(),
           usage: z
             .object({
               prompt_tokens: z.number().int().nonnegative(),
@@ -322,11 +335,15 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
 
+          // 11-18 ChatGPT 回归 O04：ChatGPT 为了压低最坏花费自己传了 max_tokens=80，推理模型把它几乎全用在
+          // 推理上，回答只剩半句。说清楚是被截断了、该怎么重来；ChatGPT 只读结构化结果，所以放进 next_step。
+          const truncated = choice.finish_reason === "length";
           const lines = [`# Chat Response\n`];
           lines.push(`**Model**: \`${response.model || found.model}\``);
           lines.push(`**Finish Reason**: ${choice.finish_reason}\n`);
           lines.push("## Response\n");
           lines.push(choice.message.content);
+          if (truncated) lines.push(`\n${CHAT_TRUNCATED_NEXT_STEP}`);
 
           const costUsd = response.usage ? chatUsageCostUsd(found, response.usage) : null;
           if (response.usage) {
@@ -352,6 +369,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               model: response.model || found.model,
               message: choice.message.content,
               finish_reason: choice.finish_reason,
+              ...(truncated ? { truncated: true, next_step: CHAT_TRUNCATED_NEXT_STEP } : {}),
               ...(response.usage ? { usage: response.usage } : {}),
               ...(costUsd !== null ? { cost_usd: costUsd } : {}),
             },
@@ -410,6 +428,7 @@ Examples:
         price_usd: z.number().optional(),
         price_to_tell_user: z.string().optional(),
         charge_status: z.string().optional(),
+        charge_note: z.string().optional(),
         card_note: z.string().optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
@@ -457,6 +476,9 @@ Examples:
         const chargeStatus = chargeStatusOf(data?.charge_status);
         const charge = chargeLine(chargeStatus, priceUsd);
         if (charge) lines.push(`${charge}\n`);
+        // 11-18 ChatGPT 回归：模板单按 ID 查，回答写「实扣：没有报告」，列表里其实记着 $0.1408。
+        const chargeMissing = isFinished(status) && !charge;
+        if (chargeMissing) lines.push(`- **Charge**: ${CHARGE_NOT_IN_RECORD}\n`);
 
         const outputUrls = predictionOutputUrls(result);
         const transferPending =
@@ -561,6 +583,7 @@ Examples:
                 { price_usd: priceUsd, price_to_tell_user: chargeUsd(priceUsd) }
               : {}),
             ...(chargeStatus ? { charge_status: chargeStatus } : {}),
+            ...(chargeMissing ? { charge_note: CHARGE_NOT_IN_RECORD } : {}),
           },
           content: [
             { type: "text", text: lines.join("\n") },

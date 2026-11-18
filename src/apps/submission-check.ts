@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { type ApiRequestOptions, api, generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
@@ -148,7 +149,7 @@ export async function startedCard(predictionId: string, model: string | undefine
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     }
   ).catch(() => undefined);
-  if (result) return predictionCardData(predictionId, result);
+  if (result) return predictionCardData(predictionId, await withRecordedCharge(predictionId, result, options));
   return buildGenerationCardData({ predictionId, status: "queued", outputs: [], transferPending: false, modelId: model });
 }
 

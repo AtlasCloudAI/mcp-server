@@ -9,6 +9,7 @@ import {
   RECONNECT_NOTE,
   fileNameOf,
   formatClock,
+  readableModelId,
   formatElapsed,
   formatUsd,
   isModelUnavailable,
@@ -906,6 +907,31 @@ export function errorCard(message: string, opts: ViewOptions, actions: CardActio
     head("Couldn't load this task", badge("Error", { danger: true })),
     h("p", { class: "desc" }, message),
     opts.canRefresh ? h("div", { class: "actions" }, button("Refresh", "secondary", actions.refresh)) : null
+  );
+}
+
+/** 原因最多显示这么多字，太长的（参数校验会列一长串）截掉，完整的在对话里。 */
+const NOT_STARTED_REASON_MAX = 420;
+
+/**
+ * 生成工具在报价、提交之前就拒了（参数校验失败、file:// 链接、模型找不到……）：没有任务可查，
+ * 所以不写「Couldn't load this task」、不给 Refresh（11-18 WorkBuddy S07、N01）。
+ * 说清楚没开始、没扣费、为什么，改法交给对话。
+ */
+export function notStartedCard(reason: string, modelId?: string): HTMLElement {
+  const text = reason.replace(/^Error:\s*/i, "");
+  const shown = text.length > NOT_STARTED_REASON_MAX ? `${text.slice(0, NOT_STARTED_REASON_MAX).trimEnd()}…` : text;
+  return h(
+    "section",
+    { class: "card" },
+    head(modelId ? readableModelId(modelId) : "Atlas Cloud", badge("Not started", { warn: true })),
+    h("p", { class: "desc" }, "Atlas Cloud didn't accept this request, so there's no quote and nothing was charged."),
+    ...shown
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => h("p", { class: "desc" }, line)),
+    h("p", { class: "desc" }, "Ask in the chat to change it, and a new quote will appear.")
   );
 }
 

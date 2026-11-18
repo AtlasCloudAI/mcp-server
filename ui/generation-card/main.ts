@@ -22,8 +22,9 @@ import {
   isSignedOut,
   keepImageRatio,
   newIdempotencyKey,
+  notStartedReason,
 } from "./card.js";
-import { type CardActions, type ViewOptions, button, errorCard, h, loadingCard, renderCard, tickTimers } from "./view.js";
+import { type CardActions, type ViewOptions, button, errorCard, h, loadingCard, notStartedCard, renderCard, tickTimers } from "./view.js";
 import {
   type QuoteState,
   createQuoteActions,
@@ -61,6 +62,8 @@ const transport = cardTransport();
 let card: CardData | undefined;
 let pendingId: string | undefined;
 let loadError: string | undefined;
+// 生成工具在报价前就拒了这次调用：原因（notStartedReason），画「没开始、没扣费」卡。
+let notStarted: string | undefined;
 let stalled = false;
 // 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户点 Reconnect 再查。
 let signedOut = false;
@@ -228,7 +231,7 @@ function render(force = false): void {
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
   const historyOpts = history ? historyOptions() : undefined;
-  const key = JSON.stringify({ card, pendingId, loadError, opts, quoteState, history, historyOpts });
+  const key = JSON.stringify({ card, pendingId, loadError, notStarted, opts, quoteState, history, historyOpts });
   if (!force && key === renderedKey) return;
   renderedKey = key;
   let view: HTMLElement;
@@ -238,6 +241,7 @@ function render(force = false): void {
   // 按 ID 打开的结果卡和历史详情同一套按钮（11-16 Jia）：成功 Download + Reuse，失败 Reuse + View request。
   // 没有能复用的（老网关不带原始请求、样例卡）就保留结果卡自己的 Download + View request。
   else if (card) view = (card.state === "succeeded" || card.state === "failed") && canReuse(card) ? withHistoryActions(renderCard(card, opts, actions)) : renderCard(card, opts, actions);
+  else if (notStarted !== undefined) view = notStartedCard(notStarted, typeof toolArgs?.model === "string" ? toolArgs.model : undefined);
   else if (loadError) view = errorCard(loadError, opts, actions);
   else view = loadingCard(pendingId);
   // 全屏时放宽到 720（设计稿全屏视图宽 720：历史列表、全部结果），其余照旧 560。
@@ -608,6 +612,7 @@ async function chooseReplacement(missing: string[]): Promise<void> {
           if (claudeNote) setNotice(claudeNote);
           else if (outcome === "context") setNotice("Replacement ready. Ask the chat for a new quote.");
           if (outcome === "failed" || outcome === "unsupported") setNotice("Couldn't pass the file on. Tell the chat which file to use instead.");
+          if (outcome === "unconfirmed") setNotice("Sent to the chat. If it doesn't show up there, tell the chat which file to use instead.");
         });
       },
       uploadInstead() {
@@ -968,6 +973,12 @@ app.ontoolresult = (params) => {
   if (list) {
     history = { data: list, loading: false };
     card = undefined;
+    render();
+    return;
+  }
+  const rejected = notStartedReason(params, { args: toolArgs });
+  if (rejected !== undefined) {
+    notStarted = rejected;
     render();
     return;
   }

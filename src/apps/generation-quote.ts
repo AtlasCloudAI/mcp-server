@@ -11,6 +11,7 @@ import { mayHaveStarted, rememberNotStarted } from "../services/not-started.js";
 import type { BalanceResponse } from "../types.js";
 import {
   CARD_META_KEY,
+  NOT_STARTED_META_KEY,
   type GenerationCardData,
   buildGenerationCardData,
   clientRendersCards,
@@ -368,7 +369,15 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
       );
     }
     if (!generationCardEnabled()) return result;
-    if (result.isError) return withAvailableBalance(result);
+    if (result.isError) {
+      const withBalance = await withAvailableBalance(result);
+      // 报价前、提交前就被拒（参数不对、file:// 链接、模型找不到……）：卡片原来只看到 isError，显示成
+      // 「Couldn't load this task · Error + Refresh」，标题和按钮都不对（11-18 WorkBuddy S07、N01）。
+      // 肯定没开始的打个标记，卡片画成「没开始、没扣费、原因」；可能已经提交的不标，照旧。
+      // 标记放 _meta 不放 structuredContent：客户端 SDK 出错时也按 outputSchema 校验结构化结果。
+      if (errorText?.type !== "text" || mayHaveStarted(errorText.text)) return withBalance;
+      return { ...withBalance, _meta: { ...(withBalance._meta ?? {}), [NOT_STARTED_META_KEY]: true } };
+    }
     const card = generationResultCard(tool, args, result.structuredContent);
     if (!card) return result;
     if (card.quote?.inputs?.length) {

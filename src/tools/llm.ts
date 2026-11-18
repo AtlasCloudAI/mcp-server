@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { llmApi, api , generationApi} from "../services/api-client.js";
 import { findModelByExactId } from "../services/doc-fetcher.js";
@@ -401,7 +402,7 @@ The server waits up to about 20 seconds for an unfinished task before answering,
 
 When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and for most clients any image is also attached as an image block. You should then:
 1. Present the image to the user. An image block, when attached, may or may not be displayed by the client, so do not assume the user has already seen it.
-2. Follow the presentation notes in the result — they depend on the client. Where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video.
+2. Follow the presentation notes in the result — they depend on the client. For a result the user is waiting for in this conversation (a generation they just asked for, or a file they asked to get), where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video. When you are only looking a task up (its status, its cost, or an older task from atlas_list_predictions), do not download anything: give the URL as a link.
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -454,7 +455,10 @@ Examples:
               maxRetries: budget.maxRetries,
             }
           );
-        const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
+        const waited = await waitForPrediction(fetchOnce);
+        // 工作流单查结果接口不给扣费：到历史账单里补（11-18 WorkBuddy H10、ChatGPT「Actual charge: Not reported」）。
+        const result = await withRecordedCharge(prediction_id, waited.result);
+        const { waitedSeconds } = waited;
         const status = result.data?.status || "unknown";
         annotateToolCall({
           model: sanitizeModel((result.data as Record<string, unknown> | undefined)?.model),

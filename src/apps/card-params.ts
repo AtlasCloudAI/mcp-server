@@ -92,6 +92,23 @@ export function settingsChips(
 
 // 工作流（Marketing Studio）的需求描述叫 user_prompt。
 const PROMPT_FIELDS = ["prompt", "user_prompt", "text", "text_prompt"] as const;
+
+/**
+ * 「Reuse prompt」认作提示词的字段：普通模型是 prompt，Marketing Studio 模板（atlascloud/studio/*）是
+ * user_prompt。11-18 WorkBuddy H10：Image ads 单只认 prompt，user_prompt 被当成普通参数，Reuse settings
+ * 的消息说「没有填提示词」。text 不算：语音合成的 text 是要念的内容，不是提示词。
+ */
+export const REUSE_PROMPT_FIELDS = ["prompt", "user_prompt"] as const;
+
+/** 原始请求里当提示词复用的那一项：字段名和去掉首尾空白的原文。没有就是 undefined。 */
+export function reusablePromptOf(params: Record<string, unknown> | undefined): { field: string; text: string } | undefined {
+  if (!params) return undefined;
+  for (const field of REUSE_PROMPT_FIELDS) {
+    const value = params[field];
+    if (typeof value === "string" && value.trim()) return { field, text: value.trim() };
+  }
+  return undefined;
+}
 const PROMPT_MAX = 280;
 
 /** 这一单要生成什么（需求文档 6.1「任务内容」）：提示词，过长截断。没有提示词就不显示。 */

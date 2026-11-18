@@ -574,9 +574,13 @@ export function createLibrary(initial: AssetCardData | undefined, deps: LibraryD
         say.pickedFromLibrary(userLang(deps.app), ready.length, labels),
         assetRefLines(ready)
       );
-      if (outcome === "sent" || outcome === "context") {
+      if (outcome === "sent" || outcome === "context" || outcome === "unconfirmed") {
         handedOff = selectionKey();
         deps.onHandedOff?.();
+      }
+      if (outcome === "sent" || outcome === "context") manualHandOff = undefined;
+      if (outcome === "unconfirmed") {
+        manualHandOff = `Sent to the chat. If it doesn't show up there, say: "Use ${labels} from my Asset Library."`;
       }
       const claudeNote = prefillNote(deps.app, outcome);
       if (claudeNote) deps.notice(claudeNote);

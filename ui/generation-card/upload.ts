@@ -963,8 +963,16 @@ export function createUploader(initial: UploadCardData, deps: UploaderDeps): Upl
     const names = done.map((i) => i.name).join(", ");
     // 地址已经进了模型上下文时，对话里只写文件名，免得一长串链接；进不去就把地址写进消息。
     const outcome = await handOff(deps.app, filesForModel(done), say.addedInCard(userLang(deps.app), done.length, names), fileRefLines(done));
-    if (outcome === "sent" || outcome === "context") {
+    if (outcome === "sent" || outcome === "context" || outcome === "unconfirmed") {
       handedOff = doneKey();
+      changed();
+    }
+    if (outcome === "sent" || outcome === "context") manualHandOff = undefined;
+    if (outcome === "unconfirmed") {
+      // 宿主没回成功、但多半已经发出去了（11-18 Cursor）：按钮照已发出，留一句没看到怎么办。
+      manualHandOff = done.every((i) => i.saved)
+        ? `Sent to the chat. If it doesn't show up there, say: "Use ${names} from my Asset Library."`
+        : "Sent to the chat. If it doesn't show up there, attach the files in the chat or paste a link to them.";
       changed();
     }
     const claudeNote = prefillNote(deps.app, outcome);

@@ -216,7 +216,9 @@ test("包装层：卡片关着原样返回；打开时挂卡片，客户端能�
       isError: true,
       content: [{ type: "text" as const, text: "Error" }],
     }))(VIDEO_ARGS, {});
-    assert.equal(failed._meta, undefined);
+    // 报错不挂卡片数据；肯定没开始的只多一个 not_started 标记（11-18 回归，卡片画「Not started」）。
+    assert.equal(failed._meta?.["atlascloud/card"], undefined);
+    assert.equal(failed._meta?.["atlascloud/not_started"], true);
   } finally {
     restore();
   }

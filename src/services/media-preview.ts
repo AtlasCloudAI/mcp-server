@@ -355,7 +355,9 @@ export function playbackGuidance(
   if (kinds.size > 0) {
     notes.push(
       "If this result is already shown in an Atlas card in the chat (with its own Download button), " +
-        "do not download it again: give the URL as a plain link and stop. Otherwise:"
+        "do not download it again: give the URL as a plain link and stop. The same goes when you only " +
+        "looked this task up (its status, its cost, or an older task from the history list) rather than " +
+        "delivering a result the user is waiting for: give the link and do not save the file. Otherwise:"
     );
   }
   if (kinds.has("image")) {

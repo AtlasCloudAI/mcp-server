@@ -38,7 +38,7 @@ export function isPrefillNote(text: string | undefined): boolean {
  * Claude 在问要不要替换）就请用户接受替换。写进上下文在 Claude 里不算数（模型看不到），不能说「已经好了」。
  * 不是 Claude 返回 undefined，照各自原来的提示。
  */
-export function prefillNote(app: App, outcome: "sent" | "context" | "failed" | "unsupported"): string | undefined {
+export function prefillNote(app: App, outcome: "sent" | "context" | "failed" | "unsupported" | "unconfirmed"): string | undefined {
   if (!hostPrefills(app)) return undefined;
   if (outcome === "sent") return PREFILLED_NOTE;
   if (outcome === "context") return PREFILL_ASK_NOTE;

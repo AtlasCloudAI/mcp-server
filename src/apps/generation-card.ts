@@ -70,6 +70,12 @@ export const GENERATION_CARD_URI = `ui://atlascloud/generation-card-${createHash
 /** 结果里给卡片的数据放在这个 _meta 键下：不进模型上下文，卡片拿不到时再从 structuredContent 推。 */
 export const CARD_META_KEY = "atlascloud/card";
 
+/**
+ * 生成工具报错、而且肯定没开始（报价前、提交前就被拒）时结果 _meta 里带这个键：卡片画「没开始、没扣费」，
+ * 不画「Couldn't load this task + Refresh」。ui/generation-card/card.ts 里同名常量要一致。
+ */
+export const NOT_STARTED_META_KEY = "atlascloud/not_started";
+
 /** 卡片刷新自己用的工具，只给卡片调（visibility: app），模型看不到。 */
 export const CARD_STATUS_TOOL = "atlas_card_status";
 

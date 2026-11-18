@@ -300,6 +300,36 @@ export function cardFromToolResult(
   };
 }
 
+/** 和 src/apps/generation-card.ts 的 NOT_STARTED_META_KEY 一致。 */
+export const NOT_STARTED_META_KEY = "atlascloud/not_started";
+
+// 宿主没转 _meta 时按原话认：这些都是报价、提交之前就拒的说法（schema-validator.ts、generation.ts、
+// input-link-check.ts、assets.ts、idempotency.ts）。可能已经提交的那几句（without a confirmed response、
+// still in progress、did not return a prediction ID）一个都不认。
+const NOT_STARTED_TEXT =
+  /no quote was made|was not submitted|nothing was (?:submitted or )?charged|no credits were spent|no billable request was submitted|not found\. use atlas_list_models|is a \w+ model, not an? \w+ model/i;
+const MAY_HAVE_STARTED_TEXT = /without a confirmed response|still in progress|did not return a prediction id/i;
+
+/**
+ * 生成工具在报价、提交之前就拒了这次调用：返回原因，卡片画「没开始、没扣费」（11-18 WorkBuddy S07、N01）。
+ * 服务端会在 _meta 里打 NOT_STARTED_META_KEY；宿主没转 _meta 时，按这次调用（带 model、不带 prediction_id
+ * 的是生成工具）和原话认。登录失效不算，那种走「需要重新连接」。不是这种结果返回 undefined。
+ */
+export function notStartedReason(
+  result: unknown,
+  call: { args?: Record<string, unknown> } = {}
+): string | undefined {
+  const r = record(result);
+  if (!r || r.isError !== true) return undefined;
+  const block = Array.isArray(r.content) ? r.content.map(record).find((c) => c?.type === "text") : undefined;
+  const text = typeof block?.text === "string" ? block.text.trim() : "";
+  if (isSignedOut(text) || MAY_HAVE_STARTED_TEXT.test(text)) return undefined;
+  const flagged = record(r._meta)?.[NOT_STARTED_META_KEY] === true;
+  const generationCall = typeof call.args?.model === "string" && call.args.prediction_id === undefined;
+  if (!flagged && !(generationCall && NOT_STARTED_TEXT.test(text))) return undefined;
+  return text || "Atlas Cloud didn't accept this request.";
+}
+
 /** 被限流后至少等这么久再让用户重试（设计稿「Retry in 30 s」）。 */
 export const RATE_LIMIT_WAIT_MS = 30_000;
 

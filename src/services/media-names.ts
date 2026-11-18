@@ -168,6 +168,26 @@ async function rememberAssetIdOfUrl(url: string, assetId: string, store?: Upload
   }
 }
 
+/**
+ * 资产库临时地址本身就带着资产编号：`https://atlas-asset-<env>.oss-<region>.aliyuncs.com/assetd/<env>/<tier>/asset_<id>/…?x-oss-signature=…`。
+ * 上面那份「地址 → 编号」的记录只留 7 天，过期后同一个地址就认不出了：11-18 复测模板单的 Reuse settings，
+ * 两个都还在的素材被报成「链接已失效」（H10）。所以记录查不到时，从地址路径里把编号读出来。
+ * 只认 OSS 和 atlascloud.ai 上 `/assetd/` 下的路径；读出来的编号交给网关和 AssetD，归属由它们校验。
+ */
+const LIBRARY_PATH = /^\/assetd\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/(asset_[A-Za-z0-9_-]{1,58})\//;
+
+export function assetIdFromLibraryUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return undefined;
+    const host = parsed.hostname.toLowerCase();
+    if (!host.endsWith(".aliyuncs.com") && host !== "atlascloud.ai" && !host.endsWith(".atlascloud.ai")) return undefined;
+    return LIBRARY_PATH.exec(parsed.pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 /** 这些地址里哪些是资产库的临时地址，对应哪个资产编号；查不到的不在结果里。 */
 export async function assetIdsOfUrls(urls: string[], store?: UploadTicketStore): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -183,5 +203,10 @@ export async function assetIdsOfUrls(urls: string[], store?: UploadTicketStore):
       }
     })
   );
+  for (const url of new Set(urls)) {
+    if (out.has(url)) continue;
+    const fromPath = assetIdFromLibraryUrl(url);
+    if (fromPath) out.set(url, fromPath);
+  }
   return out;
 }

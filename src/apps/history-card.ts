@@ -1,7 +1,7 @@
 import { getModels } from "../services/doc-fetcher.js";
 import type { HistoryItem } from "../response-schemas.js";
 import { asRecord } from "../services/json-record.js";
-import { rememberedMedia, rememberedMediaNames } from "../services/media-names.js";
+import { assetIdFromLibraryUrl, rememberedMedia, rememberedMediaNames } from "../services/media-names.js";
 import { inputsOf } from "./card-params.js";
 import { type PredictionSummary, chargedUsd } from "../tools/predictions.js";
 import {
@@ -177,7 +177,8 @@ export async function reusableInputs(
     const media = remembered.get(input.url);
     const name = media?.name ?? input.name;
     const field = input.field ? { field: input.field } : {};
-    if (media?.assetId) inputs.push({ name, ref: `asset://${media.assetId}`, ...field });
+    const assetId = media?.assetId ?? assetIdFromLibraryUrl(input.url);
+    if (assetId) inputs.push({ name, ref: `asset://${assetId}`, ...field });
     else if (!SIGNED_URL.test(input.url)) inputs.push({ name, ref: input.url, ...field });
     else unavailable += 1;
   }

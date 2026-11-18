@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withGenerationCard } from "../src/apps/generation-quote.js";
-import { NOT_STARTED_META_KEY as SERVER_KEY } from "../src/apps/generation-card.js";
+import { NOT_STARTED_META_KEY as SERVER_KEY, cardPrompt } from "../src/apps/generation-card.js";
+import { fullPrompt, reusableSettings } from "../src/apps/history-card.js";
+import { chargeFromBilling, withRecordedCharge } from "../src/services/recorded-charge.js";
+import type { HistoryItem, PredictionResponse } from "../src/response-schemas.js";
 import { NOT_STARTED_META_KEY, notStartedReason } from "../ui/generation-card/card.js";
 
 function withEnv(values: Record<string, string | undefined>): () => void {
@@ -76,4 +79,80 @@ test("1 卡片：认出没开始的报错，给原因；登录失效、可能已
   );
   // 不是报错
   assert.equal(notStartedReason({ content: [{ type: "text", text: "ok" }] }), undefined);
+});
+
+// ---------- 问题 3：模板单的 user_prompt 当提示词；按 ID 查工作流单拿不到实扣 ----------
+
+test("3 模板单：user_prompt 当提示词（Reuse prompt），不再混进参数", () => {
+  const item = {
+    ID: "75672d703a4c4df6abf9e44b4eb8995a",
+    model: "atlascloud/studio/product-visuals",
+    status: "completed",
+    requestBody: JSON.stringify({ model: "atlascloud/studio/product-visuals", user_prompt: "a red apple on a counter", aspect_ratio: "9:16" }),
+  } as unknown as HistoryItem;
+  assert.equal(fullPrompt(item), "a red apple on a counter");
+  assert.deepEqual(reusableSettings(item), { aspect_ratio: "9:16" });
+  assert.equal(cardPrompt({ user_prompt: "  a red apple  " }), "a red apple");
+  // 普通模型照旧认 prompt；prompt 优先
+  assert.equal(cardPrompt({ prompt: "p", user_prompt: "u" }), "p");
+  // 语音合成的 text 不当提示词
+  assert.equal(cardPrompt({ text: "hello" }), undefined);
+});
+
+test("3 账单 → 扣费状态：已付、部分付、退款、未结算、老后端", () => {
+  assert.deepEqual(chargeFromBilling({ amount: "0.2593", paymentStatus: 2 }), { price: 0.2593, charge_status: "charged" });
+  assert.deepEqual(chargeFromBilling({ amount: 0.1, paymentStatus: 4 }), { price: 0.1, charge_status: "partially_charged" });
+  assert.deepEqual(chargeFromBilling({ amount: "0.0043", paymentStatus: 3 }), { charge_status: "refunded" });
+  assert.deepEqual(chargeFromBilling({ amount: "0.2593", paymentStatus: 1 }), { charge_status: "pending" });
+  assert.deepEqual(chargeFromBilling({ amount: "0.2593" }), { price: 0.2593, charge_status: "charged" });
+  assert.deepEqual(chargeFromBilling({ amount: "0" }), { price: 0, charge_status: "not_charged" });
+  assert.equal(chargeFromBilling(undefined), undefined);
+  assert.equal(chargeFromBilling({ amount: "abc" }), undefined);
+});
+
+test("3 查结果没给扣费的已结束单：到历史账单里补上；给了的、没结束的不查", async () => {
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key" });
+  const calls: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    calls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        code: "200",
+        data: {
+          total: 2,
+          items: [
+            { ID: "other", model: "atlascloud/studio/product-visuals", status: "completed", billing: { amount: "9", paymentStatus: 2 } },
+            { ID: "75672d703a4c4df6abf9e44b4eb8995a", model: "atlascloud/studio/product-visuals", status: "completed", billing: { amount: "0.2593", paymentStatus: 2 } },
+          ],
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+  try {
+    const workflow = { data: { id: "75672d703a4c4df6abf9e44b4eb8995a", status: "completed", model: "atlascloud/studio/product-visuals", outputs: ["https://x.test/a.png"] } } as unknown as PredictionResponse;
+    const filled = await withRecordedCharge("75672d703a4c4df6abf9e44b4eb8995a", workflow, { fetcher });
+    const data = filled.data as Record<string, unknown>;
+    assert.equal(data.price, 0.2593);
+    assert.equal(data.charge_status, "charged");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]!, /\/model\/history\?/);
+    assert.match(calls[0]!, /model=atlascloud%2Fstudio%2Fproduct-visuals/);
+
+    // 接口给了扣费：不查
+    const priced = { data: { id: "a", status: "completed", price: 0.018, charge_status: "charged" } } as unknown as PredictionResponse;
+    assert.equal(await withRecordedCharge("a", priced, { fetcher }), priced);
+    // 还在跑：不查
+    const running = { data: { id: "75672d703a4c4df6abf9e44b4eb8995a", status: "processing" } } as unknown as PredictionResponse;
+    assert.equal(await withRecordedCharge("75672d703a4c4df6abf9e44b4eb8995a", running, { fetcher }), running);
+    // 历史里找不到：原样返回
+    const missing = { data: { id: "nope", status: "completed", model: "m/x" } } as unknown as PredictionResponse;
+    assert.equal(await withRecordedCharge("nope", missing, { fetcher }), missing);
+    assert.equal(calls.length, 2);
+    // 历史接口出错：原样返回
+    const broken = (async () => new Response("boom", { status: 500 })) as typeof fetch;
+    assert.equal(await withRecordedCharge("nope", missing, { fetcher: broken }), missing);
+  } finally {
+    restore();
+  }
 });

@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { llmApi, api , generationApi} from "../services/api-client.js";
 import { findModelByExactId } from "../services/doc-fetcher.js";
@@ -435,7 +436,10 @@ Examples:
               maxRetries: budget.maxRetries,
             }
           );
-        const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
+        const waited = await waitForPrediction(fetchOnce);
+        // 工作流单查结果接口不给扣费：到历史账单里补（11-18 WorkBuddy H10、ChatGPT「Actual charge: Not reported」）。
+        const result = await withRecordedCharge(prediction_id, waited.result);
+        const { waitedSeconds } = waited;
         const status = result.data?.status || "unknown";
         annotateToolCall({
           model: sanitizeModel((result.data as Record<string, unknown> | undefined)?.model),

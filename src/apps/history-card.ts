@@ -13,6 +13,7 @@ import {
   priceOf,
   settleWithin,
 } from "./generation-card.js";
+import { REUSE_PROMPT_FIELDS, reusablePromptOf } from "./card-params.js";
 
 // 历史列表卡（设计稿「全屏视图」里的「历史列表 prediction.list」）：用户问「我之前生成了什么」时，
 // atlas_list_predictions 的结果显示成一张列表卡，能展开成全屏、按状态筛选、点开看单条的作品卡。
@@ -78,9 +79,9 @@ const REUSE_PROMPT_MAX = 2000;
 /** 历史条目的完整提示词（「Reuse prompt」用），没有或不是字符串时为空。 */
 export function fullPrompt(item: HistoryItem): string | undefined {
   // 线上 requestBody 是 JSON 字符串：原来只认对象，真实数据里一条提示词都取不到（11-12 Jia 第二轮）。
-  const prompt = asRecord((item as Record<string, unknown>).requestBody)?.prompt;
-  if (typeof prompt !== "string" || !prompt.trim()) return undefined;
-  const text = prompt.trim();
+  // 模板单的提示词在 user_prompt（11-18 WorkBuddy H10）。
+  const text = reusablePromptOf(asRecord((item as Record<string, unknown>).requestBody))?.text;
+  if (!text) return undefined;
   return text.length > REUSE_PROMPT_MAX ? `${text.slice(0, REUSE_PROMPT_MAX - 1)}…` : text;
 }
 
@@ -119,7 +120,7 @@ function assetRefsIn(params: Record<string, unknown> | undefined): HistoryCardIn
     }
   };
   for (const [key, value] of Object.entries(params)) {
-    if (key === "prompt" || key === "model") continue;
+    if (key === "model" || (REUSE_PROMPT_FIELDS as readonly string[]).includes(key)) continue;
     visit(value, key, 0);
   }
   return out;
@@ -142,10 +143,13 @@ const MAX_SETTINGS = 12;
 export function reusableSettings(item: HistoryItem): Record<string, string | number | boolean> | undefined {
   const params = asRecord((item as Record<string, unknown>).requestBody);
   if (!params) return undefined;
+  const promptField = reusablePromptOf(params)?.field;
   const out: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(params)) {
     if (Object.keys(out).length >= MAX_SETTINGS) break;
     if (SKIP_SETTINGS.has(key)) continue;
+    // 当提示词交回去的那一项不再算参数：不然模板单的 user_prompt 混在参数里，消息还说「没有提示词」。
+    if (key === promptField) continue;
     if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
     else if (typeof value === "boolean") out[key] = value;
     else if (typeof value === "string") {

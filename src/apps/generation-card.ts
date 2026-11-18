@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { withRecordedCharge } from "../services/recorded-charge.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,7 +16,7 @@ import { isConfiguredMediaHost } from "../services/owned-storage.js";
 import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
 import { classifyOutput, type OutputKind } from "../services/media-preview.js";
 import type { MediaSource } from "../services/media-names.js";
-import { settingsChips } from "./card-params.js";
+import { reusablePromptOf, settingsChips } from "./card-params.js";
 import {
   completedAtOf,
   createdAtOf,
@@ -468,9 +469,9 @@ const CARD_PROMPT_MAX = 2000;
 
 /** 原始请求里的提示词，去掉首尾空白、超长截断；没有就是 undefined。 */
 export function cardPrompt(input: Record<string, unknown> | undefined): string | undefined {
-  const prompt = input?.prompt;
-  if (typeof prompt !== "string" || !prompt.trim()) return undefined;
-  const text = prompt.trim();
+  // 模板单的提示词在 user_prompt（11-18 WorkBuddy H10）。
+  const text = reusablePromptOf(input)?.text;
+  if (!text) return undefined;
   return text.length > CARD_PROMPT_MAX ? `${text.slice(0, CARD_PROMPT_MAX - 1)}…` : text;
 }
 
@@ -590,7 +591,8 @@ export function registerCardStatusTool(server: McpServer): void {
             }
           )
         );
-        const card = await predictionCardData(prediction_id, result);
+        // 工作流单查结果接口不给扣费：到历史账单里补，结果卡才有实扣（11-18 WorkBuddy H10）。
+        const card = await predictionCardData(prediction_id, await withRecordedCharge(prediction_id, result));
         return {
           _meta: { [CARD_META_KEY]: card },
           structuredContent: { card },

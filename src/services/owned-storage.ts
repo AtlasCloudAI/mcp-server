@@ -64,6 +64,35 @@ export function isConfiguredMediaHost(url: string): boolean {
 }
 
 /**
+ * 资产库（AssetD）的桶：生产 atlas-asset，dev / test 共用 atlas-asset-dev（2026-10-28、11-18 实测）。
+ * OSS 桶名全局唯一、谁都能注册新桶，所以这里按完整桶名认，不按前缀、更不按 .aliyuncs.com 后缀：
+ * 原来任何人的 OSS 桶只要路径长得像 /assetd/<env>/<tier>/asset_<编号>/，提交时都会被改写成
+ * assetd://asset_<编号>（11-18 上线前审查 M1）。MCP_ASSET_LIBRARY_HOSTS 追加主机（逗号分隔，
+ * 开头的点表示这个域名及其子域名），运维在 MCP_OWNED_MEDIA_HOSTS 里配的存储主机也认。
+ */
+const ASSET_LIBRARY_BUCKETS = new Set(["atlas-asset", "atlas-asset-dev"]);
+
+export function isAssetLibraryHost(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host === "atlascloud.ai" || host.endsWith(".atlascloud.ai")) return true;
+  if (host.endsWith(".aliyuncs.com")) {
+    const [bucket, endpoint] = host.split(".");
+    if (bucket && ASSET_LIBRARY_BUCKETS.has(bucket) && endpoint?.startsWith("oss-")) return true;
+  }
+  const extra = (process.env.MCP_ASSET_LIBRARY_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  if (extra.some((allowed) => (allowed.startsWith(".") ? host.endsWith(allowed) : host === allowed))) return true;
+  return isConfiguredMediaHost(url);
+}
+
+/**
  * Hosts whose outputs the platform hands over first and copies to Atlas storage
  * a little later. Only aiproxy's slow-CDN path does that (Volcengine/BytePlus
  * TOS, used by Seedance and Seedream); every other adapter copies before it

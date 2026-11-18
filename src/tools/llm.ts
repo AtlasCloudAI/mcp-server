@@ -13,9 +13,10 @@ import {
   chatUsageCostUsd,
   applyDailyAutoSubmitBudget,
   evaluateChatSpend,
-  recordAutoSpend,
+  settleAutoSpend,
   formatUsd,
   type SpendDecision,
+  type AutoSpendReservation,
   confirmationValidSeconds,
   confirmationReuseNotice,
   confirmationValidityNotice,
@@ -253,7 +254,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             resolved_model: found.model,
             request_body: body,
           };
-          let spend: SpendDecision | undefined;
+          let spend: (SpendDecision & { reservation?: AutoSpendReservation }) | undefined;
           if (!confirmation_token && !confirmed) {
             spend = await applyDailyAutoSubmitBudget(evaluateChatSpend(found, { messages, max_tokens }));
           }
@@ -313,10 +314,11 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               })
           );
 
-          if (spend?.autoSubmit) {
-            // 记进今天的自动执行总账（空回答也扣了钱）；算不出实际用量就按最坏情况记。
+          if (spend?.reservation) {
+            // 放行前已经按最坏情况预占了今天的额度：按实际用量退回差额（空回答也扣了钱）；
+            // 算不出实际用量就保留预占。失败、超时走不到这里，预占同样保留。
             const used = response.usage ? chatUsageCostUsd(found, response.usage) : null;
-            await recordAutoSpend(used ?? spend.quotedUsd ?? 0);
+            await settleAutoSpend(spend.reservation, used);
           }
 
           const choice = response.choices?.[0];
@@ -551,7 +553,8 @@ Examples:
         if (!isActive(status) && !isFinished(status) && status !== "failed" && status !== "unknown") {
           lines.push(
             `\nStatus "${status}" is not a running state. Treat it as final: stop polling, tell the ` +
-              `user what it says, and do not resubmit unless they ask (failed or canceled jobs are not billed).`
+              `user what it says, and do not resubmit unless they ask. For what it cost, go by the charge line above ` +
+              `(charge_status) or charged_usd in atlas_list_predictions: a failed job is usually not billed, but can be partly billed.`
           );
         }
 

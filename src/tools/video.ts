@@ -10,6 +10,7 @@ import {
   formatGenerationPricing,
   issueGenerationConfirmation,
   resolveConfirmedIdempotencyKey,
+  alreadySubmittedLine,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { defaultRouteGuidance } from "../services/default-models.js";
@@ -75,7 +76,7 @@ export function registerVideoTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. A job that ends in status "failed" is not billed. A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
@@ -179,6 +180,7 @@ Returns:
                   `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                 `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
+                  `${alreadySubmittedLine(confirmation)}` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],

@@ -7,7 +7,7 @@ import {
 } from "node:crypto";
 import { z } from "zod";
 import type { ModelPrice } from "../types.js";
-import { idempotencyFingerprint, peekIdempotent } from "./idempotency.js";
+import { type StoredRecord, idempotencyFingerprint, peekIdempotent, storedPredictionId } from "./idempotency.js";
 import { getRequestContext } from "./request-context.js";
 import { annotateToolCall } from "./tool-call-telemetry.js";
 import { InMemoryUploadTicketStore, type UploadTicketStore } from "./upload-ticket-store.js";
@@ -38,6 +38,18 @@ export interface GenerationConfirmationQuote {
   confirmationToken: string;
   expiresAt: string;
   pricing: ConfirmedModelPrice;
+  /**
+   * 同样的请求已经提交过（卡片上确认过、或模型确认过）：这份报价沿用那一单的幂等键，确认时拿回那一单，
+   * 不会再建一单、再扣一次（11-18 上线前审查 M5）。
+   */
+  alreadySubmitted?: AlreadySubmitted;
+}
+
+export interface AlreadySubmitted {
+  /** submitted：拿到了任务号；in_progress：提交还没回来；unconfirmed：没拿到确定答复，可能在跑也可能没有。 */
+  status: "submitted" | "in_progress" | "unconfirmed";
+  submittedAt: string;
+  predictionId?: string;
 }
 
 export class GenerationConfirmationError extends Error {
@@ -100,7 +112,8 @@ export async function issueGenerationConfirmation(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<GenerationConfirmationQuote> {
-  idempotencyKey = await unusedIdempotencyKey(toolName, idempotencyKey, request);
+  const chosen = await unusedIdempotencyKey(toolName, idempotencyKey, request);
+  idempotencyKey = chosen.idempotencyKey;
   // 只报价、没提交：这是正常的第一步，不是错误。取值沿用 CLI 的 estimate。
   annotateToolCall({ execution_mode: "estimate", stage: "quote" });
   const pricing = currentPricing(modelPrice);
@@ -130,23 +143,123 @@ export async function issueGenerationConfirmation(
     expiresAt: new Date(expiresAt).toISOString(),
     pricing,
     idempotencyKey,
+    ...(chosen.alreadySubmitted ? { alreadySubmitted: chosen.alreadySubmitted } : {}),
   };
 }
 
 /**
- * 报价用的幂等键已经提交过另一单（参数不同）时，换一个新键报价。模型常拿示例 UUID 当键，
- * 和自己以前用过的撞上，确认时才报冲突，用户只好再确认一轮（11-04 问题 51）。换掉的键写进
- * 报价结果；确认时模型就算还传旧键，也按报价记录找回新键。参数相同的（已提交的单再报一次价）
- * 照旧用原键，确认时拿回原来那一单，不会重复扣钱。
+ * 报价用哪个幂等键。
+ *
+ * - 键已经提交过另一单（参数不同）：换新键。模型常拿示例 UUID 当键，和自己以前用过的撞上，确认时才报冲突，
+ *   用户只好再确认一轮（11-04 问题 51）。换掉的键写进报价结果；确认时模型就算还传旧键，也按报价记录找回新键。
+ * - 键被上游拒收过（rejected，比如余额不足）或报价作废了（canceled）：换新键。原来参数相同就沿用，充值后
+ *   重新报价拿到的还是那个被拒过的键，确认一次被拒一次（11-18 上线前审查 M4）。
+ * - 参数相同、已经提交过（拿到任务号、还在提交、结果不确定）：沿用原键，确认时拿回原来那一单，不重复扣钱。
+ * - 调用方没带键或带了个新键，但同一用户、同一工具、同样参数刚提交过（SAME_JOB_WINDOW_SECONDS 内）：也沿用
+ *   那一单的键，并在报价里写明已经提交过（11-18 上线前审查 M5：卡片上已确认过，模型不知道，又报一次价拿到
+ *   新键，用户再点确认就成了第二单）。atlas_chat 不在此列：同一句话再问一遍是正常用法。
  */
 async function unusedIdempotencyKey(
   toolName: string,
   idempotencyKey: string,
   request: Record<string, unknown>
-): Promise<string> {
-  const record = await peekIdempotent(toolName, idempotencyKey).catch(() => undefined);
-  if (!record || record.fingerprint === idempotencyFingerprint(request)) return idempotencyKey;
-  return randomUUID();
+): Promise<{ idempotencyKey: string; alreadySubmitted?: AlreadySubmitted }> {
+  const fingerprint = idempotencyFingerprint(request);
+  // 两样并行查：报价记录存储挂住时（Redis 断线）报价最多多等一次超时。
+  const [record, recent] = await Promise.all([
+    peekIdempotent(toolName, idempotencyKey).catch(() => undefined),
+    recentSubmission(toolName, fingerprint),
+  ]);
+  if (record && record.fingerprint === fingerprint) {
+    const submitted = alreadySubmittedOf(record);
+    if (submitted) return { idempotencyKey, alreadySubmitted: submitted };
+  }
+  const usable = !record || (record.fingerprint === fingerprint && record.state !== "rejected" && record.state !== "canceled");
+  if (recent && recent.idempotencyKey !== idempotencyKey) return recent;
+  return { idempotencyKey: usable ? idempotencyKey : randomUUID() };
+}
+
+function alreadySubmittedOf(record: StoredRecord<unknown>): AlreadySubmitted | undefined {
+  const submittedAt = new Date(record.createdAt).toISOString();
+  if (record.state === "completed") {
+    const predictionId = storedPredictionId(record.result);
+    return predictionId ? { status: "submitted", submittedAt, predictionId } : { status: "unconfirmed", submittedAt };
+  }
+  if (record.state === "pending") return { status: "in_progress", submittedAt };
+  if (record.state === "uncertain") return { status: "unconfirmed", submittedAt };
+  return undefined;
+}
+
+// ---- 最近提交过的请求（M5）----
+//
+// 「同一用户 + 工具 + 请求指纹 → 最近一次确认用的幂等键」。确认时记（resolveConfirmedIdempotencyKey），
+// 报价时查；这一单现在是什么状态再去幂等记录里看（被拒收、作废的不算）。只留一小段时间：隔久了用户
+// 想把同样的请求再跑一次是正常的。
+const SAME_JOB_WINDOW_SECONDS = 15 * 60;
+const SAME_JOB_EXEMPT_TOOLS = new Set(["atlas_chat"]);
+
+function submissionIndexKey(subject: string, toolName: string, requestFingerprint: string): string {
+  return `submitted:${createHash("sha256").update([subjectHash(subject), toolName, requestFingerprint].join("\n")).digest("hex")}`;
+}
+
+async function rememberSubmission(toolName: string, requestFingerprint: string, idempotencyKey: string): Promise<void> {
+  if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return;
+  const { subject } = runtime();
+  try {
+    await withTimeout(
+      quoteStore().put(submissionIndexKey(subject, toolName, requestFingerprint), idempotencyKey, SAME_JOB_WINDOW_SECONDS),
+      QUOTE_STORE_TIMEOUT_MS
+    );
+  } catch (error) {
+    console.error(`[quote-store] submission put failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function recentSubmission(
+  toolName: string,
+  requestFingerprint: string
+): Promise<{ idempotencyKey: string; alreadySubmitted: AlreadySubmitted } | undefined> {
+  if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return undefined;
+  const { subject } = runtime();
+  try {
+    const key = await withTimeout(
+      quoteStore().get(submissionIndexKey(subject, toolName, requestFingerprint)),
+      QUOTE_STORE_TIMEOUT_MS
+    );
+    if (!key) return undefined;
+    const record = await peekIdempotent(toolName, key);
+    if (!record || record.fingerprint !== requestFingerprint) return undefined;
+    const alreadySubmitted = alreadySubmittedOf(record);
+    return alreadySubmitted ? { idempotencyKey: key, alreadySubmitted } : undefined;
+  } catch (error) {
+    console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+/** 接在报价文字里幂等键那几行后面：没提交过就是空串。 */
+export function alreadySubmittedLine(confirmation: { alreadySubmitted?: AlreadySubmitted }): string {
+  const notice = alreadySubmittedNotice(confirmation.alreadySubmitted);
+  return notice ? `${notice}\n` : "";
+}
+
+/** 报价结果里那一行：同样的请求已经提交过，确认会拿回那一单。 */
+export function alreadySubmittedNotice(submitted: AlreadySubmitted | undefined): string {
+  if (!submitted) return "";
+  const what =
+    submitted.status === "submitted"
+      ? `was already submitted at ${submitted.submittedAt} as prediction ${submitted.predictionId}`
+      : submitted.status === "in_progress"
+        ? `is already being submitted (started at ${submitted.submittedAt})`
+        : `was already submitted at ${submitted.submittedAt}, but Atlas Cloud did not confirm whether it started`;
+  return (
+    `- **Already submitted**: the same request (same model and parameters) ${what}. This quote keeps that ` +
+    `job's idempotency_key, so confirming it returns that job instead of starting and billing a second one. ` +
+    (submitted.predictionId
+      ? `Check it with atlas_get_prediction and tell the user. `
+      : `Check atlas_list_predictions for it and tell the user before anything else. `) +
+    `If the user really wants another run of the same request, change an argument (for example the prompt or a seed) and quote again.`
+  );
 }
 
 // 令牌只带版本、过期时间和一段 128 位的签名，其余（用户、工具、幂等键、请求与价格指纹）
@@ -311,6 +424,19 @@ export async function resolveConfirmedIdempotencyKey(
     quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint)
   );
   if (record) {
+    // 报价记录指向的键被上游拒收过（余额不足之类）：这份报价不能再确认，换回那个键只会再被拒一次。
+    // 原来模型带着新键来确认，也会按记录换回旧键，充值后怎么确认都卡在「换新键」（11-18 上线前审查 M4）。
+    // 卡片认 "rejected by Atlas Cloud before it started" 这几个词，会换新键重新报价。
+    const state = (await peekIdempotent(toolName, record.idempotencyKey).catch(() => undefined))?.state;
+    if (state === "rejected") {
+      throw new GenerationConfirmationError(
+        "The earlier quote for these exact arguments was rejected by Atlas Cloud before it started, so nothing " +
+          "was charged and that quote can't be confirmed again. Call again without confirmed or confirmation_token " +
+          "to get a new quote, show it to the user, and wait for their confirmation. No billable request was submitted."
+      );
+    }
+    // 不等它写完：记不下来只是少一层防重，不能拖住确认（内存和 Redis 的写都在调用时就发出了）。
+    void rememberSubmission(toolName, requestFingerprint, record.idempotencyKey);
     // 幂等键现在可以不传（服务端在报价时生成）：没带就用报价记录里那个，不算「换了一单」。
     if (idempotencyKey === undefined || record.idempotencyKey === idempotencyKey) {
       return { idempotencyKey: record.idempotencyKey };
@@ -326,6 +452,7 @@ export async function resolveConfirmedIdempotencyKey(
   }
   if (token && idempotencyKey !== undefined) {
     verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
+    void rememberSubmission(toolName, requestFingerprint, idempotencyKey);
     return { idempotencyKey };
   }
   throw new GenerationConfirmationError(

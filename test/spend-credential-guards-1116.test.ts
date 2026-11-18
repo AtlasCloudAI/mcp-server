@@ -10,7 +10,6 @@ import { runWithRequestContext, type AtlasRequestContext } from "../src/services
 import {
   applyDailyAutoSubmitBudget,
   dailyAutoSubmitBudgetUsd,
-  recordAutoSpend,
   type SpendDecision,
 } from "../src/services/spend-policy.js";
 import { InMemoryUploadTicketStore, type UploadTicketStore } from "../src/services/upload-ticket-store.js";
@@ -55,8 +54,8 @@ test("M1: requests under the per-request limit stop once the user's daily auto-r
   withEnv(t, { MCP_AUTOSUBMIT_DAILY_MAX_USD: "0.05" });
   const store = new InMemoryUploadTicketStore();
   await runWithRequestContext(context("user-a", store), async () => {
+    // 放行时已经按最坏情况预占了 0.03（11-18 审查 M6），不用等跑完再记。
     assert.equal((await applyDailyAutoSubmitBudget(cheap)).autoSubmit, true);
-    await recordAutoSpend(0.03);
     const second = await applyDailyAutoSubmitBudget(cheap);
     assert.equal(second.autoSubmit, false);
     assert.deepEqual(second.dailyBudget, { budgetUsd: 0.05, usedUsd: 0.03 });

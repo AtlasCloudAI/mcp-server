@@ -243,7 +243,19 @@ export async function request<T>(
 
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("application/json")) {
-        const value: unknown = await response.json();
+        // 2xx 但响应体读不懂（JSON 写坏了、读到一半断了）：请求已经到了平台，只是答复不可用。
+        // 原样抛 SyntaxError 的话，幂等层和报错文案都不把它算作「发出去没拿到答复」，写请求会被
+        // 当成没开始、没扣费，用户再交一单就重复扣费（11-18 上线前审查 M2）。包成 502，和其他
+        // 「答复不可用」一样处理：读请求照常重试，写请求报「可能已经提交，先查再重试」。
+        let value: unknown;
+        try {
+          value = await response.json();
+        } catch (parseError) {
+          console.error(
+            `[atlascloud] unreadable JSON response status=${response.status}: ${parseError instanceof Error ? parseError.name : "error"}`
+          );
+          throw new ApiRequestError("Atlas Cloud returned an unreadable response", 502);
+        }
         if (responseSchema) {
           const parsed = responseSchema.safeParse(value);
           if (!parsed.success) {

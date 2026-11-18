@@ -2,7 +2,7 @@
 name: seedance-skill
 description: >-
   Plan and generate controllable Seedance video using Seedream 5.0 Pro
-  storyboards and Seedance 2.0 today, with a Seedance 2.5 route when available.
+  storyboards and Seedance 2.5 (Seedance 2.0 as the fallback).
   Use for consistent people, products, objects, food, or scenes; storyboard-to-
   video; reference-to-video; first-and-last-frame image-to-video; extensions;
   and Atlas Cloud media generation.
@@ -10,7 +10,7 @@ display_name: "Seedance 视频分镜"
 display_name_en: "Seedance Storyboard to Video"
 description_zh: "用 Seedream 出分镜、Seedance 出片，做人物/产品/场景一致的可控视频，支持参考图生视频、首尾帧和续写。"
 description_en: "Storyboard with Seedream and shoot with Seedance for controllable video with consistent people, products and scenes, including reference-to-video, first-and-last-frame and extensions."
-version: 2.5.0
+version: 2.6.0
 author: Atlas Cloud
 ---
 
@@ -41,8 +41,9 @@ route first, then enable only the preparation modules the job needs.
 | A bridge between two finished clips | Seamless transition | Two videos | Generated bridge content between them |
 | Motion, blocking, and camera taken from a 3D preview | Blockout reference | Coarse or fine blockout video plus look references | Final render following the blockout's timing and staging |
 
-Use Seedance 2.0 as the executable default. Offer a Seedance 2.5 whole-short
-route only when the selected provider exposes that model and its actual limits.
+Use Seedance 2.5 as the executable default, and Seedance 2.0 as the fallback
+when the selected provider does not expose 2.5 or the job needs a 2.0-only
+parameter. Check the actual limits of the model you submit to.
 
 The last four routes depend on capabilities that differ per model and per
 provider. Verify availability before offering one; see
@@ -231,8 +232,10 @@ Read the reference matching the job:
    conversation, and inspect it before any video request.
 2. For a supplied storyboard, display the input unless it is already visible,
    then verify it fits the chosen route.
-3. If the board passes review, generate one representative video pass without
-   waiting for approval. Otherwise refine or regenerate the board first.
+3. If the board passes review, quote one representative video pass (model,
+   duration, resolution, estimated cost) and wait for the user's explicit yes in
+   a new message before submitting it. Otherwise refine or regenerate the board
+   first. Quote and confirm every later billable segment the same way.
 4. Review identity, locks, stage end states, composition, motion, seam, and audio
    in that order, and stop at the first failure — later checks are wasted effort
    on a wrong identity. Regenerate only the failed shot or segment.
@@ -245,13 +248,24 @@ system.
 ## Atlas execution layer
 
 Keep creative route selection independent from how a job is submitted. The
-default models are Seedream 5.0 Pro for stills and Seedance 2.0 for video;
-users may override them only after verifying route support.
+default models are Seedream 5.0 Pro for stills and Seedance 2.5 for video
+(`bytedance/seedance-2.5/text-to-video`, `.../image-to-video`,
+`.../reference-to-video`), falling back to Seedance 2.0 when 2.5 is not offered
+or cannot take the job. A model the user names always wins; verify that it
+supports the route first.
 
-**Inside the Atlas Cloud plugin (Codex, ChatGPT, Claude, WorkBuddy)** the Atlas
-MCP tools in your tool list *are* the Atlas route — use them for every stage and
-ignore the API-key, Skill-install and runner instructions below, which are for
-standalone setups:
+### With Atlas MCP tools (the plugin or a connector)
+
+This covers the Atlas Cloud plugin in Codex, Claude Code and Cursor and the
+Atlas Cloud connector in ChatGPT, Claude, WorkBuddy and other MCP clients.
+Whenever Atlas MCP generation tools (`atlas_generate_image`,
+`atlas_generate_video`, ...) are in your tool list, they *are* the Atlas route
+and the only generation route, because they quote every job before it runs. Use
+them for every stage and ignore the API-key, Skill-install and runner
+instructions below, which are for standalone setups. Never run
+`scripts/generate.mjs` and never call the Atlas REST API yourself: both submit
+straight away, with no quote. Use the runner only when the user explicitly asks
+for a terminal, CI, or batch run.
 
 - Generate every still — storyboard boards, keyframes, reference images — with
   `atlas_generate_image` on an Atlas image model (default Seedream 5.0 Pro).
@@ -260,21 +274,34 @@ standalone setups:
   shown results on that basis.
 - Each generation tool returns a live quote and stops. When you relay the first
   quote, also say which Atlas model will make each later stage (for example
-  "storyboard: Seedream 5.0 Pro; video: Seedance 2.0") and that each step is
-  quoted before it runs; then wait for a yes. Do not ask the user to choose
-  models or a budget up front.
-- Upload local references with `atlas_get_upload_url`; poll with
+  "storyboard: Seedream 5.0 Pro; video: Seedance 2.5") and that each step is
+  quoted before it runs; then wait for a yes in a new message. Do not ask the
+  user to choose models or a budget up front. When you picked the model, pass
+  `why_this_model` with one short reason.
+- In apps that show Atlas cards, the quote is a card with a confirm button:
+  point the user to it. If they confirm on the card, the card submits and
+  tracks the job, so do not call the generation tool again for it. If they
+  decline or change the request, withdraw the old quote with
+  `atlas_cancel_quote`.
+- Upload local references with `atlas_get_upload_url`; for a file already in
+  the user's Atlas Asset Library, use `atlas_search_assets` and then
+  `atlas_use_assets` (or pass `asset://<asset_id>`). Poll with
   `atlas_get_prediction` (call it again right away — the server already waits
   between checks), and keep polling in the same turn until each stage finishes.
+- If the Atlas tools are missing, the plugin or connector is not signed in:
+  tell the user how to sign in. Do not install a Skill, look for an API key, or
+  run `scripts/generate.mjs` to get around it — those routes submit with no
+  quote.
 
-In an agent conversation, use the **Atlas Cloud Skill** as the default direct
+### Without Atlas MCP tools
+
+In an agent conversation, use the **Atlas Cloud Skill** as the direct
 generation route. It can discover a model, upload local media, submit an image
-or video request, poll, and retrieve outputs. Report `Execution: atlas-skill`
-only when it actually submitted the generation.
-
-Use `atlas-mcp` only when the user explicitly selects MCP and its generation
-tools are exposed. Use `atlas-cli` only when the user explicitly selects a
-terminal, script, CI, or batch run. If the Atlas Cloud Skill is missing, help
+or video request, poll, and retrieve outputs. Before each billable submission,
+tell the user the model, duration, resolution, and estimated cost, and wait for
+an explicit yes. Report `Execution: atlas-skill` only when it actually
+submitted the generation. Use `atlas-cli` only when the user explicitly selects
+a terminal, script, CI, or batch run. If the Atlas Cloud Skill is missing, help
 install `AtlasCloudAI/atlas-cloud-skills` before selecting a fallback.
 
 Before reporting that an Atlas Cloud API key is missing, check the credentials
@@ -297,8 +324,9 @@ instead of saying the user has no key.
 Apply these rules to every image and video generation:
 
 1. After submission, record the prediction ID and logical stage immediately.
-2. Treat `starting`, `queued`, `pending`, and `processing` as active. Poll the
-   same ID every 2 seconds; never submit another task for that stage.
+2. Treat `starting`, `queued`, `pending`, and `processing` as active. Keep
+   polling the same ID (see the interval below); never submit another task for
+   that stage.
 3. Treat `completed` and `succeeded` as successful terminal states. Download and
    inspect the output before starting a dependent stage.
 4. Treat `failed`, `timeout`, and `canceled` as terminal failures. A new task
@@ -310,9 +338,10 @@ Apply these rules to every image and video generation:
 6. Interpret `continue` as “resume the existing task,” never as permission to
    retry. Do not submit video while its required storyboard is still active.
 
-The 2-second interval applies to every Atlas execution route in this workflow.
-For `atlas-skill`, repeat its prediction-result step with the same ID. For
-`atlas-mcp`, call `atlas_get_prediction` again with the same ID as soon as it answers (it waits up to about 20 seconds per call). The
+Poll every 2 seconds on the Skill, CLI and REST routes: for `atlas-skill`,
+repeat its prediction-result step with the same ID. For `atlas-mcp`, call
+`atlas_get_prediction` again with the same ID as soon as it answers (it waits
+up to about 20 seconds per call). The
 MCP server performs a single status lookup per tool call; the agent owns the
 loop. The bundled REST and CLI adapters enforce the interval in code. A status
 lookup is read-only and must never be replaced with another generation call.
@@ -335,6 +364,12 @@ GRID_ONLY=1 node scripts/generate.mjs scripts/myjob.json
 # Run only the first independent clip or segment as a quality gate.
 CLIPS_MAX=1 node scripts/generate.mjs scripts/myjob.json
 SEGS_MAX=1 node scripts/generate.mjs scripts/myjob.json
+
+# Every run, GRID_ONLY and REFS_ONLY included, first prints a [spend-plan] line
+# (new image jobs and billed video seconds) and stops there. Show the user that
+# plan and its estimated cost; after they approve, run again with the totals.
+CONFIRM_SPEND_IMAGES=1 GRID_ONLY=1 node scripts/generate.mjs scripts/myjob.json
+CONFIRM_SPEND_SECONDS=40 node scripts/generate.mjs scripts/myjob.json
 ```
 
 ```json

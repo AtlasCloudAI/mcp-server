@@ -197,3 +197,30 @@ test("5 handOff：Cursor 这种没声明、回 isError 的宿主算 unconfirmed�
     "unsupported"
   );
 });
+
+// ---------- 问题 6：Cursor 历史卡出来以后，模型把最近 12 单的文件都下载到本地 ----------
+
+test("6 下载文件的指引只给正在等的结果：查状态、查价、翻历史不下载", async () => {
+  const { playbackGuidance } = await import("../src/services/media-preview.js");
+  const text = playbackGuidance(new Set(["image"]), { profile: "other" }) ?? "";
+  assert.match(text, /only\s+looked this task up \(its status, its cost, or an older task from the history list\)/);
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+  const { createAtlasCloudServer } = await import("../src/server.js");
+  const restore = withEnv({ ATLASCLOUD_API_KEY: "test-key" });
+  try {
+    const server = createAtlasCloudServer("remote");
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t", version: "1" });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const { tools } = await client.listTools();
+    const get = tools.find((tool) => tool.name === "atlas_get_prediction")?.description ?? "";
+    const list = tools.find((tool) => tool.name === "atlas_list_predictions")?.description ?? "";
+    assert.match(get, /For a result the user is waiting for in this conversation/);
+    assert.match(get, /When you are only looking a task up[^.]*do not download anything/);
+    assert.match(list, /Do not download, save or re-post the listed files/);
+    await client.close();
+  } finally {
+    restore();
+  }
+});

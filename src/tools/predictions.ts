@@ -133,6 +133,8 @@ Use this to find a task ID the user lost, to see what was generated earlier in a
 
 Each entry gives prediction_id, model, status, created_at, where it was started (source, e.g. "MCP · ChatGPT", "MCP · Claude Code", "Website", "API"), the amount actually charged (charged_usd, once the task is billed), the output URLs (when finished), the error text (when failed) and a prompt snippet. When the user asks what a task cost, answer from charged_usd, not from the earlier quote. For the full record of one task, call atlas_get_prediction with its prediction_id.
 
+The output URLs are for reference. Do not download, save or re-post the listed files, and do not call atlas_get_prediction for each of them: an Atlas history card or the links are enough. Fetch a single task's file only when the user asks for that file.
+
 One account is often used from several apps at the same time, so the list can include tasks started elsewhere. When the user asks what this conversation generated or spent, count the tasks whose source is this app and mention any others separately.
 
 Args:

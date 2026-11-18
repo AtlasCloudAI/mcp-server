@@ -10,11 +10,13 @@ import {
 } from "@modelcontextprotocol/ext-apps";
 import { handOff, messagingAvailable } from "./handoff.js";
 import { cardTransport } from "./echo-transport.js";
-import { canExpandIn, fullscreenWasRefused, toolResultKey } from "./display.js";
+import { canExpandIn, createReplayGuard, fullscreenWasRefused, toolResultKey } from "./display.js";
 import {
+  type CancelledCall,
   type CardData,
   type CardMedia,
   billingUrlFor,
+  cancelledCall,
   cardFromToolResult,
   earliestTime,
   fileNameOf,
@@ -24,7 +26,7 @@ import {
   newIdempotencyKey,
   notStartedReason,
 } from "./card.js";
-import { type CardActions, type ViewOptions, button, errorCard, h, loadingCard, notStartedCard, renderCard, tickTimers } from "./view.js";
+import { type CardActions, type ViewOptions, button, cancelledCard, errorCard, h, loadingCard, notStartedCard, renderCard, tickTimers } from "./view.js";
 import {
   type QuoteState,
   createQuoteActions,
@@ -48,6 +50,8 @@ import { type AssetCardData, type Library, type LibraryDeps, assetsForModel, ass
 import { PREFILL_NOTE_MS, isPrefillNote, prefillNote, say, sendForUser, userLang } from "./voice.js";
 
 const STATUS_TOOL = "atlas_card_status";
+/** 工具结果里认不出卡片数据时显示的话（M10：原来静默，卡片一直转圈）。 */
+const UNREADABLE_RESULT = "This card couldn't read the result from Atlas Cloud. The reply in the chat has the details.";
 const SITE_URL = "https://www.atlascloud.ai";
 /** 卡片自己最多等这么久，之后显示「Still generating」，用户点 Keep waiting 再等一轮。 */
 const POLL_BUDGET_MS = 10 * 60 * 1000;
@@ -64,6 +68,8 @@ let pendingId: string | undefined;
 let loadError: string | undefined;
 // 生成工具在报价前就拒了这次调用：原因（notStartedReason），画「没开始、没扣费」卡。
 let notStarted: string | undefined;
+// 宿主取消了这次工具调用（审批框里拒绝、超时……）：画「已取消」卡，不再一直转圈（M10）。
+let cancelled: CancelledCall | undefined;
 let stalled = false;
 // 刷新时 Atlas 登录失效了（设计稿 v2「需要重新连接」）：停止自己刷新，等用户点 Reconnect 再查。
 let signedOut = false;
@@ -86,6 +92,9 @@ let library: Library | undefined;
 let libraryGen = 0;
 // 上一个资产库工具结果：宿主重复发同一个结果时不重建（11-13 WorkBuddy 发了两次，选中被新实例吞掉）。
 let lastAssetsResult = "";
+// 生成卡的工具结果重放（WorkBuddy 会把同一个 tool-result 再发一次）：认出来就不再 accept，免得报价卡从
+// submitting / verifying、进度卡被打回待确认。
+const isReplayedResult = createReplayGuard();
 // 宿主声明了全屏但请求时没给：之后按不能全屏显示（翻页条），见 display.ts。
 let fullscreenRefused = false;
 
@@ -231,7 +240,7 @@ function render(force = false): void {
   // 内容没变就不重画：正在播的视频、音频不能被打断。
   const opts = viewOptions();
   const historyOpts = history ? historyOptions() : undefined;
-  const key = JSON.stringify({ card, pendingId, loadError, notStarted, opts, quoteState, history, historyOpts });
+  const key = JSON.stringify({ card, pendingId, loadError, notStarted, cancelled, opts, quoteState, history, historyOpts });
   if (!force && key === renderedKey) return;
   renderedKey = key;
   let view: HTMLElement;
@@ -241,13 +250,25 @@ function render(force = false): void {
   // 按 ID 打开的结果卡和历史详情同一套按钮（11-16 Jia）：成功 Download + Reuse，失败 Reuse + View request。
   // 没有能复用的（老网关不带原始请求、样例卡）就保留结果卡自己的 Download + View request。
   else if (card) view = (card.state === "succeeded" || card.state === "failed") && canReuse(card) ? withHistoryActions(renderCard(card, opts, actions)) : renderCard(card, opts, actions);
+  else if (cancelled) view = renderCancelled(cancelled);
   else if (notStarted !== undefined) view = notStartedCard(notStarted, typeof toolArgs?.model === "string" ? toolArgs.model : undefined);
-  else if (loadError) view = errorCard(loadError, opts, actions);
+  // 没有任务号可查时不摆 Refresh（点了也没东西可刷新）。
+  else if (loadError) view = errorCard(loadError, { ...opts, canRefresh: opts.canRefresh && Boolean(pendingId) }, actions);
   else view = loadingCard(pendingId);
   // 全屏时放宽到 720（设计稿全屏视图宽 720：历史列表、全部结果），其余照旧 560。
   root.classList.toggle("wide", app.getHostContext()?.displayMode === "fullscreen");
   root.replaceChildren(view);
   if (card?.sample) root.append(diagnostics());
+}
+
+function renderCancelled(kind: CancelledCall): HTMLElement {
+  const predictionId = pendingId ?? (typeof toolArgs?.prediction_id === "string" ? toolArgs.prediction_id : undefined);
+  return cancelledCard(kind, {
+    ...(typeof toolArgs?.model === "string" ? { modelId: toolArgs.model } : {}),
+    ...(predictionId ? { predictionId } : {}),
+    // 确认提交那一次被取消：请模型先查最近的生成（不确定有没有提交，别直接重来）。
+    ...(messagingAvailable() ? { checkHistory: (target: HTMLButtonElement) => sendOnce(target, say.checkAfterCancel(userLang(app))) } : {}),
+  });
 }
 
 function setNotice(text: string | undefined, ttlMs = isPrefillNote(text) ? PREFILL_NOTE_MS : 4000): void {
@@ -357,23 +378,28 @@ function sendOnce(target: HTMLButtonElement, text: string): void {
 }
 
 async function refreshOnce(): Promise<void> {
-  if (!card || card.sample) {
+  if (card?.sample) {
     setNotice("This is a sample card, so there is nothing to refresh.");
+    return;
+  }
+  // 还没画出卡片（查单报错、结果读不出来）时，按这次查的任务号刷新。
+  const asked = card?.prediction_id ?? pendingId;
+  if (!asked) {
+    setNotice("There's nothing to refresh here. Ask in the chat to check again.");
     return;
   }
   refreshing = true;
   render();
   try {
-    const asked = card.prediction_id;
     const result = await app.callServerTool({ name: STATUS_TOOL, arguments: { prediction_id: asked } });
     // 等回答时用户在历史里换了一条（或返回了列表）：这个回答作废。
-    if (card?.prediction_id !== asked) return;
+    if ((card?.prediction_id ?? pendingId) !== asked) return;
     if (result.isError) {
       const text = errorTextOf(result);
       if (isSignedOut(text)) signedOut = true;
       else setNotice(text ? text.slice(0, 160) : "Couldn't refresh. Try again in a moment.");
-    } else {
-      accept(result);
+    } else if (!accept(result)) {
+      setNotice("Couldn't read the refreshed result. Try again in a moment.");
     }
   } catch (error) {
     if (isSignedOut(error instanceof Error ? error.message : String(error), true)) signedOut = true;
@@ -950,6 +976,7 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (params) => {
+  cancelled = undefined;
   const upload = params.isError ? undefined : uploadFromToolResult(params);
   if (upload) {
     startUploader(upload);
@@ -988,12 +1015,30 @@ app.ontoolresult = (params) => {
     render();
     return;
   }
-  if (!accept(params)) return;
+  // 宿主重放同一个结果（WorkBuddy）：卡片已经往前走了（提交中、核实中、进度），不打回待确认。
+  if (isReplayedResult(params, card !== undefined)) return;
+  if (!accept(params)) {
+    // 结果读不出来：不能停在加载中一直转圈（M10），显示加载失败。
+    loadError = UNREADABLE_RESULT;
+    render();
+    return;
+  }
   // 重新打开对话时报价卡又显示待确认（11-04 问题 39）：先问一次这份报价是不是已经提交过。
   if (card?.state === "quote" && reopenedOnQuote(card.quote)) quoteActions.resume();
   // 用户可能不点卡片、在对话里打字确认：卡片在后台留意，提交了就自己切成进度（11-12 Jia 第二轮 G2）。
   if (card?.state === "quote") quoteActions.watch();
   void pollLoop();
+};
+
+/**
+ * 宿主取消了画这张卡的那次工具调用（Claude、Cursor 审批框里点了拒绝，或者宿主超时）。没有这一段时卡片一直停在
+ * 加载中（M10）。报价调用被取消：没提交、没扣费；确认提交那次被取消：结果未知，请用户先查历史。
+ * 已经拿到结果、画出卡片的不动（迟到的取消通知）。
+ */
+app.ontoolcancelled = () => {
+  if (card || history || uploader || library || notStarted !== undefined || loadError) return;
+  cancelled = cancelledCall({ tool: app.getHostContext()?.toolInfo?.tool.name, args: toolArgs });
+  render();
 };
 
 app.onhostcontextchanged = (params) => {

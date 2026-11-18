@@ -2,6 +2,7 @@
 // 用户数据一律走 textContent / 属性，innerHTML 只放下面这几个固定的 SVG 图标。
 
 import {
+  type CancelledCall,
   type CardData,
   type CardMedia,
   KIND_LABEL,
@@ -932,6 +933,62 @@ export function notStartedCard(reason: string, modelId?: string): HTMLElement {
       .filter(Boolean)
       .map((line) => h("p", { class: "desc" }, line)),
     h("p", { class: "desc" }, "Ask in the chat to change it, and a new quote will appear.")
+  );
+}
+
+/** 取消卡上每种情况说的话（标题徽标、正文）。纯数据，测试直接看。 */
+export function cancelledCopy(kind: CancelledCall): { badge: string; warn: boolean; lines: string[] } {
+  switch (kind) {
+    case "not_submitted":
+      return {
+        badge: "Canceled",
+        warn: false,
+        lines: ["This quote request was canceled, so nothing was submitted and nothing was charged.", "Ask in the chat when you want a new quote."],
+      };
+    case "unknown":
+      return {
+        badge: "Result unknown",
+        warn: true,
+        lines: [
+          "This generation request was canceled, and the card can't tell whether it had already been submitted.",
+          "Check your recent generations before trying again, so it isn't charged twice.",
+        ],
+      };
+    case "lookup":
+      return {
+        badge: "Canceled",
+        warn: false,
+        lines: [
+          "This status check was canceled. Checking doesn't submit or charge anything, and the generation itself isn't affected.",
+          "Ask in the chat to check it again.",
+        ],
+      };
+    default:
+      return { badge: "Canceled", warn: false, lines: ["This request was canceled in the chat, so there's nothing to show here."] };
+  }
+}
+
+/**
+ * 宿主取消了这次工具调用（审批框里点了拒绝、超时……）：不再一直转圈（M10）。确认提交那一次被取消时
+ * 不说「没扣费」，给「Check history」请模型查最近的生成。
+ */
+export function cancelledCard(
+  kind: CancelledCall,
+  opts: { modelId?: string; predictionId?: string; checkHistory?: (target: HTMLButtonElement) => void } = {}
+): HTMLElement {
+  const copy = cancelledCopy(kind);
+  const title = opts.modelId && (kind === "not_submitted" || kind === "unknown") ? readableModelId(opts.modelId) : "Atlas Cloud";
+  const check = kind === "unknown" && opts.checkHistory ? opts.checkHistory : undefined;
+  const checkButton: HTMLButtonElement | null = check ? button("Check history", "secondary", () => check(checkButton as HTMLButtonElement)) : null;
+  return h(
+    "section",
+    { class: "card" },
+    head(title, badge(copy.badge, { warn: copy.warn })),
+    kind === "lookup" && opts.predictionId
+      ? h("div", { class: "rows" }, row("Task", shortId(opts.predictionId), { mono: true, title: opts.predictionId }))
+      : null,
+    ...copy.lines.map((line) => h("p", { class: "desc" }, line)),
+    checkButton ? h("div", { class: "actions" }, checkButton) : null
   );
 }
 

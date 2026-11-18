@@ -330,6 +330,34 @@ export function notStartedReason(
   return text || "Atlas Cloud didn't accept this request.";
 }
 
+/** 会提交生成任务（会扣费）的工具：报价那一次不提交，带 confirmed 的那一次才提交。 */
+const GENERATION_TOOLS = new Set(["atlas_generate_image", "atlas_generate_video", "atlas_generate_audio", "atlas_quick_generate"]);
+/** 只查已有任务、不提交新任务的工具。 */
+const LOOKUP_TOOLS = new Set(["atlas_get_prediction", "atlas_card_status"]);
+
+/**
+ * 宿主取消了画这张卡的那次工具调用（ui/notifications/tool-cancelled，比如 Claude、Cursor 的审批框里点了拒绝）：
+ * - not_submitted：生成工具的报价调用（不带 confirmed / confirmation_token）。报价调用本身不提交任务，可以说没提交、没扣费。
+ * - unknown：生成工具的确认提交调用，或者不知道这次调用带了什么参数。取消可能发生在服务端收到之后，不能说没提交。
+ * - lookup：查任务状态（atlas_get_prediction）。查询本身不提交、不扣费，原来那个任务照常在跑。
+ * - other：别的工具（上传卡、历史列表……），不说扣费的事。
+ */
+export type CancelledCall = "not_submitted" | "unknown" | "lookup" | "other";
+
+export function cancelledCall(call: { tool?: string; args?: Record<string, unknown> } = {}): CancelledCall {
+  const { tool, args } = call;
+  if (tool ? LOOKUP_TOOLS.has(tool) : typeof args?.prediction_id === "string") return "lookup";
+  const generation = tool ? GENERATION_TOOLS.has(tool) : typeof args?.model === "string";
+  if (!generation) return "other";
+  // 宿主没把参数给卡片：不知道是不是确认提交的那一次，按「不确定」说。
+  if (!args) return "unknown";
+  const token = args.confirmation_token;
+  // confirmed 只要不是明确的 false 就按确认提交算（宁可说「不确定」，也不说错「没扣费」）。
+  const confirmed = args.confirmed !== undefined && args.confirmed !== null && args.confirmed !== false;
+  if (confirmed || (typeof token === "string" && token.trim() !== "")) return "unknown";
+  return "not_submitted";
+}
+
 /** 被限流后至少等这么久再让用户重试（设计稿「Retry in 30 s」）。 */
 export const RATE_LIMIT_WAIT_MS = 30_000;
 

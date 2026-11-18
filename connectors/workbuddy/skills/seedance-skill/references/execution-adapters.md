@@ -1,14 +1,21 @@
 # Atlas execution adapters
 
 Creative planning and the model profile are independent from the execution
-channel. Default profile: Seedream 5.0 Pro for stills and Seedance 2.0 for
-video. Verify that a chosen model supports the required route before a billable
+channel. Default profile: Seedream 5.0 Pro for stills and Seedance 2.5 for
+video (`modelProfile: "seedance-2.0"` selects the Seedance 2.0 fallback). Verify that a chosen model supports the required route before a billable
 generation.
 
 ## Default agent route
 
-In an agent conversation, the **Atlas Cloud Skill** is the default direct
-generation route. Use it to discover models, inspect parameters, upload local
+If Atlas MCP generation tools are exposed in the current client, use them
+(`atlas-mcp`) for every generation: they quote each job before it runs. The
+Skill, CLI and REST routes below submit without a quote, so use them only when
+no MCP tools are available or the user explicitly asks for that route, and
+confirm the model, duration and estimated cost with the user before each
+billable submission.
+
+Without MCP tools, in an agent conversation, the **Atlas Cloud Skill** is the
+direct generation route. Use it to discover models, inspect parameters, upload local
 assets, submit image or video generation, poll, and retrieve results. Report
 `Execution: atlas-skill` only when the Skill actually submitted the job.
 After submission, repeat the Skill's prediction-result step with the same ID
@@ -26,8 +33,8 @@ Then refresh the agent's Skill registry if the host requires it.
 
 | Choice | Use it when | Availability check |
 |---|---|---|
-| `atlas-skill` | Default for an interactive agent generation | The Atlas Cloud Skill can submit media in this client |
-| `atlas-mcp` | The user explicitly selects MCP | Atlas MCP generation tools are exposed in the current client |
+| `atlas-skill` | Interactive agent generation when no Atlas MCP tools are exposed | The Atlas Cloud Skill can submit media in this client |
+| `atlas-mcp` | Default whenever Atlas MCP generation tools are exposed (quotes before each job) | Atlas MCP generation tools are exposed in the current client |
 | `atlas-cli` | The user explicitly selects terminal, script, CI, or batch execution | `atlas auth status`, then `atlas models get` |
 | `atlas-rest` | The bundled Node runner or a controlled compatibility run | `ATLASCLOUD_API_KEY` and live model verification |
 | `manual` | No authenticated executor is available | Return prompts, model IDs, and asset list only |
@@ -84,6 +91,31 @@ execution path or billing destination.
   "modelProfile": "seedance-default"
 }
 ```
+
+Spend and safety limits in the runner:
+
+- Before anything is submitted it prints a `[spend-plan]` line with every new
+  image job (storyboard grid, generated references) and every new video job
+  with the total billed seconds, and it stops there unless
+  `CONFIRM_SPEND_IMAGES` and `CONFIRM_SPEND_SECONDS` cover that plan. Nothing
+  is approved by default, and `GRID_ONLY` / `REFS_ONLY` runs are gated the same
+  way for their images. Show the user the plan and its estimated cost, and set
+  `CONFIRM_SPEND_IMAGES=<images>` and `CONFIRM_SPEND_SECONDS=<seconds>` only
+  after they approve it. Cached outputs and resumed prediction IDs are not
+  counted, because they bill nothing new.
+- Seedance 2.5 image-to-video takes its frame shape from the input image (its
+  `ratio` accepts only `adaptive`), so the runner sends `adaptive` there; the
+  stitch step still scales to `video.ratio`.
+- A video task is never resubmitted automatically. A completed video without its
+  native audio track has already been billed: the runner keeps it as
+  `<stage>.no-audio.mp4` and stops, and only the user decides whether to pay for
+  a new attempt. `audio.outputRetries` is no longer supported.
+- The job config cannot change the API host (set `ATLASCLOUD_API_BASE` in the
+  environment if you really need another one), `apiKeyEnv` must name an
+  `ATLASCLOUD_*` variable, and executables come only from the environment
+  (`FFMPEG_PATH`, `FFPROBE_PATH`, `ATLAS_CLI_COMMAND`).
+- `outDir` and local audio references must stay inside the job directory, and
+  an audio reference must really be WAV, MP3, AAC, M4A, OGG or FLAC.
 
 Set `adapter` to `atlas-cli` only when the CLI route was explicitly selected.
 `atlas-skill` and `atlas-mcp` are intentionally rejected by the Node runner so

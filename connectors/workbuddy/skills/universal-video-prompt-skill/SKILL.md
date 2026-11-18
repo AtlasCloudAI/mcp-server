@@ -9,7 +9,7 @@ display_name: "通用视频提示词规范"
 display_name_en: "Universal Video Prompt Spec"
 description_zh: "先写一份与模型无关的视频提示词规范，再编译到你实际能调用的那个视频模型，便于跨模型复用和横向对比。"
 description_en: "Write one model-agnostic video prompt spec, then compile it to whichever video model you can actually call, for cross-model reuse and comparison."
-version: 2.5.0
+version: 2.5.1
 author: Atlas Cloud
 ---
 

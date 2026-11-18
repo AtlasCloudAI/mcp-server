@@ -9,18 +9,33 @@
 //   node generate.mjs <config.json>
 //   GRID_ONLY=1 node generate.mjs <config.json>   # Generate grid and crop frames only; display grid.png and inspect it before video work.
 //   CLIPS_MAX=1 node generate.mjs <config.json>   # In grid mode, run only the first N clips as a quality gate.
+//   CONFIRM_SPEND_IMAGES=1 CONFIRM_SPEND_SECONDS=40 node generate.mjs <config.json>   # Approve 1 new image and up to 40 billed video seconds for this run.
+//
+// Every run (GRID_ONLY and REFS_ONLY included) prints a [spend-plan] line with
+// the new image jobs and billed video seconds before it submits anything, and
+// stops there unless CONFIRM_SPEND_IMAGES and CONFIRM_SPEND_SECONDS cover the
+// plan. Nothing is approved by default: set them only after the user has
+// approved that plan and its cost.
+// A video task is never resubmitted automatically: a failed or silent result
+// stops the run and leaves the retry decision to the user.
 // Requires Node 18+, ffmpeg, and ffprobe. Execution adapters live in scripts/providers/.
-import { readFileSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, copyFileSync, renameSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { createExecutor, resolveModelProfile } from "./providers/index.mjs";
+import { insideRoot, readAudioFile } from "./providers/guards.mjs";
 
 const CFG_PATH = resolve(process.argv[2] || "./config.json");
 const CFG = JSON.parse(readFileSync(CFG_PATH, "utf8"));
 const ROOT = dirname(CFG_PATH);
 const DIR = resolve(ROOT, CFG.outDir || "build");
-const FFMPEG = process.env.FFMPEG_PATH || CFG.ffmpeg || "ffmpeg";
-const FFPROBE = process.env.FFPROBE_PATH || CFG.ffprobe || "ffprobe";
+if (!insideRoot(ROOT, DIR)) throw new Error(`outDir must stay inside the job directory ${ROOT}, got ${DIR}`);
+// Executables come from PATH or the environment, never from the job config.
+for (const field of ["ffmpeg", "ffprobe"]) {
+  if (CFG[field] && CFG[field] !== field) console.warn(`[config] ignoring ${field}: ${JSON.stringify(CFG[field])}; set ${field.toUpperCase()}_PATH in the environment instead.`);
+}
+const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
 const MODE = CFG.mode || "grid";
 const PROFILE = resolveModelProfile(CFG.modelProfile);
 const EXECUTOR = createExecutor({ config: CFG, root: ROOT, log: console.log });
@@ -28,7 +43,11 @@ const IMG_MODEL = CFG.grid?.model || PROFILE.image;
 const VID_MODEL = CFG.video?.model || PROFILE.video.i2v;
 const V = { resolution: "1080p", ratio: "9:16", duration: 5, generate_audio: true, watermark: false, ...CFG.video };
 const AUDIO = CFG.audio || {};
-const AUDIO_OUTPUT_RETRIES = Number.isInteger(AUDIO.outputRetries) ? Math.max(0, AUDIO.outputRetries) : 2;
+if (AUDIO.outputRetries) console.warn("[config] audio.outputRetries is no longer supported: a video without native audio has already been billed, so the runner stops instead of resubmitting it.");
+// What a run may bill without explicit approval: nothing. Every new image and
+// every billed video second needs CONFIRM_SPEND_IMAGES / CONFIRM_SPEND_SECONDS.
+const UNCONFIRMED_SPEND_IMAGES = 0;
+const UNCONFIRMED_SPEND_SECONDS = 0;
 const MAX_POLL_SECONDS = CFG.maxPollSeconds ?? 900;
 const RES = { "9:16": [1080, 1920], "16:9": [1920, 1080], "1:1": [1080, 1080], "3:4": [1080, 1440], "4:3": [1440, 1080], "21:9": [2520, 1080] };
 const [OW, OH] = RES[V.ratio] || [1080, 1920];
@@ -69,8 +88,9 @@ async function uploadAudioReference(ref, index) {
   const source = typeof ref === "string" ? ref : ref?.file || ref?.url;
   if (!source) throw new Error(`input audio reference ${index} needs file or url`);
   if (/^https?:\/\//.test(source)) return source;
-  const path = resolve(ROOT, source);
-  if (!existsSync(path)) throw new Error(`input audio reference ${index} file does not exist: ${path}`);
+  const what = `input audio reference ${index}`;
+  if (!existsSync(resolve(ROOT, source))) throw new Error(`${what} file does not exist: ${resolve(ROOT, source)}`);
+  const { path } = readAudioFile(ROOT, source, what);   // inside the job directory and really audio
   try {
     return await EXECUTOR.uploadMedia(path);
   } catch (error) {
@@ -98,9 +118,6 @@ function selectedAudioReferences(segment, uploaded) {
 
 function isInputAudioFailure(message) {
   return /(reference_audios?|input audio|audio (input|reference|upload|url|format|decode)|(?:invalid|unsupported|malformed).{0,40}audio)/i.test(message);
-}
-function isOutputAudioFailure(message) {
-  return /^\[audio-output\]|\b(audio|sound|voice|speech|dialogue|music)\b/i.test(message);
 }
 
 function resumePredictionIdFor(label, explicitId) {
@@ -135,39 +152,110 @@ async function generateImage(body, label, explicitResumeId) {
 }
 
 async function generateVideo(body, label, out, last, resumePredictionId) {
-  const tries = V.generate_audio ? AUDIO_OUTPUT_RETRIES + 1 : 1;
   const hasReferenceAudio = Array.isArray(body.reference_audios) && body.reference_audios.length > 0;
-  const configuredResumeId = resumePredictionIdFor(label, resumePredictionId);
-  for (let attempt = 1; attempt <= tries; attempt++) {
-    let id;
-    try {
-      id = configuredResumeId && attempt === 1
-        ? configuredResumeId
-        : (await EXECUTOR.submitVideo(body)).id;
-      console.log(configuredResumeId && attempt === 1
-        ? `[${label}] resuming ${id}`
-        : `[${label}] submitted ${id}${attempt > 1 ? ` (native-audio retry ${attempt - 1}/${AUDIO_OUTPUT_RETRIES})` : ""}`);
-      const d = await EXECUTOR.poll(id, label, MAX_POLL_SECONDS);
-      if (!d.outputs?.[0]) throw new Error(`[${label}] model returned no video output`);
-      await EXECUTOR.download(d.outputs[0], out);
-      if (V.generate_audio && !hasAudio(out)) throw new Error(`[audio-output] ${label} video has no native audio track`);
-      if (last && d.outputs[1]) await EXECUTOR.download(d.outputs[1], last);
-      return d;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (hasReferenceAudio && isInputAudioFailure(message)) {
-        throw new Error(`[${label}] input audio reference failed; check audio.references file, format, accessibility, or segment audioRefs. Original error: ${message}`);
-      }
-      if (V.generate_audio && isOutputAudioFailure(message) && attempt < tries) {
-        console.warn(`[${label}] native audio output failed; regenerating with generate_audio:true (${attempt}/${AUDIO_OUTPUT_RETRIES})`);
-        continue;
-      }
-      if (V.generate_audio && isOutputAudioFailure(message)) {
-        throw new Error(`[${label}] native audio output failed after ${AUDIO_OUTPUT_RETRIES} retries; it was not downgraded to silent video. Original error: ${message}`);
-      }
-      if (!id) throw error;
-      throw taskRecoveryError(label, id, error);
+  const resumeId = resumePredictionIdFor(label, resumePredictionId);
+  let id;
+  try {
+    id = resumeId || (await EXECUTOR.submitVideo(body)).id;
+    console.log(resumeId ? `[${label}] resuming ${id}` : `[${label}] submitted ${id}`);
+    const d = await EXECUTOR.poll(id, label, MAX_POLL_SECONDS);
+    if (!d.outputs?.[0]) throw new Error(`[${label}] model returned no video output`);
+    await EXECUTOR.download(d.outputs[0], out);
+    if (V.generate_audio && !hasAudio(out)) {
+      // The task completed, so it has been billed. Keep the file aside (a later
+      // run must not treat it as a finished segment) and stop rather than resubmit.
+      const kept = out.replace(/\.mp4$/, "") + ".no-audio.mp4";
+      renameSync(out, kept);
+      throw new Error(
+        `[${label}] prediction ${id} completed and was billed, but its video has no native audio track (saved as ${kept}). `
+        + "Nothing was resubmitted. Tell the user, and run again only if they decide to pay for a new attempt.",
+      );
     }
+    if (last && d.outputs[1]) await EXECUTOR.download(d.outputs[1], last);
+    return d;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (hasReferenceAudio && isInputAudioFailure(message)) {
+      throw new Error(`[${label}] input audio reference failed; check audio.references file, format, accessibility, or segment audioRefs. Original error: ${message}`);
+    }
+    if (!id || message.includes(`prediction ${id} completed and was billed`)) throw error;
+    throw taskRecoveryError(label, id, error);
+  }
+}
+
+// Seedance 2.5 image-to-video takes its frame from the input image: its ratio
+// accepts only "adaptive". Other models get the configured ratio.
+function i2vRatio(model) {
+  return /^bytedance\/seedance-2\.5\//.test(model) ? "adaptive" : V.ratio;
+}
+
+// The image jobs this run would submit (storyboard grid, generated references).
+function plannedImageJobs() {
+  const jobs = [];
+  const add = (label, out, explicitResumeId) => {
+    if (existsSync(out)) return;   // cached images are not regenerated
+    jobs.push({ label, resumed: Boolean(resumePredictionIdFor(label, explicitResumeId)) });
+  };
+  if (CFG.grid) add("grid", `${DIR}/grid.png`, CFG.grid.resumePredictionId);
+  if (process.env.GRID_ONLY) return jobs;   // a grid-only run stops after the grid
+  if (Array.isArray(CFG.refs)) {
+    CFG.refs.forEach((ref, i) => {
+      if (!ref?.file) add(`ref${i + 1}`, `${DIR}/ref_${pad(i + 1)}.png`, ref?.resumePredictionId);   // local files are copied, not generated
+    });
+  }
+  return jobs;
+}
+
+// The video jobs this run would submit, before anything is submitted.
+function plannedVideoJobs() {
+  const jobs = [];
+  if (process.env.GRID_ONLY || process.env.REFS_ONLY) return jobs;   // these runs stop before any video
+  const add = (label, out, seconds, explicitResumeId) => {
+    if (existsSync(out)) return;   // cached segments are not resubmitted
+    const resumed = Boolean(resumePredictionIdFor(label, explicitResumeId));
+    jobs.push({ label, seconds: Number(seconds) || 0, resumed });
+  };
+  const limit = (envName, total) => Math.min(total, process.env[envName] ? Math.max(0, +process.env[envName]) : total);
+  if (MODE === "grid") {
+    const total = (CFG.grid?.rows || 0) * (CFG.grid?.cols || 0);
+    for (let i = 0; i < limit("CLIPS_MAX", total); i++) add(`clip${i + 1}`, `${DIR}/clip${i + 1}.mp4`, V.duration);
+  } else {
+    const segs = Array.isArray(CFG.segments) ? CFG.segments : [];
+    const prefix = MODE === "shot-pairs" ? "shot" : "seg";
+    for (let i = 0; i < limit("SEGS_MAX", segs.length); i++) {
+      const s = segs[i] || {};
+      add(`${prefix}${i + 1}`, `${DIR}/${prefix}${i + 1}.mp4`, s.duration || V.duration, MODE === "reference" ? s.resumePredictionId : undefined);   // only reference mode reads segment.resumePredictionId
+    }
+  }
+  return jobs;
+}
+
+function approvedAmount(envName, fallback) {
+  if (process.env[envName] === undefined) return fallback;
+  const value = Number(process.env[envName]);
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${envName} must be a non-negative number`);
+  return value;
+}
+
+function enforceSpendPlan() {
+  const imageJobs = plannedImageJobs();
+  const freshImages = imageJobs.filter(job => !job.resumed);
+  const jobs = plannedVideoJobs();
+  const fresh = jobs.filter(job => !job.resumed);
+  const seconds = fresh.reduce((sum, job) => sum + job.seconds, 0);
+  const resumed = imageJobs.length - freshImages.length + jobs.length - fresh.length;
+  console.log(
+    `[spend-plan] ${freshImages.length} new image job(s) with ${IMG_MODEL}: ${freshImages.map(job => job.label).join(", ") || "none"}; `
+    + `${fresh.length} new video job(s), ${seconds}s total at ${V.resolution}: ${fresh.map(job => `${job.label}=${job.seconds}s`).join(", ") || "none"}`
+    + `${resumed ? `; ${resumed} resumed (already billed)` : ""}`,
+  );
+  const approvedImages = approvedAmount("CONFIRM_SPEND_IMAGES", UNCONFIRMED_SPEND_IMAGES);
+  const approvedSeconds = approvedAmount("CONFIRM_SPEND_SECONDS", UNCONFIRMED_SPEND_SECONDS);
+  if (freshImages.length > approvedImages || seconds > approvedSeconds) {
+    throw new Error(
+      `[spend-plan] this run would submit ${freshImages.length} new image job(s) and ${seconds} billed video seconds; approved: ${approvedImages} image(s), ${approvedSeconds}s. Nothing was submitted. `
+      + `Show the user the plan above and its estimated cost; after they approve it, run again with CONFIRM_SPEND_IMAGES=${freshImages.length} CONFIRM_SPEND_SECONDS=${seconds}.`,
+    );
   }
 }
 
@@ -244,9 +332,18 @@ function stitch(b, clips, trimFirst) {
   ff(args, "stitch");
 }
 
-function cleanupAccidentalOverlay(b) {
+function overlayFilter() {
   const legacy = CFG.delogo;
   const filter = CFG.cleanupOverlay?.filter || (typeof legacy === "string" ? legacy : undefined);
+  // Only delogo's own options, so the config cannot splice other ffmpeg filters in.
+  if (filter && !/^x=\d+:y=\d+:w=\d+:h=\d+(:show=[01])?$/.test(filter)) {
+    throw new Error(`cleanupOverlay.filter must look like x=10:y=10:w=200:h=80, got ${JSON.stringify(filter)}`);
+  }
+  return filter;
+}
+
+function cleanupAccidentalOverlay(b) {
+  const filter = overlayFilter();
   if (!filter) return `${b}/final.mp4`;
   ff(["-y", "-i", `${b}/final.mp4`, "-vf", `delogo=${filter}`, "-c:v", "libx264", "-crf", "20", "-preset", "veryfast", "-c:a", "copy", "-movflags", "+faststart", `${b}/final_clean.mp4`], "cleanup-overlay");
   return `${b}/final_clean.mp4`;
@@ -263,9 +360,13 @@ async function main() {
   console.log(`[executor] ${EXECUTOR.id}; model profile ${CFG.modelProfile || "seedance-default"}`);
   if (AUDIO.references !== undefined && !Array.isArray(AUDIO.references)) throw new Error("audio.references must be an array");
   if (AUDIO.references?.length && MODE !== "reference") throw new Error("audio.references is supported only in reference-to-video mode; use native-audio prompt markers for other modes.");
+  overlayFilter();   // reject a bad filter before anything is billed
+  enforceSpendPlan();   // before any submission, images included, in every run mode
   const N = CFG.grid ? await genGridAndSplit(b) : 0;   // Grid is optional: a text-to-video chain needs none.
-  if (CFG.grid && process.env.GRID_ONLY) {
-    console.log("[grid-only] Grid and frame crops complete. Display the storyboard-preview image above; inspect it before running video generation separately.");
+  if (process.env.GRID_ONLY) {
+    console.log(CFG.grid
+      ? "[grid-only] Grid and frame crops complete. Display the storyboard-preview image above; inspect it before running video generation separately."
+      : "[grid-only] This job has no grid; nothing to generate.");
     return;
   }
   if (CFG.refs) await genRefs(b);                      // Reference mode generates the role-specific images first.
@@ -304,7 +405,7 @@ async function main() {
       if (!Number.isInteger(s.first)) throw new Error(`shot-pairs segment ${i + 1} needs a first keyframe index`);
       const out = `${b}/shot${i + 1}.mp4`;
       if (existsSync(out)) { console.log(`[shot${i + 1}] cached — skip`); continue; }
-      const body = { model: VID_MODEL, prompt: s.prompt + (CFG.styleSuffix || ""), image: dataUrl(`${b}/frame_${pad(s.first)}.png`), duration: s.duration || V.duration, resolution: V.resolution, ratio: V.ratio, generate_audio: V.generate_audio, watermark: V.watermark };
+      const body = { model: VID_MODEL, prompt: s.prompt + (CFG.styleSuffix || ""), image: dataUrl(`${b}/frame_${pad(s.first)}.png`), duration: s.duration || V.duration, resolution: V.resolution, ratio: i2vRatio(VID_MODEL), generate_audio: V.generate_audio, watermark: V.watermark };
       if (Number.isInteger(s.last)) body.last_image = dataUrl(`${b}/frame_${pad(s.last)}.png`);
       const d = await generateVideo(body, `shot${i + 1}`, out);
       console.log(`[shot${i + 1}] saved (tokens ${d.completion_tokens})`);
@@ -329,6 +430,7 @@ async function main() {
         body.model = T2V;
       } else {
         body.model = VID_MODEL;
+        body.ratio = i2vRatio(VID_MODEL);
         // Start frame: use prior real tail for a continuous action; otherwise use the independent s.first keyframe.
         body.image = dataUrl((i > 0 && s.chain !== false) ? `${b}/seg${i}_last.png` : `${b}/frame_${pad(s.first)}.png`);
         if (s.last && CFG.grid) body.last_image = dataUrl(`${b}/frame_${pad(s.last)}.png`); // Anchor the segment endpoint to a grid keyframe.
@@ -346,7 +448,7 @@ async function main() {
     for (let i = 0; i < nClips; i++) {
       const out = `${b}/clip${i + 1}.mp4`;
       if (existsSync(out)) { console.log(`[clip${i + 1}] cached — skip`); continue; }
-      const d = await generateVideo({ model: VID_MODEL, prompt: CFG.shots[i] + (CFG.styleSuffix || ""), image: dataUrl(`${b}/frame_${pad(i + 1)}.png`), resolution: V.resolution, ratio: V.ratio, duration: V.duration, generate_audio: V.generate_audio, watermark: V.watermark }, `clip${i + 1}`, out);
+      const d = await generateVideo({ model: VID_MODEL, prompt: CFG.shots[i] + (CFG.styleSuffix || ""), image: dataUrl(`${b}/frame_${pad(i + 1)}.png`), resolution: V.resolution, ratio: i2vRatio(VID_MODEL), duration: V.duration, generate_audio: V.generate_audio, watermark: V.watermark }, `clip${i + 1}`, out);
       console.log(`[clip${i + 1}] saved (tokens ${d.completion_tokens})`);
     }
     if (!Array.from({ length: N }, (_, i) => existsSync(`${b}/clip${i + 1}.mp4`)).every(Boolean)) { console.log("[stitch] Not all clips are present; skipping."); return; }

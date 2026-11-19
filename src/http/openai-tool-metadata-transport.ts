@@ -48,6 +48,53 @@ export function withOpenAIToolSecuritySchemes(
   } as unknown as JSONRPCMessage;
 }
 
+/** 工具定义上让宿主画卡片的键（generationCardToolMeta 写的那几个）。 */
+const CARD_TOOL_META_KEYS = ["ui", "ui/resourceUri", "openai/outputTemplate", "openai/widgetAccessible"];
+/** 工具结果里只给卡片读的数据（生成卡、资产库卡、上传卡、历史卡、没开始）。 */
+const CARD_RESULT_META_KEYS = [
+  "atlascloud/card",
+  "atlascloud/assets",
+  "atlascloud/upload",
+  "atlascloud/history",
+  "atlascloud/not_started",
+];
+
+function withoutKeys(meta: unknown, keys: string[]): Record<string, unknown> | undefined {
+  const record = asRecord(meta);
+  if (!record) return undefined;
+  const rest = Object.fromEntries(Object.entries(record).filter(([key]) => !keys.includes(key)));
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function withMeta<T extends Record<string, unknown>>(value: T, meta: Record<string, unknown> | undefined): T {
+  const { _meta: _dropped, ...rest } = value;
+  return (meta ? { ...rest, _meta: meta } : rest) as T;
+}
+
+/**
+ * 给不显示卡片的客户端去掉卡片：工具列表上的卡片模板、工具结果里给卡片的数据。
+ *
+ * WorkBuddy 只看工具上的 `_meta.ui.resourceUri` 就画卡片，但宿主把卡片发出的消息原样弹回、
+ * 拦掉卡片发起的工具调用、全屏声明了却给内联（11-12/11-13 实测），卡片按钮点不动。
+ * 只藏卡片专用工具不够（e692c58 那样），生成工具挂着模板它照样画。文字结果和给模型的指引不动。
+ */
+export function withoutCards(message: JSONRPCMessage): JSONRPCMessage {
+  const record = asRecord(message);
+  const result = asRecord(record?.result);
+  if (!record || !result) return message;
+  if (Array.isArray(result.tools)) {
+    const tools = result.tools.map((value) => {
+      const tool = asRecord(value);
+      return tool ? withMeta(tool, withoutKeys(tool._meta, CARD_TOOL_META_KEYS)) : value;
+    });
+    return { ...record, result: { ...result, tools } } as unknown as JSONRPCMessage;
+  }
+  if (asRecord(result._meta)) {
+    return { ...record, result: withMeta(result, withoutKeys(result._meta, CARD_RESULT_META_KEYS)) } as unknown as JSONRPCMessage;
+  }
+  return message;
+}
+
 export class OpenAIToolMetadataTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -62,7 +109,9 @@ export class OpenAIToolMetadataTransport implements Transport {
    */
   constructor(
     private readonly inner: Transport,
-    private readonly onSend?: (message: JSONRPCMessage) => void
+    private readonly onSend?: (message: JSONRPCMessage) => void,
+    /** 这个客户端不显示卡片：发出前去掉卡片模板和卡片数据（withoutCards）。 */
+    private readonly noCards = false
   ) {}
 
   get sessionId(): string | undefined {
@@ -81,7 +130,8 @@ export class OpenAIToolMetadataTransport implements Transport {
     options?: TransportSendOptions
   ): Promise<void> {
     this.onSend?.(message);
-    await this.inner.send(withOpenAIToolSecuritySchemes(message), options);
+    const outgoing = this.noCards ? withoutCards(message) : message;
+    await this.inner.send(withOpenAIToolSecuritySchemes(outgoing), options);
   }
 
   async close(): Promise<void> {

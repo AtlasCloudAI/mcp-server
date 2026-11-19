@@ -36,7 +36,7 @@ test("按 client_id 记下声明，之后的请求查得到；没记录是 undef
   assert.equal(await uiDeclaration("someone-else", store), undefined);
 });
 
-// http.ts 暂不按声明拦（WorkBuddy 显示卡片却不声明），server 的 noCards 开关留着，等认得出 GrokBot 再用。
+// 11-19 起 http.ts 按声明拦：明确没声明 MCP Apps 的客户端（WorkBuddy、GrokBot）noCards，见 no-cards-undeclared-clients-1119.test.ts。
 test("server 的 noCards：不列卡片专用工具（上传卡、作废报价…）", () => {
   const saved = process.env.MCP_UI_CARDS;
   process.env.MCP_UI_CARDS = "1";

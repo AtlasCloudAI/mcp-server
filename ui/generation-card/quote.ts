@@ -1005,6 +1005,7 @@ export function renderQuoteCard(
     ...task(quote),
     chips(quote?.settings ?? []),
     ...amount,
+    submissionNote(quote),
     // 需求文档 6.1：报价写明从哪个账户扣、余额多少（设计稿 v2 收成底部一行）。
     billingLine(quote?.account, quote?.account?.balance_usd),
     // 设计稿 v2：按钮只留确认和修改，不放取消。
@@ -1040,6 +1041,21 @@ function modelLine(card: CardData, template: boolean): HTMLElement {
 
 function notice(opts: ViewOptions): HTMLElement | null {
   return opts.notice ? h("p", { class: "note", role: "status" }, opts.notice) : null;
+}
+
+/**
+ * 同样的请求之前提交过时，在价格下面写一句：是拿回原来那一单（不另扣），还是再跑一次（另扣一次）。
+ * 原来只有模型看得到这条说明，用户在卡上点确认时不知道会不会再扣（11-19 第二轮复审）。
+ */
+function submissionNote(quote: QuoteInfo | undefined): HTMLElement | null {
+  const id = (note: { prediction_id?: string } | undefined) => (note?.prediction_id ? ` (${note.prediction_id})` : "");
+  if (quote?.repeat_of) {
+    return h("p", { class: "note quote-repeat", role: "note" }, `This request was already run${id(quote.repeat_of)}. Confirming runs it again and is charged again.`);
+  }
+  if (quote?.already_submitted) {
+    return h("p", { class: "note quote-repeat", role: "note" }, `This request was already submitted${id(quote.already_submitted)}. Confirming shows that job; nothing new is charged.`);
+  }
+  return null;
 }
 
 /** 设计稿 v3：「Estimated · USD · …」，币种紧跟在 Estimated 后面；别的说法（部分估算）放在句尾。 */

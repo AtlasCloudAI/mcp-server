@@ -370,8 +370,30 @@ async function privateLinksBeyondProbe(params: Record<string, unknown>, timeoutM
 // ---------- 不是网址的素材值 ----------
 
 // 网关和下载器认得、但服务端绝不该替用户去读的写法：本机文件和各种非 http 协议。
-// data:（内联）、assetd:// 和 asset://（资产库、上游资产引用）是正常写法，不在这里。
-const LOCAL_SCHEMES = /^(?:file|gopher|ftp|ftps|sftp|tftp|dict|ldap|ldaps|smb|jar|netdoc|unix|phar|php|expect|glob|ws|wss):/i;
+// 素材字段只放行白名单里的协议：http(s)、data:（内联）、asset:// 和 assetd://（资产库、上游资产引用）。
+// 原来是黑名单，tcp://、rtsp://、concat:、hls+http://、s3://、URL:http://… 都漏过去了（11-19 第二轮复审）。
+const ALLOWED_SOURCE_SCHEMES = new Set(["http", "https", "data", "asset", "assetd"]);
+// 别的非文字字段（字段名看不出是素材的）：明确危险的协议、带 + 的组合协议、URL: 前缀、ffmpeg 的协议写法一律退回。
+const DANGEROUS_SCHEMES = new Set([
+  "file", "gopher", "ftp", "ftps", "sftp", "tftp", "dict", "ldap", "ldaps", "smb", "jar", "netdoc", "unix", "phar",
+  "php", "expect", "glob", "ws", "wss", "tcp", "udp", "rtsp", "rtsps", "rtmp", "rtmps", "rtmpt", "rtmpe", "rtp",
+  "srtp", "srt", "mms", "mmsh", "mmst", "concat", "concatf", "subfile", "hls", "crypto", "cache", "async", "pipe",
+  "fd", "s3", "gs", "gcs", "hdfs", "url", "jdbc", "redis", "mongodb", "mysql", "postgres", "ssh", "telnet", "nfs",
+]);
+const ANY_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+const FFMPEG_PROTOCOL = /^(?:subfile|concat|concatf|crypto|cache|async|pipe|fd)\s*[,:]/i;
+const URL_PREFIX = /^<\s*url\s*:|^url\s*:/i;
+// 别的非文字字段里也不该出现的系统路径。
+const SENSITIVE_PATH = /^\/(?:etc|proc|sys|dev|root|home|var|usr|tmp|private|Users|opt|run|mnt|srv|boot|lib|bin|sbin)(?:\/|$)/;
+
+function schemeProblem(cleaned: string, source: boolean): boolean {
+  if (URL_PREFIX.test(cleaned) || FFMPEG_PROTOCOL.test(cleaned)) return true;
+  const scheme = ANY_SCHEME.exec(cleaned)?.[1]?.toLowerCase();
+  if (scheme === undefined) return false;
+  if (DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
+  // 白名单只管「协议://」这种写法：素材字段里也有 en-US:Neural 这样的普通取值（音色编号）。
+  return source && cleaned.slice(scheme.length + 1).startsWith("//") && !ALLOWED_SOURCE_SCHEMES.has(scheme);
+}
 // 本机路径：~/、./、../、Windows 盘符、UNC、以及像路径的绝对路径。base64 的 JPEG 以 "/9j/" 开头，
 // base64 的 MP3 可能以 "//" 开头，都不是路径，所以绝对路径只认「/ 后面跟路径字符」且不太长的串。
 const LOCAL_PATH = /^(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\)|^\/(?!9j\/|\/)[\w.\-~/%@]{0,511}$/;
@@ -396,6 +418,32 @@ const MALFORMED_LINK_REASON = "it is not a complete link; write it as https://�
 const LINK_PADDING = "\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
 const LINK_PADDING_EDGES = new RegExp(`^[${LINK_PADDING}]+|[${LINK_PADDING}]+$`, "g");
 const HAS_LINK_PADDING = new RegExp(`^[${LINK_PADDING}]|[${LINK_PADDING}]$`);
+// 只有空白和零宽字符（不含控制字符）：粘贴来的链接首尾常带全角空格、不换行空格，直接去掉照常用。
+const LINK_WHITESPACE = "\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
+const LINK_WHITESPACE_EDGES = new RegExp(`^[${LINK_WHITESPACE}]+|[${LINK_WHITESPACE}]+$`, "g");
+
+/**
+ * 素材链接首尾只多了空白或零宽字符（中文输入法、网页粘贴常见）：去掉后交给后面的检查和网关，
+ * 网关拿到的就是检查过的那个值（11-19 第二轮复审：原来直接退回，用户看不出哪里错了）。
+ * 夹着控制字符的不动，交给 localInputValues 退回。文字字段不碰。
+ */
+export function trimLinkPadding<T extends Record<string, unknown>>(params: T): T {
+  const clean = (value: unknown, depth: number): unknown => {
+    if (depth > MAX_GUARDED_DEPTH) return value;
+    if (typeof value === "string") {
+      const stripped = value.replace(LINK_WHITESPACE_EDGES, "");
+      return stripped !== value && /^https?:\/\//i.test(stripped) && !HAS_LINK_PADDING.test(stripped) ? stripped : value;
+    }
+    if (Array.isArray(value)) return value.map((item) => clean(item, depth + 1));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item, depth + 1)]));
+    }
+    return value;
+  };
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [key, key === "model" || TEXT_FIELDS.has(key) ? value : clean(value, 0)])
+  ) as T;
+}
 
 /** 当作链接判断前的预处理：去掉首尾控制字符和各种空白，删掉所有 tab、换行。 */
 function urlPreprocess(value: string): string {
@@ -476,9 +524,9 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
       const cleaned = urlPreprocess(value);
       const source = isSourceField(field);
       const malformed = malformedLinkReason(value, field);
-      if (source && LOCAL_SCHEMES.test(cleaned)) {
+      if (schemeProblem(cleaned, source)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if (source && LOCAL_PATH.test(cleaned)) {
+      } else if ((source && LOCAL_PATH.test(cleaned)) || SENSITIVE_PATH.test(cleaned)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
       } else if (malformed) {
         out.push({ field, url: trimmed, reason: malformed });

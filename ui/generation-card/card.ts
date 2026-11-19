@@ -30,6 +30,10 @@ export interface QuoteInfo {
   partial?: boolean;
   /** 按实际用量结算，最终扣费可能和预估略有出入。 */
   settles_on_usage?: boolean;
+  /** 同样的请求刚提交过：确认拿回那一单，不另扣（M5）。 */
+  already_submitted?: { prediction_id?: string };
+  /** 同样的请求之前提交过：这份报价是再跑一次，确认会另扣一次（11-19 S2）。 */
+  repeat_of?: { prediction_id?: string };
   /** 不完整的预估漏掉了什么（服务端给的说法）。 */
   estimate_missing?: string[];
   /** 扣费账户和可用余额；查不到就没有。 */
@@ -242,6 +246,7 @@ function quoteFromStructured(
             ...(typeof structured.estimated_cost_usd === "number" ? { estimated_usd: structured.estimated_cost_usd } : {}),
             ...(structured.estimate_partial === true ? { partial: true } : {}),
             ...(structured.estimate_reason === "settles_on_usage" ? { settles_on_usage: true } : {}),
+            ...submissionNotesOf(structured),
             ...billingAccountOf(structured.billing_account),
             settings,
             ...(prompt ? { prompt } : {}),
@@ -566,4 +571,16 @@ export function newIdempotencyKey(): string {
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** 报价里「已经提交过」「是再跑一次」两条说明（和服务端 submissionNotes 同一套取法）。 */
+function submissionNotesOf(structured: Record<string, unknown>): Pick<QuoteInfo, "already_submitted" | "repeat_of"> {
+  const pick = (value: unknown) => {
+    const note = record(value);
+    if (!note) return undefined;
+    return typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {};
+  };
+  const already = pick(structured.already_submitted);
+  const repeat = pick(structured.repeat_of);
+  return { ...(already ? { already_submitted: already } : {}), ...(repeat ? { repeat_of: repeat } : {}) };
 }

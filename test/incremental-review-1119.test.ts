@@ -12,7 +12,7 @@ import {
   setPredictionStatusLookupForTests,
 } from "../src/services/generation-confirmation.js";
 import { InMemoryIdempotencyStore, executeIdempotently } from "../src/services/idempotency.js";
-import { inputLimitProblems, inputLinks, localInputValues } from "../src/services/input-link-check.js";
+import { inputLimitProblems, inputLinks, localInputValues, trimLinkPadding } from "../src/services/input-link-check.js";
 import { runWithRequestContext, type AtlasRequestContext } from "../src/services/request-context.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
 import { generationConfirmationStructuredContent } from "../src/tool-contracts.js";
@@ -232,7 +232,7 @@ test("S2: after a re-run quote, the earlier quote's token, its key, or a bare co
     // 旧报价的令牌 + 旧键：拿回旧单，不新建。
     const viaOldToken = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, first.key, req, PRICE);
     assert.equal(viaOldToken.idempotencyKey, first.key);
-    assert.match(viaOldToken.notice ?? "", /already ran/);
+    assert.match(viaOldToken.notice ?? "", /already submitted as prediction pred-first/);
     // 只带旧令牌、不带键：同样拿回旧单。
     const viaOldTokenOnly = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, undefined, req, PRICE);
     assert.equal(viaOldTokenOnly.idempotencyKey, first.key);
@@ -250,7 +250,7 @@ test("S2: after a re-run quote, the earlier quote's token, its key, or a bare co
     // 什么都不带的确认：拒绝，什么都不提交。
     await assert.rejects(
       resolveConfirmedIdempotencyKey(undefined, TOOL, undefined, req, PRICE),
-      (error: unknown) => error instanceof GenerationConfirmationError && /runs a request that already ran/.test(String(error))
+      (error: unknown) => error instanceof GenerationConfirmationError && /runs a request that was already submitted/.test(String(error))
     );
     // 别的键（模型自己编的）也不行。
     await assert.rejects(
@@ -302,4 +302,116 @@ test("S2: a job still running is never treated as a re-run, even with its own ke
     assert.equal(again.repeatOf, undefined);
     assert.equal(again.alreadySubmitted?.predictionId, "pred-running-2");
   });
+});
+
+// ---------- 第二轮复审 ----------
+
+test("round 2: an old confirmation after the 15-minute window still returns the earlier job", async (t) => {
+  setPredictionStatusLookupForTests(async () => "completed");
+  t.after(() => {
+    setPredictionStatusLookupForTests();
+    t.mock.restoreAll();
+  });
+  await runWithRequestContext(context("r2-late"), async () => {
+    const req = request1("r2 late stale confirm");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000901", "pred-late-1");
+    const realNow = Date.now();
+    t.mock.method(Date, "now", () => realNow + 16 * 60_000);
+    const later = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000902", req, PRICE);
+    assert.equal(later.idempotencyKey, "5d000000-0000-4000-8000-000000000902");
+    assert.equal(later.repeatOf?.predictionId, "pred-late-1");
+    // 旧令牌 + 旧键（令牌还在有效期内）：拿回旧单。
+    const stale = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, first.key, req, PRICE);
+    assert.equal(stale.idempotencyKey, first.key);
+    let calls = 0;
+    const result = await submit(stale.idempotencyKey, req, async () => {
+      calls += 1;
+      return { ok: true, predictionId: "pred-unapproved" };
+    });
+    assert.equal(calls, 0);
+    assert.deepEqual(result, { ok: true, predictionId: "pred-late-1" });
+  });
+});
+
+test("round 2: quoting with a finished job's key while a newer run of the same request is running returns the running one", async (t) => {
+  let status = "completed";
+  setPredictionStatusLookupForTests(async (id) => (id === "pred-r2-old" ? "completed" : status));
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("r2-running-newer"), async () => {
+    const req = request1("r2 running newer");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000a01", "pred-r2-old");
+    const rerun = await issueGenerationConfirmation(TOOL, first.key, req, PRICE);
+    assert.equal(rerun.repeatOf?.predictionId, "pred-r2-old");
+    const confirmed = await resolveConfirmedIdempotencyKey(rerun.confirmationToken, TOOL, rerun.idempotencyKey, req, PRICE);
+    await submit(confirmed.idempotencyKey, req, async () => ({ ok: true, predictionId: "pred-r2-new" }));
+    status = "processing";
+    const again = await issueGenerationConfirmation(TOOL, first.key, req, PRICE);
+    assert.equal(again.idempotencyKey, confirmed.idempotencyKey);
+    assert.equal(again.alreadySubmitted?.predictionId, "pred-r2-new");
+    assert.equal(again.repeatOf, undefined);
+  });
+});
+
+test("round 2: an old key whose submission record expired is refused, not resubmitted under that key", async (t) => {
+  setPredictionStatusLookupForTests(async () => "completed");
+  t.after(() => setPredictionStatusLookupForTests());
+  const ctx = context("r2-expired");
+  await runWithRequestContext(ctx, async () => {
+    const req = request1("r2 expired");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000b01", "pred-r2-expired");
+    const rerun = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000b02", req, PRICE);
+    assert.equal(rerun.repeatOf?.predictionId, "pred-r2-expired");
+    // 旧单的提交记录过期了（模拟：换一个空的幂等存储）。
+    ctx.idempotencyStore = new InMemoryIdempotencyStore();
+    await assert.rejects(
+      resolveConfirmedIdempotencyKey(undefined, TOOL, first.key, req, PRICE),
+      (error: unknown) => error instanceof GenerationConfirmationError && /can no longer be looked up/.test(String(error))
+    );
+  });
+});
+
+test("round 2: only http(s), data, asset and assetd reach the gateway from asset fields; dangerous schemes are refused anywhere", () => {
+  for (const value of [
+    "tcp://169.254.169.254:80/",
+    "rtsp://10.0.0.1/stream",
+    "rtmp://10.0.0.1/live",
+    "udp://10.0.0.1:1234",
+    "concat:/etc/passwd|/etc/hosts",
+    "subfile,,start,0,end,0,,:/etc/passwd",
+    "hls+http://169.254.169.254/x.m3u8",
+    "s3://bucket/key",
+    "http+unix://%2Fvar%2Frun%2Fdocker.sock/info",
+    "URL:http://169.254.169.254/",
+    "<URL:file:///etc/passwd>",
+  ]) {
+    const problems = localInputValues({ image_url: value });
+    assert.equal(problems.length, 1, value);
+    assert.match(problems[0]!.reason, /only http and https/, value);
+  }
+  // 字段名看不出是素材的：危险协议和系统路径照样退回。
+  for (const value of ["file:///etc/passwd", "/etc/passwd", "tcp://169.254.169.254:80/", "URL:http://169.254.169.254/"]) {
+    assert.equal(localInputValues({ face: value }).length, 1, value);
+  }
+  // 正常写法不受影响。
+  for (const value of ["https://example.com/a.png", "data:image/png;base64,iVBORw0KGgo=", "asset://asset_0e3519c46209d5d8a0bf181104cb5f35", "assetd://asset_0e3519c46209d5d8a0bf181104cb5f35"]) {
+    assert.deepEqual(localInputValues({ image_url: value }), [], value);
+  }
+  for (const value of ["fast", "16:9", "mode:portrait", "1080p"]) {
+    assert.deepEqual(localInputValues({ style: value }), [], value);
+  }
+});
+
+test("round 2: whitespace pasted around a link is trimmed (not refused); control characters are still refused", () => {
+  const params = trimLinkPadding({
+    prompt: "　keep the prompt as is ",
+    image_url: "https://example.com/a.png　",
+    images: [" https://example.com/b.png", "﻿https://example.com/c.png​"],
+    other: "\u0001https://example.com/d.png",
+  });
+  assert.equal(params.prompt, "　keep the prompt as is ");
+  assert.equal(params.image_url, "https://example.com/a.png");
+  assert.deepEqual(params.images, ["https://example.com/b.png", "https://example.com/c.png"]);
+  assert.equal(params.other, "\u0001https://example.com/d.png");
+  assert.deepEqual(localInputValues({ image_url: params.image_url }), []);
+  assert.equal(localInputValues({ other: params.other }).length, 1);
 });

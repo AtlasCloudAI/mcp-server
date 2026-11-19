@@ -9,7 +9,7 @@ WorkBuddy 开放平台的连接器、技能、专家是三条各自审核的通�
 
 | 物料 | 内容 | 位置 | 状态 |
 | --- | --- | --- | --- |
-| 连接器 | `connector-meta.json` + `mcp.json` + `icon.svg` | 本目录 | 草稿 `oc_630b5b5c9e689e22`，卡在动态注册 |
+| 连接器 | `connector-meta.json` + `mcp.json` + `icon.svg` | 本目录 | 草稿 `oc_630b5b5c9e689e22`；动态注册已在生产上线（2026-11-19），可以提交审核 |
 | 技能 | 每个一个 `SKILL.md` 目录 | `skills/`，用 `打技能包.sh` 单独打 | 可独立提交 |
 | 专家 | `.codebuddy-plugin/plugin.json` + `agents/*.md` + 头像 | `expert/`，见该目录 README | 包已就绪，两项待确认 |
 
@@ -30,9 +30,12 @@ connectors/workbuddy/
 浏览器跳 `auth.atlascloud.ai` 授权 → 带 Bearer 调 `https://mcp.atlascloud.ai/mcp`。
 **不装本地进程，不发 npm，也不需要和腾讯做任何沟通。**
 
-远程档位暴露 **15 个工具**（共 16 个），比 stdio 少 `atlas_upload_media` —— 托管服务器读不到调用方的磁盘，本地文件改走 `atlas_get_upload_url` 签发的上传票据。`atlas_chat` 所有远程客户端都有。
+远程档位暴露 **18 个工具**（共 19 个），比 stdio 少 `atlas_upload_media` —— 托管服务器读不到调用方的磁盘，本地文件改走 `atlas_get_upload_url` 签发的上传票据。`atlas_chat` 所有远程客户端都有。
 
-### 唯一卡点：授权服务器要实现动态注册
+### 授权服务器要支持动态注册（2026-11-19 已在生产上线）
+
+生产 `https://auth.atlascloud.ai/.well-known/oauth-authorization-server` 已返回
+`registration_endpoint: https://auth.atlascloud.ai/register`，下面是当初为什么必须等它。
 
 WorkBuddy 桌面端内置官方 MCP TypeScript SDK 1.24.3。实测其打包代码：`registerClient()` 在
 `metadata.registration_endpoint` 缺失时抛 `Incompatible auth server`。

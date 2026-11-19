@@ -7,7 +7,7 @@
   "description_en": "Call 300+ AI models in natural language to generate images, video, audio and transcriptions, billed to your own Atlas account.",
   "source": "atlas-cloud",
   "type": "mcp",
-  "version": "2.5.0",
+  "version": "2.10.0",
   "minWorkbuddyVersion": "4.24.0",
   "examples_zh": [
     "列出 Atlas Cloud 上的图片生成模型",

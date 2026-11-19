@@ -429,18 +429,33 @@ function looksLikeBase64Mp3(value: string): boolean {
   return version !== 0b01 && layer !== 0b00 && bitrate !== 0b1111 && sampleRate !== 0b11;
 }
 
-/** 这个值是不是「写得不规整的网址」：http:/x、http:\x、中间夹 tab 换行、没写协议的 //x。 */
-function malformedLinkValue(raw: string, field: string): boolean {
-  // 只去普通空白：首尾夹着控制字符、不换行空格、零宽字符的链接算写法不规整，整条退回，
+const PADDED_LINK_REASON =
+  "it has an invisible character (a control character, no-break space or zero-width space) at its start or end; " +
+  "send the plain https:// link without it";
+const BACKSLASH_LINK_REASON =
+  "it contains a backslash, which link parsers read differently; use forward slashes only (write a literal backslash as %5C)";
+
+/**
+ * 这个值是不是「写得不规整的网址」，是的话为什么：http:/x、http:\\x、中间夹 tab 换行、没写协议的 //x；
+ * 首尾夹着不可见字符（11-19 S1）；带反斜杠（Python urllib 把 http://a\\@b 的主机读成 b，
+ * WHATWG 读成 a，两边对「访问的是哪台主机」理解不一样，11-19 第一轮复审）。
+ */
+function malformedLinkReason(raw: string, field: string): string | undefined {
+  // 只去普通空白：首尾夹着控制字符、不换行空格、零宽字符的链接整条退回，
   // 免得网关和这里对「这是不是链接」理解不一样（11-19 S1）。
   const trimmed = plainTrim(raw);
   const cleaned = urlPreprocess(raw);
-  if (/^https?:/i.test(cleaned)) return !/^https?:\/\//i.test(trimmed) || HAS_LINK_PADDING.test(trimmed);
+  if (/^https?:/i.test(cleaned)) {
+    if (HAS_LINK_PADDING.test(trimmed)) return PADDED_LINK_REASON;
+    if (!/^https?:\/\//i.test(trimmed)) return MALFORMED_LINK_REASON;
+    if (cleaned.includes("\\")) return BACKSLASH_LINK_REASON;
+    return undefined;
+  }
   // 没写协议的写法只在素材字段里判：别的字段里的 "//…" 多半是普通文字。
-  if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return false;
+  if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return undefined;
   // base64 的 MP3 只会出现在音频字段；单段主机名（//backend/…）解码后也可能碰巧像帧头，
   // 所以别的素材字段不放这个口子。
-  return !(expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned));
+  return expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned) ? undefined : MALFORMED_LINK_REASON;
 }
 
 /**
@@ -456,13 +471,17 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
     if (out.length >= MAX_GUARDED_LINKS || depth > MAX_GUARDED_DEPTH) return;
     if (typeof value === "string") {
       const trimmed = value.trim();
+      // 协议和路径按和链接一样的规则去首尾（控制字符、Unicode 空白）：原来用 trim()，
+      // "\x01file:///etc/passwd" 不算本机协议，Python、WHATWG 解析器去掉控制字符后却是 file:（11-19 复审）。
+      const cleaned = urlPreprocess(value);
       const source = isSourceField(field);
-      if (source && LOCAL_SCHEMES.test(trimmed)) {
+      const malformed = malformedLinkReason(value, field);
+      if (source && LOCAL_SCHEMES.test(cleaned)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if (source && LOCAL_PATH.test(trimmed)) {
+      } else if (source && LOCAL_PATH.test(cleaned)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
-      } else if (malformedLinkValue(value, field)) {
-        out.push({ field, url: trimmed, reason: MALFORMED_LINK_REASON });
+      } else if (malformed) {
+        out.push({ field, url: trimmed, reason: malformed });
       }
     } else if (Array.isArray(value)) {
       for (const item of value) visit(field, item, depth + 1);

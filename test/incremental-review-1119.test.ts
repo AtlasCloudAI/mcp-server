@@ -35,9 +35,25 @@ test("S1: a link padded with Unicode whitespace or control characters is sent ba
     for (const value of [`${pad}http://169.254.169.254/latest/meta-data`, `http://169.254.169.254/x.png${pad}`]) {
       const problems = localInputValues({ image_url: value });
       assert.equal(problems.length, 1, `${name}: ${JSON.stringify(value)}`);
-      assert.match(problems[0]!.reason, /not a complete link/, name);
+      assert.match(problems[0]!.reason, /invisible character/, name);
     }
   }
+});
+
+test("S1: local schemes and paths hidden behind a leading control character are still caught", () => {
+  for (const value of ["\u0001file:///etc/passwd", "\u001cfile:///etc/passwd", "\u00a0gopher://127.0.0.1:6379/_x"]) {
+    const problems = localInputValues({ image_url: value });
+    assert.equal(problems.length, 1, JSON.stringify(value));
+    assert.match(problems[0]!.reason, /only http and https/, JSON.stringify(value));
+  }
+  const path = localInputValues({ image_url: "\u0001/etc/passwd" });
+  assert.match(path[0]!.reason, /file path/);
+});
+
+test("S1: a link with a backslash is sent back (parsers disagree on its host)", () => {
+  const problems = localInputValues({ image_url: "http://evil.example\\@169.254.169.254/x.png" });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!.reason, /backslash/);
 });
 
 test("S1: ordinary links still pass, including surrounding spaces and non-ASCII paths", () => {

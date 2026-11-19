@@ -289,11 +289,12 @@ type PredictionStatusLookup = (predictionId: string) => Promise<string | undefin
 async function lookupPredictionStatus(predictionId: string): Promise<string | undefined> {
   // 用到时才加载：在模块顶部引入 api-client 会和 response-schemas 形成循环引用，启动时报未初始化。
   const { generationApi } = await import("./api-client.js");
-  const result = await generationApi<{ data?: { status?: unknown } }>(
+  const result = await generationApi<{ data?: { status?: unknown }; status?: unknown }>(
     `/model/prediction/${encodeURIComponent(predictionId)}`,
     { timeout: PREDICTION_STATUS_TIMEOUT_MS, maxRetries: 0 }
   );
-  const status = result?.data?.status;
+  // 网关有带 data 包装和不带两种外形（response-schemas 的 predictionResponseSchema 两种都认）。
+  const status = result?.data && typeof result.data === "object" ? result.data.status : result?.status;
   return typeof status === "string" ? status : undefined;
 }
 

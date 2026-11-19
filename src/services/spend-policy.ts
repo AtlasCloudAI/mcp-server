@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
 import { getRequestContext } from "./request-context.js";
+import { annotateToolCall } from "./tool-call-telemetry.js";
 import { InMemoryUploadTicketStore } from "./upload-ticket-store.js";
 import { schemaDefaults } from "../utils/schema-validator.js";
 import type { Model, PromptThresholdPrice } from "../types.js";
@@ -162,6 +163,8 @@ export async function evaluateSpend(
   requestBody: unknown,
   options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
 ): Promise<SpendDecision> {
+  // 埋点阶段：参数和链接都过了，开始问价。之后出的错（报价接口失败等）不再记成 schema。
+  annotateToolCall({ stage: "quote" });
   const thresholdUsd = generationAutoSubmitThresholdUsd();
   if (thresholdUsd <= 0) {
     // Every generation is confirmed with the user. Still fetch the live quote so the

@@ -236,18 +236,34 @@ function submissionIndexKey(subject: string, toolName: string, requestFingerprin
   return `submitted:${createHash("sha256").update([subjectHash(subject), toolName, requestFingerprint].join("\n")).digest("hex")}`;
 }
 
+// 新格式：最近几次确认用的键（最新在前）和时间，存到幂等记录过期为止。只存一个键时，被拒收的那一次会把
+// 已经提交过的那一单冲掉，之后旧令牌就认不出了（11-19 第三轮复审）。旧的 submitted: 键照旧写一份纯文本键，
+// 滚动发布和回滚期间还在跑的旧版本读得懂。
+const SUBMISSION_HISTORY = 5;
+
+function submissionListKey(subject: string, toolName: string, requestFingerprint: string): string {
+  return `submitted-v2:${createHash("sha256").update([subjectHash(subject), toolName, requestFingerprint].join("\n")).digest("hex")}`;
+}
+
+function submissionRetentionSeconds(): number {
+  const idempotencyTtl = getRequestContext()?.idempotencyTtlSeconds ?? 86400;
+  return Math.max(SAME_JOB_WINDOW_SECONDS + runtime().ttlSeconds, idempotencyTtl);
+}
+
 async function rememberSubmission(toolName: string, requestFingerprint: string, idempotencyKey: string): Promise<void> {
   if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return;
-  const { subject, ttlSeconds } = runtime();
+  const { subject } = runtime();
   try {
-    // 记到「确认还可能来」的时候为止（确认有效期 + 沿用时间窗）：超过 15 分钟的旧确认也要认得出是哪一单
-    // （11-19 第二轮复审）。沿用旧单只看前 15 分钟（recentSubmission 的 ageMs）。
+    const earlier = await submissionEntries(toolName, requestFingerprint);
+    const entries = [{ key: idempotencyKey, at: Date.now() }, ...earlier.filter((entry) => entry.key !== idempotencyKey)].slice(
+      0,
+      SUBMISSION_HISTORY
+    );
     await withTimeout(
-      quoteStore().put(
-        submissionIndexKey(subject, toolName, requestFingerprint),
-        JSON.stringify({ key: idempotencyKey, at: Date.now() }),
-        SAME_JOB_WINDOW_SECONDS + ttlSeconds
-      ),
+      Promise.all([
+        quoteStore().put(submissionListKey(subject, toolName, requestFingerprint), JSON.stringify(entries), submissionRetentionSeconds()),
+        quoteStore().put(submissionIndexKey(subject, toolName, requestFingerprint), idempotencyKey, SAME_JOB_WINDOW_SECONDS),
+      ]),
       QUOTE_STORE_TIMEOUT_MS
     );
   } catch (error) {
@@ -259,36 +275,54 @@ async function recentSubmission(
   toolName: string,
   requestFingerprint: string
 ): Promise<{ idempotencyKey: string; alreadySubmitted: AlreadySubmitted; ageMs: number } | undefined> {
-  const entry = await submissionIndexEntry(toolName, requestFingerprint);
-  if (!entry) return undefined;
-  try {
-    const record = await peekIdempotent(toolName, entry.key);
-    if (!record || record.fingerprint !== requestFingerprint) return undefined;
-    const alreadySubmitted = alreadySubmittedOf(record);
-    return alreadySubmitted ? { idempotencyKey: entry.key, alreadySubmitted, ageMs: Date.now() - entry.at } : undefined;
-  } catch (error) {
-    console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
+  // 最近一次真正提交过的那一单：被拒收、作废、还没提交的键跳过。
+  for (const entry of await submissionEntries(toolName, requestFingerprint)) {
+    try {
+      const record = await peekIdempotent(toolName, entry.key);
+      if (!record || record.fingerprint !== requestFingerprint) continue;
+      const alreadySubmitted = alreadySubmittedOf(record);
+      if (alreadySubmitted) return { idempotencyKey: entry.key, alreadySubmitted, ageMs: Date.now() - entry.at };
+    } catch (error) {
+      console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
+  return undefined;
 }
 
-/** 同一用户、工具、参数最近一次确认用的键和时间。老格式（只存了键）按刚记下处理。 */
-async function submissionIndexEntry(toolName: string, requestFingerprint: string): Promise<{ key: string; at: number } | undefined> {
-  if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return undefined;
+/** 同一用户、工具、参数最近几次确认用的键和时间，最新在前。只有旧格式（单个纯文本键）时按刚记下处理。 */
+async function submissionEntries(toolName: string, requestFingerprint: string): Promise<Array<{ key: string; at: number }>> {
+  if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return [];
   const { subject } = runtime();
   try {
-    const raw = await withTimeout(quoteStore().get(submissionIndexKey(subject, toolName, requestFingerprint)), QUOTE_STORE_TIMEOUT_MS);
-    if (!raw) return undefined;
-    try {
-      const parsed = JSON.parse(raw) as { key?: unknown; at?: unknown };
-      if (parsed && typeof parsed.key === "string") return { key: parsed.key, at: typeof parsed.at === "number" ? parsed.at : Date.now() };
-    } catch {
-      // 老格式：值就是键
+    const [list, legacy] = await withTimeout(
+      Promise.all([
+        quoteStore().get(submissionListKey(subject, toolName, requestFingerprint)),
+        quoteStore().get(submissionIndexKey(subject, toolName, requestFingerprint)),
+      ]),
+      QUOTE_STORE_TIMEOUT_MS
+    );
+    let entries: Array<{ key: string; at: number }> = [];
+    if (list) {
+      try {
+        const parsed = JSON.parse(list) as unknown;
+        if (Array.isArray(parsed)) {
+          entries = parsed.filter(
+            (entry): entry is { key: string; at: number } =>
+              !!entry && typeof entry === "object" && typeof (entry as { key?: unknown }).key === "string" &&
+              typeof (entry as { at?: unknown }).at === "number"
+          );
+        }
+      } catch {
+        entries = [];
+      }
     }
-    return { key: raw, at: Date.now() };
+    // 旧版本写的（或旧版本刚写、新格式还没有的）纯文本键：并进来，按刚记下处理。
+    if (legacy && !entries.some((entry) => entry.key === legacy)) entries = [{ key: legacy, at: Date.now() }, ...entries];
+    return entries;
   } catch (error) {
     console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
+    return [];
   }
 }
 
@@ -624,8 +658,8 @@ async function earlierSubmission(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<{ key: string; predictionId?: string } | "missing" | undefined> {
-  const indexed = (await submissionIndexEntry(toolName, requestFingerprint))?.key;
-  const candidates = [...new Set([idempotencyKey, record.repeatOf, indexed])].filter(
+  const indexed = (await submissionEntries(toolName, requestFingerprint)).map((entry) => entry.key);
+  const candidates = [...new Set([idempotencyKey, record.repeatOf, ...indexed])].filter(
     (key): key is string => typeof key === "string" && key !== record.idempotencyKey
   );
   for (const key of candidates) {

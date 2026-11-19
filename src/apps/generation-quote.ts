@@ -424,13 +424,16 @@ export function generationToolCardMeta(): { _meta?: Record<string, unknown> } {
 
 /** 报价里「已经提交过」「是再跑一次」两条说明，原样带给卡片（卡片据此写一句提示）。 */
 export function submissionNotes(content: Record<string, unknown>): {
-  already_submitted?: { prediction_id?: string };
+  already_submitted?: { prediction_id?: string; status?: string };
   repeat_of?: { prediction_id?: string };
 } {
   const pick = (value: unknown) => {
     const note = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
     if (!note) return undefined;
-    return typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {};
+    return {
+      ...(typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {}),
+      ...(typeof note.status === "string" ? { status: note.status } : {}),
+    };
   };
   const already = pick(content.already_submitted);
   const repeat = pick(content.repeat_of);

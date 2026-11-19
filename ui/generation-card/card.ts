@@ -31,9 +31,9 @@ export interface QuoteInfo {
   /** 按实际用量结算，最终扣费可能和预估略有出入。 */
   settles_on_usage?: boolean;
   /** 同样的请求刚提交过：确认拿回那一单，不另扣（M5）。 */
-  already_submitted?: { prediction_id?: string };
+  already_submitted?: { prediction_id?: string; status?: string };
   /** 同样的请求之前提交过：这份报价是再跑一次，确认会另扣一次（11-19 S2）。 */
-  repeat_of?: { prediction_id?: string };
+  repeat_of?: { prediction_id?: string; status?: string };
   /** 不完整的预估漏掉了什么（服务端给的说法）。 */
   estimate_missing?: string[];
   /** 扣费账户和可用余额；查不到就没有。 */
@@ -578,7 +578,10 @@ function submissionNotesOf(structured: Record<string, unknown>): Pick<QuoteInfo,
   const pick = (value: unknown) => {
     const note = record(value);
     if (!note) return undefined;
-    return typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {};
+    return {
+      ...(typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {}),
+      ...(typeof note.status === "string" ? { status: note.status } : {}),
+    };
   };
   const already = pick(structured.already_submitted);
   const repeat = pick(structured.repeat_of);

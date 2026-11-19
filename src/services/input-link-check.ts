@@ -383,16 +383,40 @@ const DANGEROUS_SCHEMES = new Set([
 const ANY_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 const FFMPEG_PROTOCOL = /^(?:subfile|concat|concatf|crypto|cache|async|pipe|fd)\s*[,:]/i;
 const URL_PREFIX = /^<\s*url\s*:|^url\s*:/i;
+const PROTOCOL_RELATIVE_HOST = /^[\\/]{2}(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.]+\]|[a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(?:[\\/?#]|$)/i;
+const URL_PREFIX_LINK = /^<?\s*url\s*:\s*\S+?\s*>?$/i;
 // 别的非文字字段里也不该出现的系统路径。
 const SENSITIVE_PATH = /^\/(?:etc|proc|sys|dev|root|home|var|usr|tmp|private|Users|opt|run|mnt|srv|boot|lib|bin|sbin)(?:\/|$)/;
 
-function schemeProblem(cleaned: string, source: boolean): boolean {
+/**
+ * 这个值是不是指向某个协议或位置、而不是普通取值。
+ * - 素材字段：URL: 前缀、ffmpeg 协议写法、危险协议、带 + 的组合协议，以及白名单以外的「协议://」。
+ * - 别的非文字字段（字段名看不出是素材，比如 face、garment、target）：同样的判断，但只看不含空白的值。
+ *   链接和路径不含空白；「Crypto: neon」「R+B: smooth」「Async, glitchy」这样的风格、标签、台词是普通文字，
+ *   原来会被当成协议误拒（11-19 第三轮复审）。这类字段里白名单以外的「协议://」也一律退回。
+ */
+function schemeProblem(cleaned: string, _source: boolean): boolean {
+  // Python urllib 的 unwrap 会去掉 <URL:…> 和 URL: 前缀再去空白，"URL: http://…" 照样是链接：
+  // 前缀后面只剩一段不含空白的内容就退回（"URL: what it means" 是普通文字）。
+  if (URL_PREFIX_LINK.test(cleaned)) return true;
+  // 含空白的是文字（素材字段里也有，比如 TTS 的 input），不是链接或协议写法。
+  if (/\s/.test(cleaned)) return false;
   if (URL_PREFIX.test(cleaned) || FFMPEG_PROTOCOL.test(cleaned)) return true;
   const scheme = ANY_SCHEME.exec(cleaned)?.[1]?.toLowerCase();
   if (scheme === undefined) return false;
   if (DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
   // 白名单只管「协议://」这种写法：素材字段里也有 en-US:Neural 这样的普通取值（音色编号）。
-  return source && cleaned.slice(scheme.length + 1).startsWith("//") && !ALLOWED_SOURCE_SCHEMES.has(scheme);
+  return cleaned.slice(scheme.length + 1).startsWith("//") && !ALLOWED_SOURCE_SCHEMES.has(scheme);
+}
+
+/**
+ * 这个值是不是本机路径。素材字段沿用 LOCAL_PATH；别的非文字字段里不含空白的路径写法也算：
+ * 相对路径（../、./、~/）、任何以 / 开头的绝对路径（/app/.env、/data/…，不只是系统目录）、Windows 路径。
+ */
+function pathProblem(cleaned: string, source: boolean): boolean {
+  if (source) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
+  if (/\s/.test(cleaned)) return false;
+  return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
 }
 // 本机路径：~/、./、../、Windows 盘符、UNC、以及像路径的绝对路径。base64 的 JPEG 以 "/9j/" 开头，
 // base64 的 MP3 可能以 "//" 开头，都不是路径，所以绝对路径只认「/ 后面跟路径字符」且不太长的串。
@@ -421,6 +445,8 @@ const HAS_LINK_PADDING = new RegExp(`^[${LINK_PADDING}]|[${LINK_PADDING}]$`);
 // 只有空白和零宽字符（不含控制字符）：粘贴来的链接首尾常带全角空格、不换行空格，直接去掉照常用。
 const LINK_WHITESPACE = "\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
 const LINK_WHITESPACE_EDGES = new RegExp(`^[${LINK_WHITESPACE}]+|[${LINK_WHITESPACE}]+$`, "g");
+const LINK_WHITESPACE_LEAD = new RegExp(`^[${LINK_WHITESPACE}]+`);
+const LINK_WHITESPACE_TRAIL = new RegExp(`[${LINK_WHITESPACE}]+$`);
 
 /**
  * 素材链接首尾只多了空白或零宽字符（中文输入法、网页粘贴常见）：去掉后交给后面的检查和网关，
@@ -432,7 +458,11 @@ export function trimLinkPadding<T extends Record<string, unknown>>(params: T): T
     if (depth > MAX_GUARDED_DEPTH) return value;
     if (typeof value === "string") {
       const stripped = value.replace(LINK_WHITESPACE_EDGES, "");
-      return stripped !== value && /^https?:\/\//i.test(stripped) && !HAS_LINK_PADDING.test(stripped) ? stripped : value;
+      if (stripped === value || !/^https?:\/\//i.test(stripped) || HAS_LINK_PADDING.test(stripped)) return value;
+      // 首尾只有普通 ASCII 空白时不动：之前的版本照原样收下、按原样算请求指纹，改了会让发布前的报价、
+      // 已提交记录对不上（11-19 第三轮复审）。只有带了全角空格、不换行空格这类字符才去掉。
+      const padding = (LINK_WHITESPACE_LEAD.exec(value)?.[0] ?? "") + (LINK_WHITESPACE_TRAIL.exec(value)?.[0] ?? "");
+      return /[^\x00-\x7f]/.test(padding) ? stripped : value;
     }
     if (Array.isArray(value)) return value.map((item) => clean(item, depth + 1));
     if (value && typeof value === "object") {
@@ -499,8 +529,10 @@ function malformedLinkReason(raw: string, field: string): string | undefined {
     if (cleaned.includes("\\")) return BACKSLASH_LINK_REASON;
     return undefined;
   }
-  // 没写协议的写法只在素材字段里判：别的字段里的 "//…" 多半是普通文字。
-  if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return undefined;
+  // 没写协议的写法（//host/…）：素材字段里一律算；别的非文字字段只看不含空白的值（"// TODO" 是普通文字）。
+  if (!/^[\\/]{2}/.test(cleaned)) return undefined;
+  // 别的非文字字段：只有 // 后面跟着 IP 或带点的域名才算（"//minimal" 这类风格写法是普通取值）。
+  if (!isSourceField(field) && !PROTOCOL_RELATIVE_HOST.test(cleaned)) return undefined;
   // base64 的 MP3 只会出现在音频字段；单段主机名（//backend/…）解码后也可能碰巧像帧头，
   // 所以别的素材字段不放这个口子。
   return expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned) ? undefined : MALFORMED_LINK_REASON;
@@ -526,7 +558,7 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
       const malformed = malformedLinkReason(value, field);
       if (schemeProblem(cleaned, source)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if ((source && LOCAL_PATH.test(cleaned)) || SENSITIVE_PATH.test(cleaned)) {
+      } else if (pathProblem(cleaned, source)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
       } else if (malformed) {
         out.push({ field, url: trimmed, reason: malformed });

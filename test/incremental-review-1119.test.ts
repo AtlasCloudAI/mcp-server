@@ -11,6 +11,7 @@ import {
   resolveConfirmedIdempotencyKey,
   setPredictionStatusLookupForTests,
 } from "../src/services/generation-confirmation.js";
+import { ApiRequestError } from "../src/services/api-client.js";
 import { InMemoryIdempotencyStore, executeIdempotently } from "../src/services/idempotency.js";
 import { inputLimitProblems, inputLinks, localInputValues, trimLinkPadding } from "../src/services/input-link-check.js";
 import { runWithRequestContext, type AtlasRequestContext } from "../src/services/request-context.js";
@@ -414,4 +415,55 @@ test("round 2: whitespace pasted around a link is trimmed (not refused); control
   assert.equal(params.other, "\u0001https://example.com/d.png");
   assert.deepEqual(localInputValues({ image_url: params.image_url }), []);
   assert.equal(localInputValues({ other: params.other }).length, 1);
+});
+
+// ---------- 第三轮复审 ----------
+
+test("round 3: a rejected re-run does not hide the earlier job; the old token still returns it", async (t) => {
+  setPredictionStatusLookupForTests(async () => "completed");
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("r3-rejected"), async () => {
+    const req = request1("r3 rejected rerun");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000c01", "pred-r3-first");
+    const rerun = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000c02", req, PRICE);
+    const confirmed = await resolveConfirmedIdempotencyKey(rerun.confirmationToken, TOOL, rerun.idempotencyKey, req, PRICE);
+    // 上游拒收（429）：这一单没开始。
+    await submit(confirmed.idempotencyKey, req, async () => {
+      throw new ApiRequestError("rate limited", 429);
+    }).catch(() => undefined);
+    const again = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000c03", req, PRICE);
+    assert.equal(again.repeatOf?.predictionId, "pred-r3-first");
+    const stale = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, undefined, req, PRICE);
+    assert.equal(stale.idempotencyKey, first.key);
+  });
+});
+
+test("round 3: plain-text values in non-asset fields are not taken for schemes or paths", () => {
+  for (const [field, value] of [
+    ["style", "R+B: smooth"],
+    ["tags", "C++: coding lofi"],
+    ["title", "Crypto: the movie"],
+    ["title", "URL: what it means"],
+    ["style", "Async, glitchy"],
+    ["input", "Concat: the two scenes"],
+    ["note", "// TODO later"],
+    ["voice_id", "en-US:Neural"],
+    ["timecode", "00:01"],
+  ] as const) {
+    assert.deepEqual(localInputValues({ [field]: value }), [], `${field}: ${value}`);
+  }
+});
+
+test("round 3: link-like values without spaces in any non-text field are still checked", () => {
+  for (const value of ["URL: http://169.254.169.254/", "< URL: file:///etc/passwd >"]) {
+    assert.equal(localInputValues({ title: value }).length, 1, value);
+  }
+  for (const value of ["tls://10.0.0.1:443", "gophers://127.0.0.1/", "applehttp://10.0.0.1/x", "//169.254.169.254/latest", "../../etc/passwd", "/app/.env", "/data/secret.png", "~/.aws/credentials"]) {
+    assert.equal(localInputValues({ garment: value }).length, 1, value);
+  }
+});
+
+test("round 3: ASCII-only whitespace around a link is left as is (request fingerprints stay stable)", () => {
+  assert.equal(trimLinkPadding({ image_url: "https://example.com/a.png \n" }).image_url, "https://example.com/a.png \n");
+  assert.equal(trimLinkPadding({ image_url: "https://example.com/a.png\u200b" }).image_url, "https://example.com/a.png");
 });

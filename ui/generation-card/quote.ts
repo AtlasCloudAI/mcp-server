@@ -1053,6 +1053,10 @@ function submissionNote(quote: QuoteInfo | undefined): HTMLElement | null {
     return h("p", { class: "note quote-repeat", role: "note" }, `This request was already run${id(quote.repeat_of)}. Confirming runs it again and is charged again.`);
   }
   if (quote?.already_submitted) {
+    // 提交没拿到确定答复（unconfirmed）或还在提交（in_progress）：不能说「确认就是看那一单」，确认会先去核实。
+    if (quote.already_submitted.status && quote.already_submitted.status !== "submitted") {
+      return h("p", { class: "note quote-repeat", role: "note" }, "This request may already have been submitted. Confirming checks for that job first; it won't start a second one.");
+    }
     return h("p", { class: "note quote-repeat", role: "note" }, `This request was already submitted${id(quote.already_submitted)}. Confirming shows that job; nothing new is charged.`);
   }
   return null;

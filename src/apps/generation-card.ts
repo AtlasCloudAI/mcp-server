@@ -248,9 +248,9 @@ export interface QuoteInfo {
   /** 按实际用量结算，最终扣费可能和预估略有出入。 */
   settles_on_usage?: boolean;
   /** 同样的请求刚提交过：确认拿回那一单，不另扣（M5）。 */
-  already_submitted?: { prediction_id?: string };
+  already_submitted?: { prediction_id?: string; status?: string };
   /** 同样的请求之前提交过：这份报价是再跑一次，确认会另扣一次（11-19 S2）。 */
-  repeat_of?: { prediction_id?: string };
+  repeat_of?: { prediction_id?: string; status?: string };
   /** 不完整的预估漏掉了什么（给人看的说法，如 the reference videos' length）。 */
   estimate_missing?: string[];
   /** 扣费账户和可用余额（需求文档 6.1）；查不到就没有。 */

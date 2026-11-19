@@ -158,6 +158,8 @@ export async function issueGenerationConfirmation(
  * - 调用方没带键或带了个新键，但同一用户、同一工具、同样参数刚提交过（SAME_JOB_WINDOW_SECONDS 内）：也沿用
  *   那一单的键，并在报价里写明已经提交过（11-18 上线前审查 M5：卡片上已确认过，模型不知道，又报一次价拿到
  *   新键，用户再点确认就成了第二单）。atlas_chat 不在此列：同一句话再问一遍是正常用法。
+ *   那一单已经跑完（成功、失败、取消）就不再沿用：用户说「再来一张」或重试失败的单是正常需求（11-19 增量
+ *   审查 S2）。查不到状态时按还在跑处理，宁可多问一句也不重复扣费。
  */
 async function unusedIdempotencyKey(
   toolName: string,
@@ -230,10 +232,58 @@ async function recentSubmission(
     const record = await peekIdempotent(toolName, key);
     if (!record || record.fingerprint !== requestFingerprint) return undefined;
     const alreadySubmitted = alreadySubmittedOf(record);
-    return alreadySubmitted ? { idempotencyKey: key, alreadySubmitted } : undefined;
+    if (!alreadySubmitted) return undefined;
+    // 有任务号、而且那一单已经结束：这是一次新的运行，不沿用（S2）。
+    if (alreadySubmitted.predictionId && (await predictionFinished(alreadySubmitted.predictionId))) return undefined;
+    return { idempotencyKey: key, alreadySubmitted };
   } catch (error) {
     console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
+  }
+}
+
+// 任务已经结束的状态。没列出的（包括查不到、没状态、新出现的写法）一律按还在跑：沿用原键最多让用户
+// 多确认一次，误判成结束则可能重复扣费。
+const FINISHED_STATUSES = new Set([
+  "completed",
+  "succeeded",
+  "success",
+  "failed",
+  "error",
+  "canceled",
+  "cancelled",
+  "timeout",
+  "timed_out",
+  "expired",
+]);
+const PREDICTION_STATUS_TIMEOUT_MS = 3_000;
+
+type PredictionStatusLookup = (predictionId: string) => Promise<string | undefined>;
+
+async function lookupPredictionStatus(predictionId: string): Promise<string | undefined> {
+  // 用到时才加载：在模块顶部引入 api-client 会和 response-schemas 形成循环引用，启动时报未初始化。
+  const { generationApi } = await import("./api-client.js");
+  const result = await generationApi<{ data?: { status?: unknown } }>(
+    `/model/prediction/${encodeURIComponent(predictionId)}`,
+    { timeout: PREDICTION_STATUS_TIMEOUT_MS, maxRetries: 0 }
+  );
+  const status = result?.data?.status;
+  return typeof status === "string" ? status : undefined;
+}
+
+let predictionStatusLookup: PredictionStatusLookup = lookupPredictionStatus;
+
+/** 只给测试用：换掉查任务状态的实现（不传则恢复默认）。 */
+export function setPredictionStatusLookupForTests(lookup?: PredictionStatusLookup): void {
+  predictionStatusLookup = lookup ?? lookupPredictionStatus;
+}
+
+async function predictionFinished(predictionId: string): Promise<boolean> {
+  try {
+    const status = await withTimeout(predictionStatusLookup(predictionId), PREDICTION_STATUS_TIMEOUT_MS + 500);
+    return typeof status === "string" && FINISHED_STATUSES.has(status.trim().toLowerCase());
+  } catch {
+    return false;
   }
 }
 

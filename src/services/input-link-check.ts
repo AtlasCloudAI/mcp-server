@@ -52,7 +52,7 @@ export function inputLinks(
   const visit = (field: string, value: unknown, depth: number): void => {
     if (out.length >= maxLinks || depth > maxDepth) return;
     if (typeof value === "string") {
-      const trimmed = value.trim();
+      const trimmed = urlPreprocess(value);
       // 按「字段 + 链接」去重：同一个链接放在图片和视频两个字段里，两边的要求不一样，都要判。
       if (/^https?:\/\//i.test(trimmed) && !out.some((l) => l.url === trimmed && l.field === field)) out.push({ field, url: trimmed });
     } else if (Array.isArray(value)) {
@@ -285,7 +285,8 @@ export function inputLimitProblems(params: Record<string, unknown>): InputLinkPr
   const visit = (field: string, value: unknown, depth: number): void => {
     if (tooDeep !== undefined || links.size > MAX_GUARDED_LINKS) return;
     if (typeof value === "string") {
-      if (/^https?:/i.test(urlPreprocess(value))) links.add(`${field}\0${value.trim()}`);
+      const link = urlPreprocess(value);
+      if (/^https?:/i.test(link)) links.add(`${field}\0${link}`);
       return;
     }
     if (value === null || typeof value !== "object") return;
@@ -388,9 +389,22 @@ function isSourceField(field: string): boolean {
 // h<tab>ttp://…、//169.254.169.254 在那边都是内网地址，在这边却不算链接，原样送到网关（11-17 实测）。
 const MALFORMED_LINK_REASON = "it is not a complete link; write it as https://… with two forward slashes";
 
-/** 按 WHATWG URL 解析前的预处理：去掉首尾 C0 控制字符和空格，删掉所有 tab、换行。 */
+// 首尾要去掉的字符：WHATWG URL 解析器去的 C0 控制字符和空格，加上各家下载器 trim 时会去的 Unicode 空白
+// （不换行空格、BOM、全角空格、零宽字符等；Go 的 strings.TrimSpace、JS 的 trim 都去其中大部分）。
+// 「是不是链接」「链接上限」「内网检查」三处必须用同一个判断：原来上限检查只去 C0、链接收集用 trim()，
+// 开头加一个不换行空格的内网链接两边都漏掉（11-19 增量审查 S1）。
+const LINK_PADDING = "\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
+const LINK_PADDING_EDGES = new RegExp(`^[${LINK_PADDING}]+|[${LINK_PADDING}]+$`, "g");
+const HAS_LINK_PADDING = new RegExp(`^[${LINK_PADDING}]|[${LINK_PADDING}]$`);
+
+/** 当作链接判断前的预处理：去掉首尾控制字符和各种空白，删掉所有 tab、换行。 */
 function urlPreprocess(value: string): string {
-  return value.replace(/^[\u0000- ]+|[\u0000- ]+$/g, "").replace(/[\t\n\r]/g, "");
+  return value.replace(LINK_PADDING_EDGES, "").replace(/[\t\n\r]/g, "");
+}
+
+/** 去掉首尾普通空白（空格、tab、换行）后的原值：用来判断写法是否规整。 */
+function plainTrim(value: string): string {
+  return value.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, "");
 }
 
 const BASE64_ONLY = /^[A-Za-z0-9+/=_-]+$/;
@@ -417,9 +431,11 @@ function looksLikeBase64Mp3(value: string): boolean {
 
 /** 这个值是不是「写得不规整的网址」：http:/x、http:\x、中间夹 tab 换行、没写协议的 //x。 */
 function malformedLinkValue(raw: string, field: string): boolean {
-  const trimmed = raw.trim();
+  // 只去普通空白：首尾夹着控制字符、不换行空格、零宽字符的链接算写法不规整，整条退回，
+  // 免得网关和这里对「这是不是链接」理解不一样（11-19 S1）。
+  const trimmed = plainTrim(raw);
   const cleaned = urlPreprocess(raw);
-  if (/^https?:/i.test(cleaned)) return !/^https?:\/\//i.test(trimmed);
+  if (/^https?:/i.test(cleaned)) return !/^https?:\/\//i.test(trimmed) || HAS_LINK_PADDING.test(trimmed);
   // 没写协议的写法只在素材字段里判：别的字段里的 "//…" 多半是普通文字。
   if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return false;
   // base64 的 MP3 只会出现在音频字段；单段主机名（//backend/…）解码后也可能碰巧像帧头，

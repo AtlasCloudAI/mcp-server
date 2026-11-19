@@ -151,6 +151,13 @@ export function autoSubmitThresholdUsd(): number {
   return parsed;
 }
 
+/** 报价金额进本次工具调用的埋点（只在生成报价这条路上；目录页的默认参数估价不算）。 */
+function annotateQuote(quote: Quote | null): void {
+  const usd = telemetryUsd(quote?.usd);
+  if (usd === undefined) return;
+  annotateToolCall({ estimated_cost_usd: usd, ...(quote?.partial ? { estimate_partial: true } : {}) });
+}
+
 /**
  * Decide whether this request can be submitted without a confirmation round-trip.
  *
@@ -159,13 +166,6 @@ export function autoSubmitThresholdUsd(): number {
  * that this costs less than the threshold" is not the same as "it is cheap", and
  * the whole point of the gate is the expensive case.
  */
-/** 报价金额进本次工具调用的埋点（只在生成报价这条路上；目录页的默认参数估价不算）。 */
-function annotateQuote(quote: Quote | null): void {
-  const usd = telemetryUsd(quote?.usd);
-  if (usd === undefined) return;
-  annotateToolCall({ estimated_cost_usd: usd, ...(quote?.partial ? { estimate_partial: true } : {}) });
-}
-
 export async function evaluateSpend(
   requestBody: unknown,
   options: { fetcher?: ApiRequestOptions["fetcher"] } = {}

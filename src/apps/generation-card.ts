@@ -1,0 +1,610 @@
+import { createHash } from "node:crypto";
+import { withRecordedCharge } from "../services/recorded-charge.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  RESOURCE_MIME_TYPE,
+  getUiCapability,
+  registerAppResource,
+} from "@modelcontextprotocol/ext-apps/server";
+import { z } from "zod";
+import { generationApi } from "../services/api-client.js";
+import { rememberCardClient } from "../services/card-clients.js";
+import { publicUrlStillServes } from "../services/input-link-check.js";
+import { isConfiguredMediaHost } from "../services/owned-storage.js";
+import { findModelByExactId, getModels } from "../services/doc-fetcher.js";
+import { classifyOutput, type OutputKind } from "../services/media-preview.js";
+import type { MediaSource } from "../services/media-names.js";
+import { reusablePromptOf, settingsChips } from "./card-params.js";
+import {
+  completedAtOf,
+  createdAtOf,
+  hasUntransferredMedia,
+  isFinished,
+  predictionOutputUrls,
+  secondsSince,
+  waitForPrediction,
+} from "../services/prediction-wait.js";
+import {
+  predictionResponseSchema,
+  type PredictionResponse,
+} from "../response-schemas.js";
+import { currentClientProfile } from "../services/client-profile.js";
+import { getRequestContext } from "../services/request-context.js";
+import { predictionIdSchema } from "../tool-contracts.js";
+import { CARD_TOOL_POLICIES } from "../tool-policy.js";
+import { ATLAS_SITE_URL } from "../constants.js";
+import { handleError } from "../utils/error-handler.js";
+import type { HistoryItem } from "../response-schemas.js";
+
+// 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
+// ChatGPT 和 Claude 都按 _meta.ui.resourceUri 认它。设计稿见 Figma「MCP 对话内组件 · 跟随宿主」
+// 的「生成进度」「作品图库」「报价确认」「上传」，以及全屏视图里的历史列表。
+
+// 卡片在宿主的沙箱 iframe 里运行，只能加载这里声明过的来源。
+// 生成结果在 atlas-media 桶，用户上传和工作流素材在 atlas-img 桶，示例素材在 static。
+// 资产库的签名缩略图：用户传进资产库的在 atlas-asset 桶，归档的生成历史在 atlas-media 和
+// res-atlascloud（dev 的 AssetD 配置是 atlas-asset-dev / atlas-media-dev / res-atlascloud，
+// 生产桶名按同一规律，2026-10-28 确认 atlas-asset 桶存在）。
+export const DEFAULT_MEDIA_DOMAINS = [
+  "https://atlas-media.oss-us-west-1.aliyuncs.com",
+  "https://atlas-img.oss-accelerate-overseas.aliyuncs.com",
+  "https://static.atlascloud.ai",
+  "https://atlas-asset.oss-us-west-1.aliyuncs.com",
+  "https://res-atlascloud.oss-us-west-1.aliyuncs.com",
+  // 报价卡模型行的厂商图标：官网的品牌图标（services/brand-logo.ts）。
+  "https://www.atlascloud.ai",
+];
+
+/**
+ * 卡片页面的地址带上页面内容的哈希。ChatGPT 按地址缓存卡片页面：2026-10-27 在 test 上换了新镜像、
+ * 点了「刷新工具」，新对话里仍是旧页面。页面一变地址就变，挂在工具上的地址也跟着变，宿主只能去拉新的。
+ */
+export const GENERATION_CARD_URI = `ui://atlascloud/generation-card-${createHash("sha256")
+  .update(loadCardHtml())
+  // 放行的来源也算进去：只改 CSP 时地址不变，宿主会一直用缓存里旧 CSP 的那份（新加的图标域名就加载不了）。
+  .update(DEFAULT_MEDIA_DOMAINS.join(","))
+  .digest("hex")
+  .slice(0, 12)}.html`;
+
+/** 结果里给卡片的数据放在这个 _meta 键下：不进模型上下文，卡片拿不到时再从 structuredContent 推。 */
+export const CARD_META_KEY = "atlascloud/card";
+
+/**
+ * 生成工具报错、而且肯定没开始（报价前、提交前就被拒）时结果 _meta 里带这个键：卡片画「没开始、没扣费」，
+ * 不画「Couldn't load this task + Refresh」。ui/generation-card/card.ts 里同名常量要一致。
+ */
+export const NOT_STARTED_META_KEY = "atlascloud/not_started";
+
+/** 卡片刷新自己用的工具，只给卡片调（visibility: app），模型看不到。 */
+export const CARD_STATUS_TOOL = "atlas_card_status";
+
+function boolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  return !["0", "false", "no", "off"].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * 卡片默认关：工具上挂了 ui 元数据，ChatGPT 里已上架的应用就会换一种展示，
+ * 所以按环境逐个打开（先 dev、test，验收后再开生产）。
+ */
+export function generationCardEnabled(): boolean {
+  return boolEnv("MCP_UI_CARDS", false);
+}
+
+/**
+ * 客户端会渲染 MCP Apps 卡片。只有这时才改给模型的指引：卡片会自己刷新到出结果、
+ * 报价在卡里确认、文件在卡里传，模型再查一次就会在对话里多出一张卡。
+ *
+ * 优先看 initialize 里的声明。远端服务是无状态的：每个请求新建一个服务实例，工具调用时
+ * 拿不到 initialize 的声明（2026-10-27 上传卡测试时发现，之前这里在线上一直是 false），
+ * 这时按 OAuth 客户端认——ChatGPT 和 Claude 网页都渲染卡片。其余客户端照旧让模型自己来，
+ * 最坏是多几张卡。
+ */
+export function clientRendersCards(server: McpServer): boolean {
+  if (!generationCardEnabled()) return false;
+  const capabilities = server.server.getClientCapabilities() as Parameters<
+    typeof getUiCapability
+  >[0];
+  if (capabilities) return getUiCapability(capabilities)?.mimeTypes?.includes(RESOURCE_MIME_TYPE) ?? false;
+  return currentClientProfile() === "chat";
+}
+
+
+
+/**
+ * 卡片能加载的媒体来源。别的环境存储桶不一样（test 是 atlas-media-dev / atlas-img-dev），
+ * 用 MCP_UI_MEDIA_DOMAINS（逗号分隔，可不写 https://）追加；生产不用配。
+ */
+export function cardMediaDomains(env: NodeJS.ProcessEnv = process.env): string[] {
+  const extra = (env.MCP_UI_MEDIA_DOMAINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value !== "")
+    .map((value) => (/^https:\/\//i.test(value) ? value : `https://${value}`))
+    .map((value) => value.replace(/\/+$/, ""));
+  return [...new Set([...DEFAULT_MEDIA_DOMAINS, ...extra])];
+}
+
+const SITE_URL = ATLAS_SITE_URL;
+
+function loadCardHtml(): string {
+  // 构建产物：tsc 之后 scripts/build-ui.mjs 把 ui/generation-card 打成一个 HTML 放到 dist/ui/。
+  // 从 dist/apps/ 运行时它在 ../ui/；直接跑源码（测试）时没有这个文件，给一个能看出原因的占位页。
+  try {
+    return readFileSync(
+      fileURLToPath(new URL("../ui/generation-card.html", import.meta.url)),
+      "utf8"
+    );
+  } catch {
+    return "<!doctype html><meta charset=utf-8><p>Atlas Cloud card bundle is not built.</p>";
+  }
+}
+
+/**
+ * 卡片能直接发请求的来源：只有上传中转（上传卡在卡片里把文件 POST 过去）。
+ * 远端服务每个请求的上下文里都有上传地址；读不到时（启动时登记资源）用 MCP_PUBLIC_URL，
+ * 中转和 /mcp 同一个 origin。stdio 没有中转，什么都不放行。
+ */
+export function cardConnectDomains(env: NodeJS.ProcessEnv = process.env): string[] {
+  const base = getRequestContext()?.uploadBaseUrl ?? env.MCP_PUBLIC_URL;
+  if (!base) return [];
+  try {
+    return [new URL(base).origin];
+  } catch {
+    return [];
+  }
+}
+
+function resourceUiMeta(): Record<string, unknown> {
+  const domains = cardMediaDomains();
+  const connect = cardConnectDomains();
+  return {
+    ui: { csp: { resourceDomains: domains, connectDomains: connect }, prefersBorder: false },
+    // ChatGPT 旧版 Apps SDK 读这几个键；新版和 Claude 读上面的 ui。
+    "openai/widgetCSP": { connect_domains: connect, resource_domains: domains },
+    "openai/widgetPrefersBorder": false,
+  };
+}
+
+/**
+ * 卡片上的模型名来自模型目录，冷启动拉一次要好几秒、超过卡片肯等的 3 秒（第一次查历史就没有名字）。
+ * 远端服务启动时在后台预取一次（目录有 5 分钟缓存），失败也无所谓。
+ */
+export function prefetchCardCatalog(): void {
+  if (generationCardEnabled()) void getModels().catch(() => undefined);
+}
+
+export function registerGenerationCardResource(server: McpServer): void {
+  const read = (uri: string) => ({
+    contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: loadCardHtml(), _meta: resourceUiMeta() }],
+  });
+  registerAppResource(
+    server,
+    "Atlas Cloud generation card",
+    GENERATION_CARD_URI,
+    {
+      description: "Shows the progress and finished media of an Atlas Cloud generation.",
+      _meta: resourceUiMeta(),
+    },
+    async () => read(GENERATION_CARD_URI)
+  );
+  // 换镜像后宿主手里还是旧地址（ChatGPT 不点「刷新工具」就一直用旧工具列表，2026-10-27 实测）。
+  // 它缓存过期再来读旧地址时也给当前页面，不能让卡片打不开。不带哈希的最早地址同样能匹配。
+  server.registerResource(
+    "Atlas Cloud generation card (earlier address)",
+    new ResourceTemplate("ui://atlascloud/generation-card{build}", { list: undefined }),
+    { mimeType: RESOURCE_MIME_TYPE, _meta: resourceUiMeta() },
+    async (uri) => read(uri.href)
+  );
+}
+
+/** 挂到工具定义上：两个键都写，老宿主只认 "ui/resourceUri"。 */
+export function generationCardToolMeta(): Record<string, unknown> {
+  return {
+    ui: { resourceUri: GENERATION_CARD_URI },
+    "ui/resourceUri": GENERATION_CARD_URI,
+    // ChatGPT 要这个才允许卡片从里面调工具（刷新、重试）。
+    "openai/widgetAccessible": true,
+  };
+}
+
+export type CardMediaKind = OutputKind | "3d";
+
+export interface CardMedia {
+  url: string;
+  kind: CardMediaKind;
+}
+
+export type CardState =
+  | "quote"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "transfer_pending";
+
+/**
+ * 报价卡（state = "quote"）确认生成要的全部东西。卡片拿它原样再调一次同一个工具，
+ * 加上 confirmed、confirmation_token 和同一个幂等键——和模型在对话里确认走的是同一条路，
+ * 服务端照常核对报价；重复确认由幂等存储挡掉，不会多出一单。
+ */
+export interface QuoteInfo {
+  /** 要再调一次的生成工具名。 */
+  tool: string;
+  /** 这次调用的参数，去掉了确认相关的三个字段。 */
+  arguments: Record<string, unknown>;
+  idempotency_key: string;
+  confirmation_token: string;
+  /** 报价失效时间（ISO）。过了就只能重新报价。 */
+  expires_at?: string;
+  /** 按这次参数实算的预估价；拿不到时卡片显示「无法报价」。 */
+  estimated_usd?: number;
+  /** 预估不完整（只算了一部分）。 */
+  partial?: boolean;
+  /** 按实际用量结算，最终扣费可能和预估略有出入。 */
+  settles_on_usage?: boolean;
+  /** 同样的请求刚提交过：确认拿回那一单，不另扣（M5）。 */
+  already_submitted?: { prediction_id?: string; status?: string };
+  /** 同样的请求之前提交过：这份报价是再跑一次，确认会另扣一次（11-19 S2）。 */
+  repeat_of?: { prediction_id?: string; status?: string };
+  /** 不完整的预估漏掉了什么（给人看的说法，如 the reference videos' length）。 */
+  estimate_missing?: string[];
+  /** 扣费账户和可用余额（需求文档 6.1）；查不到就没有。 */
+  account?: { name: string; email?: string; type?: string; balance_usd?: number };
+  /** 这一单要生成什么：提示词（截断过）。 */
+  prompt?: string;
+  /** 这一单引用的素材，报价卡上显示缩略图和名称。 */
+  inputs?: (CardMedia & { name: string; source?: MediaSource })[];
+  /** 参数小标签，如 1080p、10 s、16:9、Audio。 */
+  settings: string[];
+  /** 报价有效多久（秒），过期时告诉用户「报价 N 分钟内有效」。 */
+  valid_seconds?: number;
+  /** 只在测试卡片上用：直接显示某个问题状态。 */
+  problem?:
+    | "insufficient_balance"
+    | "price_changed"
+    | "settings_changed"
+    | "rate_limited"
+    | "model_unavailable"
+    | "input_missing"
+    | "signed_out"
+    | "submitting"
+    | "verifying"
+    | "uncertain"
+    | "in_progress";
+  /** 只在测试卡片上用：余额不足、价格变了时显示的示例数字。 */
+  sample_balance_usd?: number;
+  sample_previous_usd?: number;
+  /** 只在测试卡片上用：「素材失效」里被删掉的文件名。 */
+  sample_missing?: string[];
+}
+
+export interface GenerationCardData {
+  state: CardState;
+  prediction_id: string;
+  model_id?: string;
+  model_name?: string;
+  /** Image / Video / Audio，取模型目录里的类型；进度卡标题开头用它。 */
+  model_type?: string;
+  /** 模型目录里的厂商图标（https 地址）；模型那一行放在名字前面。 */
+  model_icon?: string;
+  /** 模型自己写的一句选这个模型的理由（why_this_model）；报价卡上显示「Why this model: …」。 */
+  model_reason?: string;
+  /** 实际扣费（美元），来自查结果接口的 price；拿不到就不显示。 */
+  price_usd?: number;
+  /** 主要参数小标签（1080p · 10 s · 16:9），来自提交的参数或查结果带回的原始请求。 */
+  settings?: string[];
+  /**
+   * 查结果接口的 charge_status（aiproxy#1074）：没结算完时 price 是空的，卡片据此写
+   * 「待结算」而不是什么都不写或写 $0；失败卡据此说清退没退、扣没扣。老网关没有这个字段。
+   */
+  charge_status?: ChargeStatus;
+  media: CardMedia[];
+  error?: string;
+  /** 「在 Atlas 打开」：工作流去 /workflow/history，其他模型去模型页。 */
+  open_url?: string;
+  submitted_at?: string;
+  completed_at?: string;
+  /** 结果链接已经打不开了（存储过期或被删），卡片显示「链接过期」。 */
+  media_expired?: boolean;
+  /**
+   * 这一单的提示词原文（最长 2000 字），来自查结果带回的原始请求。历史详情的「Reuse prompt」用：
+   * Cursor 不转 _meta，历史列表只能从 structuredContent 推，那里的提示词是截断的片段（11-13 实测详情没有 Reuse prompt）。
+   */
+  prompt?: string;
+  /**
+   * 复用这一单要的原图和参数（和历史卡同一套取法）：按 ID 打开的结果卡也给 Reuse prompt / Reuse settings，
+   * 不只历史详情有（11-16 Jia）。
+   */
+  reuse_inputs?: { name: string; ref: string; field?: string }[];
+  reuse_inputs_unavailable?: number;
+  reuse_settings?: Record<string, string | number | boolean>;
+  /** 测试卡片的示例数据：卡片不去刷新，也不往对话里发消息。 */
+  sample?: boolean;
+  /** 只在测试卡片上用：直接显示「需要重新连接」。 */
+  sample_signed_out?: boolean;
+  sample_stalled?: boolean;
+  /** 只在 state = "quote" 时有。 */
+  quote?: QuoteInfo;
+  /** 由生成工具提交的任务：失败后卡片用它重新报价（Try again），不必替用户发消息。 */
+  retry?: { tool: string; arguments: Record<string, unknown> };
+}
+
+const THREE_D_EXTENSIONS = new Set(["glb", "gltf", "obj", "usdz", "fbx", "stl", "ply"]);
+
+export function cardMediaKind(url: string): CardMediaKind {
+  const kind = classifyOutput(url);
+  if (kind !== "other") return kind;
+  try {
+    const ext = new URL(url).pathname.split(".").pop()?.toLowerCase() ?? "";
+    if (THREE_D_EXTENSIONS.has(ext)) return "3d";
+  } catch {
+    // 不是合法 URL 就当普通文件
+  }
+  return "other";
+}
+
+const ACTIVE = new Set(["starting", "processing", "running", "pending", "in_progress"]);
+const QUEUED = new Set(["queued", "created", "waiting"]);
+const DONE = new Set(["completed", "succeeded", "success"]);
+
+export function cardStateOf(status: string, transferPending: boolean): CardState {
+  const s = status.toLowerCase();
+  if (DONE.has(s)) return transferPending ? "transfer_pending" : "succeeded";
+  if (QUEUED.has(s)) return "queued";
+  if (ACTIVE.has(s)) return "running";
+  if (s === "canceled" || s === "cancelled") return "canceled";
+  return "failed";
+}
+
+/**
+ * 「View request」去哪：有任务号就去官网使用历史里的这一单（/console/usage-history?sessionID=，
+ * 只列这一单，普通模型和工作流都在），原来去模型页、工作流历史页，找不到这一单（验收问题 5）。
+ * 报价卡还没有任务号，照旧去模型页。
+ */
+export function openInAtlasUrl(modelId: string | undefined, predictionId?: string): string {
+  if (predictionId) return `${SITE_URL}/console/usage-history?sessionID=${encodeURIComponent(predictionId)}`;
+  if (!modelId) return SITE_URL;
+  if (modelId.startsWith("atlascloud/studio/") || modelId.startsWith("atlascloud/workflow/")) {
+    return `${SITE_URL}/workflow/history`;
+  }
+  return `${SITE_URL}/models/${modelId}`;
+}
+
+export type ChargeStatus = "charged" | "partially_charged" | "pending" | "not_charged" | "refunded";
+
+const CHARGE_STATUSES = new Set<string>(["charged", "partially_charged", "pending", "not_charged", "refunded"]);
+
+export function chargeStatusOf(raw: unknown): ChargeStatus | undefined {
+  return typeof raw === "string" && CHARGE_STATUSES.has(raw) ? (raw as ChargeStatus) : undefined;
+}
+
+export function priceOf(raw: unknown): number | undefined {
+  const value = typeof raw === "string" ? Number.parseFloat(raw) : typeof raw === "number" ? raw : NaN;
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isoOf(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
+}
+
+export function buildGenerationCardData(input: {
+  predictionId: string;
+  status: string;
+  outputs: readonly string[];
+  transferPending: boolean;
+  modelId?: string;
+  modelName?: string;
+  modelType?: string;
+  price?: unknown;
+  chargeStatus?: unknown;
+  settings?: string[];
+  error?: string;
+  createdAt?: string;
+  completedAt?: string;
+  mediaExpired?: boolean;
+  prompt?: string;
+  reuse?: {
+    inputs: { name: string; ref: string; field?: string }[];
+    unavailable: number;
+    settings?: Record<string, string | number | boolean>;
+  };
+}): GenerationCardData {
+  const state = cardStateOf(input.status, input.transferPending);
+  const price = priceOf(input.price);
+  const chargeStatus = chargeStatusOf(input.chargeStatus);
+  return {
+    state,
+    prediction_id: input.predictionId,
+    ...(input.modelId ? { model_id: input.modelId } : {}),
+    ...(input.modelName ? { model_name: input.modelName } : {}),
+    ...(input.modelType ? { model_type: input.modelType } : {}),
+    ...(price !== undefined ? { price_usd: price } : {}),
+    ...(chargeStatus ? { charge_status: chargeStatus } : {}),
+    ...(input.settings && input.settings.length > 0 ? { settings: input.settings } : {}),
+    media: input.outputs.map((url) => ({ url, kind: cardMediaKind(url) })),
+    ...(input.error ? { error: input.error } : {}),
+    open_url: openInAtlasUrl(input.modelId, input.predictionId),
+    ...(input.createdAt ? { submitted_at: input.createdAt } : {}),
+    ...(input.completedAt ? { completed_at: input.completedAt } : {}),
+    ...(input.mediaExpired ? { media_expired: true } : {}),
+    ...(input.prompt ? { prompt: input.prompt } : {}),
+    ...(input.reuse && input.reuse.inputs.length > 0 ? { reuse_inputs: input.reuse.inputs } : {}),
+    ...(input.reuse && input.reuse.unavailable > 0 ? { reuse_inputs_unavailable: input.reuse.unavailable } : {}),
+    ...(input.reuse?.settings && Object.keys(input.reuse.settings).length > 0 ? { reuse_settings: input.reuse.settings } : {}),
+  };
+}
+
+/**
+ * 地址一律走挡内网、逐跳重判重定向的探测。原来自家存储（按主机名认）直接用全局 fetch HEAD，
+ * 会自动跟随重定向、不挡内网；而「自家」的判断只看域名和桶名前缀，前缀谁都能注册
+ * （11-16 安全审查 L1）。
+ */
+function mediaStillServes(url: string): Promise<boolean | null> {
+  return publicUrlStillServes(url, 3_000, { allowPrivate: isConfiguredMediaHost(url) });
+}
+
+// 上游临时链接 24 小时过期，Atlas 存储约 15 天。刚完成的结果不用查，
+// 放了快一天的才发一次 HEAD 确认还能打开，打不开就让卡片显示「链接过期」。
+const EXPIRY_CHECK_AFTER_SECONDS = 20 * 60 * 60;
+
+// 模型目录冷启动要拉整份列表（实测十几秒）。卡片上的模型名只是锦上添花，
+// 最多等这么久，拿不到就显示模型 ID，不拖慢查结果本身。
+export const MODEL_LOOKUP_TIMEOUT_MS = 3_000;
+
+export async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  try {
+    return await Promise.race([promise.catch(() => undefined), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 卡片数据里提示词的上限，和历史卡「Reuse prompt」一致。 */
+const CARD_PROMPT_MAX = 2000;
+
+/** 原始请求里的提示词，去掉首尾空白、超长截断；没有就是 undefined。 */
+export function cardPrompt(input: Record<string, unknown> | undefined): string | undefined {
+  // 模板单的提示词在 user_prompt（11-18 WorkBuddy H10）。
+  const text = reusablePromptOf(input)?.text;
+  if (!text) return undefined;
+  return text.length > CARD_PROMPT_MAX ? `${text.slice(0, CARD_PROMPT_MAX - 1)}…` : text;
+}
+
+/** 查结果带回的原始请求（?include_input=1）：对象或 JSON 字符串；老网关不给。 */
+function requestInput(raw: unknown): Record<string, unknown> | undefined {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** 原始请求 → 复用要的原图、参数。拿不到原始请求（老网关）或出错就不带，按钮退回 View request。 */
+async function reusableFromRequest(raw: unknown): Promise<
+  { inputs: { name: string; ref: string; field?: string }[]; unavailable: number; settings?: Record<string, string | number | boolean> } | undefined
+> {
+  const input = requestInput(raw);
+  if (!input) return undefined;
+  try {
+    const { reusableInputs, reusableSettings } = await import("./history-card.js");
+    const item = { requestBody: input } as unknown as HistoryItem;
+    const { inputs, unavailable } = await reusableInputs(item);
+    const settings = reusableSettings(item);
+    return { inputs, unavailable, ...(settings ? { settings } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** 卡片要的查结果参数：带回原始请求，结果卡才能显示主要参数。 */
+export const CARD_PREDICTION_PARAMS = { include_input: 1 } as const;
+
+/** 从查结果接口的返回拼卡片数据。模型名查不到、HEAD 失败都不影响结果。 */
+export async function predictionCardData(
+  predictionId: string,
+  result: PredictionResponse,
+  options: { checkExpiry?: (url: string) => Promise<boolean | null> } = {}
+): Promise<GenerationCardData> {
+  const data = (result.data ?? {}) as Record<string, unknown>;
+  const status = result.data?.status || "unknown";
+  const outputs = predictionOutputUrls(result);
+  const transferPending =
+    isFinished(status) && hasUntransferredMedia(outputs, completedAtOf(result));
+  const modelId = typeof data.model === "string" ? data.model : undefined;
+  const completedAt = isoOf(completedAtOf(result));
+  const age = secondsSince(completedAt);
+  const checkExpiry =
+    isFinished(status) && !transferPending && outputs.length > 0 && age !== null && age > EXPIRY_CHECK_AFTER_SECONDS;
+  const [model, stillServes] = await Promise.all([
+    // 查不到名字时卡片退回显示模型 ID。
+    modelId ? settleWithin(findModelByExactId(modelId), MODEL_LOOKUP_TIMEOUT_MS) : undefined,
+    checkExpiry ? (options.checkExpiry ?? mediaStillServes)(outputs[0]!) : null,
+  ]);
+  const mediaExpired = stillServes === false;
+  // 历史卡那套取法（history-card.ts 引用了本文件，按需动态引入避免循环依赖）。
+  const reuse = await reusableFromRequest(data.input);
+  return buildGenerationCardData({
+    predictionId,
+    status,
+    outputs,
+    transferPending,
+    modelId,
+    modelName: model?.displayName,
+    modelType: model?.type,
+    price: data.price,
+    chargeStatus: data.charge_status,
+    settings: settingsChips(requestInput(data.input)),
+    prompt: cardPrompt(requestInput(data.input)),
+    ...(reuse ? { reuse } : {}),
+    error: result.data?.error || undefined,
+    createdAt: isoOf(createdAtOf(result)),
+    completedAt,
+    mediaExpired,
+  });
+}
+
+/**
+ * 卡片自己刷新用。和 atlas_get_prediction 读同一个接口、同样在服务端等一会儿，
+ * 但只回卡片数据：不附图片预览块、不写给模型的指引，轮询起来轻。
+ */
+export function registerCardStatusTool(server: McpServer): void {
+  server.registerTool(
+    CARD_STATUS_TOOL,
+    {
+      title: "Refresh Generation Card",
+      description:
+        "Used by the Atlas Cloud generation card to refresh itself. Not for direct use: call atlas_get_prediction instead.",
+      inputSchema: {
+        prediction_id: predictionIdSchema.describe("Prediction ID shown on the card"),
+      },
+      annotations: { ...CARD_TOOL_POLICIES.atlas_card_status.annotations },
+      // 只给卡片调，不挂 resourceUri：它自己不渲染卡片（ChatGPT 对挂了的私有工具会提示
+      // 「无法渲染其小组件」）。
+      _meta: {
+        ui: { visibility: ["app"] },
+        "openai/widgetAccessible": true,
+        "openai/visibility": "private",
+      },
+    },
+    async ({ prediction_id }) => {
+      void rememberCardClient();
+      try {
+        const { result } = await waitForPrediction((budget) =>
+          generationApi<PredictionResponse>(
+            `/model/prediction/${encodeURIComponent(prediction_id)}`,
+            {
+              params: CARD_PREDICTION_PARAMS,
+              responseSchema: predictionResponseSchema,
+              timeout: budget.timeoutMs,
+              maxRetries: budget.maxRetries,
+            }
+          )
+        );
+        // 工作流单查结果接口不给扣费：到历史账单里补，结果卡才有实扣（11-18 WorkBuddy H10）。
+        const card = await predictionCardData(prediction_id, await withRecordedCharge(prediction_id, result));
+        return {
+          _meta: { [CARD_META_KEY]: card },
+          structuredContent: { card },
+          content: [{ type: "text", text: `Prediction ${prediction_id}: ${card.state}` }],
+        };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: handleError(error) }] };
+      }
+    }
+  );
+}

@@ -1,0 +1,388 @@
+// 资产库：atlas_search_assets / atlas_use_assets 两个工具、卡片数据，以及卡片前端的解析和交给模型的文字。
+//
+// 假接口照 2026-10-28 dev 实测的形状写：生成历史归档进来的素材标题是占位的 upload，视频没有缩略图；
+// 换原图地址是整批处理，有一个编号找不到整批 404。
+// Atlas 接口地址在模块加载时就定下来了，所以先起假接口、设环境变量，再动态 import 服务端。
+import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import test, { after, before } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { assetsForModel, assetsFromToolResult, signedUrlExpired, signedUrlExpiry, usedFromToolResult } from "../ui/generation-card/assets.js";
+import { filesForModel } from "../ui/generation-card/upload.js";
+
+let fake: Server;
+let lastListQuery = "";
+const listQueries: string[] = [];
+const sourceUrlBodies: string[][] = [];
+/** 每次换地址都给新的签名参数，像真的 AssetD 一样：同一素材两次换到的地址不同。 */
+let signature = 0;
+/** 打开后列表接口回旧版 kubedl 的 401（白名单还没放开资产库）。 */
+let rejectScoped = false;
+/** 打开后列表、取地址接口回 AssetD 的 403 asset_library_not_activated（资产库二期：充值后才能用）。 */
+let notActivated = false;
+
+const IMAGE = {
+  asset_id: "asset_a61d817802ff0ffcaae91e6bde2673c5",
+  title: "upload",
+  original_filename: "upload.bin",
+  media_type: "image",
+  status: "ready",
+  source_origin: "platform_history",
+  platform_asset_role: "output",
+  thumbnail_url: "https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a.jpg?sig=1",
+  preview_url: "https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a-preview.jpg?sig=1",
+  created_at: "2026-10-26T10:45:38.605Z",
+  generation_context: { model_route: "atlascloud/studio/material-clone", params: { prompt: "a red sneaker on white" } },
+};
+const VIDEO = {
+  asset_id: "asset_1f67b13776e38b788fa3f1d2fed5c67a",
+  title: "upload",
+  media_type: "video",
+  status: "ready",
+  source_origin: "platform_history",
+  platform_asset_role: "output",
+  thumbnail_url: null,
+  preview_url: "https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/v.mp4?sig=1",
+  created_at: "2026-10-25T08:00:00Z",
+  generation_context: { model_route: "atlascloud/studio/tvc-maker" },
+};
+const UPLOAD = {
+  asset_id: "asset_upload0000000000000000000000001",
+  title: "sneaker-front.jpg",
+  media_type: "image",
+  status: "ready",
+  source_origin: "user_upload",
+  // 签名失败时的相对路径：卡片和模型都用不了。
+  thumbnail_url: "/api/assets/asset_upload0000000000000000000000001/thumbnail",
+  created_at: "2026-10-24T08:00:00Z",
+};
+const MODEL_3D = {
+  asset_id: "asset_3d00000000000000000000000000001",
+  title: "sneaker-model.glb",
+  media_type: "3d",
+  status: "ready",
+  source_origin: "user_upload",
+  created_at: "2026-10-23T08:00:00Z",
+};
+const KNOWN = new Set([IMAGE.asset_id, VIDEO.asset_id, UPLOAD.asset_id, MODEL_3D.asset_id]);
+
+before(async () => {
+  fake = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    res.setHeader("content-type", "application/json");
+    if (notActivated && url.pathname.startsWith("/api/v1/assetd/api/assets")) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({ code: 403, msg: "asset_library_not_activated", error: { code: "asset_library_not_activated", retryable: false } }));
+      return;
+    }
+    if (url.pathname === "/api/v1/assetd/api/assets" && req.method === "GET") {
+      if (rejectScoped) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ code: 40100, error: "invalid_token", message: "this endpoint does not accept scoped access tokens" }));
+        return;
+      }
+      lastListQuery = url.search;
+      listQueries.push(url.search);
+      const type = url.searchParams.get("media_type");
+      // 3D 只在按 3D 筛时出现，不改动其余用例看到的列表。
+      // 资产名都是英文：按中文词搜什么都搜不到（问题 20）。
+      const items =
+        url.searchParams.get("q") === "耳机"
+          ? []
+          : type === "3d"
+            ? [MODEL_3D]
+            : [IMAGE, VIDEO, UPLOAD].filter((item) => !type || item.media_type === type);
+      res.end(JSON.stringify({ code: 200, msg: "succeed", data: { items, pagination: { limit: 12, count: items.length, next_cursor: type ? undefined : "cursor-2" } } }));
+      return;
+    }
+    if (url.pathname === "/api/v1/assetd/api/assets/source-urls" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const ids = (JSON.parse(body) as { asset_ids: string[] }).asset_ids;
+        sourceUrlBodies.push(ids);
+        if (ids.some((id) => !KNOWN.has(id))) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ code: 404, msg: "not_found", error: { code: "not_found", retryable: false } }));
+          return;
+        }
+        res.end(
+          JSON.stringify({
+            code: 200,
+            msg: "succeed",
+            data: {
+              items: ids.map((id) => ({
+                asset_id: id,
+                source_url: `https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/${id}?Expires=${++signature}`,
+                expires_at: "2026-10-28T09:18:42Z",
+                mime_type: id === VIDEO.asset_id ? "video/mp4" : "image/jpeg",
+              })),
+            },
+          })
+        );
+      });
+      return;
+    }
+    res.statusCode = 404;
+    res.end("{}");
+  });
+  await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+  process.env.ATLASCLOUD_API_BASE_URL = origin;
+  process.env.ATLASCLOUD_GENERATION_API_BASE_URL = origin;
+  process.env.ATLASCLOUD_API_KEY = "test-atlas-key";
+  // 假地址指向真的 OSS 域名：atlas_use_assets 不去读图片宽高（读法在 image-shape.test.ts）。
+  process.env.MCP_INPUT_LINK_CHECK = "off";
+});
+
+after(async () => {
+  await new Promise((resolve) => fake.close(resolve));
+});
+
+async function callTool(cards: boolean, name: string, args: Record<string, unknown>) {
+  const saved = process.env.MCP_UI_CARDS;
+  if (cards) process.env.MCP_UI_CARDS = "1";
+  else delete process.env.MCP_UI_CARDS;
+  const { createAtlasCloudServer } = await import("../src/server.js");
+  const server = createAtlasCloudServer("stdio");
+  const client = new Client({ name: "assets-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const tools = (await client.listTools()).tools;
+    const result = await client.callTool({ name, arguments: args });
+    return { tools, result };
+  } finally {
+    await client.close();
+    await server.close();
+    if (saved === undefined) delete process.env.MCP_UI_CARDS;
+    else process.env.MCP_UI_CARDS = saved;
+  }
+}
+
+function text(result: { content?: unknown }): string {
+  const blocks = (result.content ?? []) as Array<{ type: string; text?: string }>;
+  return blocks.map((block) => block.text ?? "").join("\n");
+}
+
+test("搜索：只要能用的素材，按类型筛；占位标题换成「类型 · 模型 结果」", async () => {
+  const { result } = await callTool(false, "atlas_search_assets", { query: "sneaker", media_type: "image", limit: 5 });
+  const query = new URLSearchParams(lastListQuery);
+  assert.equal(query.get("q"), "sneaker");
+  assert.equal(query.get("media_type"), "image");
+  assert.equal(query.get("limit"), "5");
+  assert.equal(query.get("status"), "ready");
+  const structured = result.structuredContent as { count: number; assets: Array<Record<string, unknown>> };
+  assert.equal(structured.count, 2);
+  assert.equal(structured.assets[0]!.name, "Image · material-clone result");
+  assert.equal(structured.assets[0]!.prompt, "a red sneaker on white");
+  assert.equal(structured.assets[1]!.name, "sneaker-front.jpg");
+  assert.equal(structured.assets[1]!.origin, "upload");
+  // 签名失败的相对路径丢掉。
+  assert.equal(structured.assets[1]!.thumbnail_url, undefined);
+  assert.match(text(result), /call atlas_use_assets/);
+  assert.equal(result._meta?.["atlascloud/assets"], undefined, "卡片关着不带卡片数据");
+});
+
+test("搜索 + 卡片：工具挂卡片，结果带资产库卡数据；视频没有缩略图时用预览取第一帧", async () => {
+  const { tools, result } = await callTool(true, "atlas_search_assets", {});
+  const tool = tools.find((t) => t.name === "atlas_search_assets");
+  assert.ok((tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri);
+  const card = result._meta?.["atlascloud/assets"] as Record<string, unknown>;
+  assert.equal(card.view, "assets");
+  assert.equal(card.next_cursor, "cursor-2");
+  assert.equal(card.max_pick, 10);
+  const items = card.items as Array<Record<string, unknown>>;
+  assert.equal(items.length, 3);
+  assert.equal(items[0]!.thumb_url, IMAGE.thumbnail_url);
+  assert.equal(items[0]!.preview_url, undefined, "图片用缩略图，不带大图预览");
+  assert.equal(items[1]!.kind, "video");
+  assert.equal(items[1]!.thumb_url, undefined);
+  assert.equal(items[1]!.preview_url, VIDEO.preview_url);
+  // 卡片前端解析得出同样的数据。
+  assert.deepEqual(assetsFromToolResult(result)?.items, items);
+});
+
+test("换原图地址：一次换好；use 工具声明卡片可调但自己不画卡片", async () => {
+  sourceUrlBodies.length = 0;
+  const { tools, result } = await callTool(true, "atlas_use_assets", { asset_ids: [IMAGE.asset_id, VIDEO.asset_id, IMAGE.asset_id] });
+  assert.deepEqual(sourceUrlBodies, [[IMAGE.asset_id, VIDEO.asset_id]], "重复的编号只换一次");
+  const tool = tools.find((t) => t.name === "atlas_use_assets");
+  assert.equal(tool?._meta?.["openai/widgetAccessible"], true);
+  assert.equal((tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri, undefined);
+  const used = usedFromToolResult(result);
+  assert.equal(used?.assets.length, 2);
+  assert.deepEqual(used?.missing, []);
+  assert.match(text(result), /expire at 2026-10-28T09:18:42Z/);
+  assert.equal(assetsFromToolResult(result), undefined, "use 的结果不能被当成资产库卡");
+});
+
+test("换原图地址：整批 404 时逐个再换，挑出不可用的；全都不可用算出错", async () => {
+  sourceUrlBodies.length = 0;
+  const missing = "asset_deleted000000000000000000000001";
+  const { result } = await callTool(false, "atlas_use_assets", { asset_ids: [IMAGE.asset_id, missing] });
+  assert.deepEqual(sourceUrlBodies, [[IMAGE.asset_id, missing], [IMAGE.asset_id], [missing]]);
+  const structured = result.structuredContent as { assets: unknown[]; missing: string[] };
+  assert.equal(structured.assets.length, 1);
+  assert.deepEqual(structured.missing, [missing]);
+  assert.equal(result.isError, undefined);
+  assert.match(text(result), /Not available/);
+
+  const { result: none } = await callTool(false, "atlas_use_assets", { asset_ids: [missing] });
+  assert.equal(none.isError, true);
+});
+
+test("后端还没给插件令牌放开资产库：说清楚，让模型改用上传", async () => {
+  rejectScoped = true;
+  try {
+    const { result } = await callTool(false, "atlas_search_assets", {});
+    assert.equal(result.isError, true);
+    assert.match(text(result), /isn't available to this Atlas Cloud connection yet/);
+    assert.match(text(result), /atlas_get_upload_url/);
+  } finally {
+    rejectScoped = false;
+  }
+});
+
+test("资产库没开通：搜索照常打开卡片显示「充值后能用」，取地址说清楚并让模型改用上传", async () => {
+  notActivated = true;
+  try {
+    const { result } = await callTool(true, "atlas_search_assets", {});
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.structuredContent, { count: 0, assets: [], activated: false });
+    const card = (result._meta as Record<string, { locked?: boolean; items: unknown[] }>)["atlascloud/assets"];
+    assert.equal(card?.locked, true);
+    assert.deepEqual(card?.items, []);
+    assert.match(text(result), /isn't activated yet/);
+    assert.match(text(result), /atlas_get_upload_url/);
+
+    // 卡片关着：照旧算出错，模型照文字办。
+    const { result: plain } = await callTool(false, "atlas_search_assets", {});
+    assert.equal(plain.isError, true);
+    assert.match(text(plain), /isn't activated yet/);
+
+    const { result: use } = await callTool(false, "atlas_use_assets", { asset_ids: [IMAGE.asset_id] });
+    assert.equal(use.isError, true);
+    assert.match(text(use), /isn't activated yet/);
+  } finally {
+    notActivated = false;
+  }
+});
+
+test("搜索：能按 3D 筛（资产库二期），卡片里的类型也是 3d", async () => {
+  const { result } = await callTool(true, "atlas_search_assets", { media_type: "3d" });
+  assert.match(lastListQuery, /media_type=3d/);
+  const card = (result._meta as Record<string, { media_type?: string; items: Array<{ kind: string; label: string }> }>)["atlascloud/assets"];
+  assert.equal(card?.media_type, "3d");
+  assert.deepEqual(card?.items.map((item) => [item.kind, item.label]), [["3d", "sneaker-model.glb"]]);
+});
+
+test("确认生成前：资产库素材换新地址（令牌按旧地址核对）；被删掉的报素材失效，其余链接不动", async () => {
+  const { refreshLibraryInputs, replaceUrls } = await import("../src/tools/assets.js");
+  const { rememberAssetNames, rememberAssetUrls } = await import("../src/services/media-names.js");
+  const deleted = "asset_deleted000000000000000000000002";
+  await rememberAssetNames([
+    { asset_id: IMAGE.asset_id, name: "sneaker-front.jpg" },
+    { asset_id: deleted, name: "sneaker-side.jpg" },
+  ]);
+  // 报价时用的地址：15 分钟前换的，已经过期。
+  const stale = "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/front?Expires=0";
+  const staleDeleted = "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/side?Expires=0";
+  await rememberAssetUrls([
+    { asset_id: IMAGE.asset_id, url: stale },
+    { asset_id: deleted, url: staleDeleted },
+  ]);
+  const publicLink = "https://cdn.example.com/kept.jpg";
+
+  const params = { prompt: "a sneaker", image: stale, reference_images: [stale, publicLink] };
+  const refreshed = await refreshLibraryInputs(params);
+  assert.equal(refreshed.ok, true);
+  if (!refreshed.ok) return;
+  const fresh = refreshed.params.image as string;
+  assert.match(fresh, new RegExp(`/${IMAGE.asset_id}\\?Expires=\\d+$`));
+  assert.deepEqual(refreshed.params.reference_images, [fresh, publicLink]);
+  assert.equal(refreshed.params.prompt, "a sneaker");
+  // 换回去就是报价时的请求：确认令牌照样对得上。
+  assert.deepEqual(replaceUrls(refreshed.params, refreshed.original), params);
+
+  const gone = await refreshLibraryInputs({ reference_images: [stale, staleDeleted] });
+  assert.equal(gone.ok, false);
+  if (gone.ok) return;
+  assert.match(gone.message, /An input file is no longer available: sneaker-side\.jpg \(deleted from the Asset Library\)/);
+  assert.match(gone.message, /Nothing was submitted or charged/);
+
+  // 不是资产库来的链接：原样提交，也不去问资产库。
+  sourceUrlBodies.length = 0;
+  const plain = await refreshLibraryInputs({ image: publicLink });
+  assert.deepEqual(plain, { ok: true, params: { image: publicLink }, original: new Map() });
+  assert.deepEqual(sourceUrlBodies, []);
+});
+
+test("编号格式不对的在参数校验就拦下", async () => {
+  const { result } = await callTool(false, "atlas_use_assets", { asset_ids: ["../../asset-library/settings"] });
+  assert.equal(result.isError, true);
+});
+
+test("交给模型的文字：给 asset:// 编号不给签名地址，说清服务端会换地址（问题 36）", () => {
+  const forModel = assetsForModel([{ asset_id: IMAGE.asset_id, label: "Image · material-clone result", kind: "image", url: "https://x/a.jpg" }]);
+  assert.match(forModel, /1 file from their Atlas Asset Library/);
+  assert.match(forModel, new RegExp(`\\(image\\): asset://${IMAGE.asset_id}`));
+  assert.doesNotMatch(forModel, /https:\/\/x\/a\.jpg/);
+  assert.match(forModel, /server swaps in a fresh file URL/);
+  assert.match(forModel, /atlas_use_assets/);
+
+  // 上传卡里混着上传的文件和资产库选来的：资产库的带编号和提示，上传的照旧。
+  const mixed = filesForModel([
+    { name: "photo.jpg", kind: "image", url: "https://u/photo.jpg" },
+    { name: "sneaker-front.jpg", kind: "image", url: "https://x/s.jpg", asset_id: UPLOAD.asset_id },
+  ]);
+  assert.match(mixed, /- photo\.jpg \(image\): https:\/\/u\/photo\.jpg/);
+  assert.match(mixed, new RegExp(`from the Asset Library\\): asset://${UPLOAD.asset_id}`));
+  assert.match(mixed, /asset:\/\/ reference/);
+  assert.doesNotMatch(filesForModel([{ name: "photo.jpg", kind: "image", url: "https://u/p.jpg" }]), /asset:\/\//);
+});
+
+test("中文词搜不到：改列最近的素材并写明没搜到，卡片标出来（问题 20）", async () => {
+  listQueries.length = 0;
+  const { result } = await callTool(true, "atlas_search_assets", { query: "耳机", media_type: "image" });
+  // 先按词搜，没搜到再不带词列最近的同类素材。
+  assert.deepEqual(
+    listQueries.map((q) => [new URLSearchParams(q).get("q"), new URLSearchParams(q).get("media_type")]),
+    [["耳机", "image"], [null, "image"]]
+  );
+  const structured = result.structuredContent as { count: number; unmatched_query?: string };
+  assert.equal(structured.unmatched_query, "耳机");
+  assert.equal(structured.count, 2);
+  assert.match(text(result), /No assets match "耳机"\. Asset names are usually English/);
+  const card = result._meta?.["atlascloud/assets"] as Record<string, unknown>;
+  assert.equal(card.unmatched_query, "耳机");
+  assert.equal(card.query, undefined, "列的不是搜索结果，卡片不写「Results for」");
+  assert.equal(assetsFromToolResult(result)?.unmatched_query, "耳机");
+
+  // 翻页（带游标）时不再退回，照常按词搜。
+  listQueries.length = 0;
+  await callTool(false, "atlas_search_assets", { query: "耳机", cursor: "cursor-2" });
+  assert.equal(listQueries.length, 1);
+});
+
+test("缩略图签名地址：读出到期时刻，过期（或不到半分钟就过期）的要换新地址", () => {
+  // 11-06 test 上 atlas_search_assets 实际给的缩略图地址（签名换成了假的）。
+  const v4 =
+    "https://atlas-asset-dev.oss-us-west-1.aliyuncs.com/assetd/test/30d/asset_47f8/thumbnail.png" +
+    "?response-cache-control=private%2C%20max-age%3D3600%2C%20immutable&x-oss-credential=LTAI%2F20261106%2Fus-west-1%2Foss%2Faliyun_v4_request" +
+    "&x-oss-date=20261106T060302Z&x-oss-expires=3418&x-oss-signature=abc&x-oss-signature-version=OSS4-HMAC-SHA256";
+  const expiry = Date.UTC(2026, 10, 6, 6, 3, 2) + 3418 * 1000;
+  assert.equal(signedUrlExpiry(v4), expiry);
+  assert.equal(signedUrlExpired(v4, expiry - 60_000), false);
+  assert.equal(signedUrlExpired(v4, expiry - 10_000), true);
+  assert.equal(signedUrlExpired(v4, Date.UTC(2026, 10, 8)), true);
+  assert.equal(signedUrlExpiry("https://atlas-media.oss-us-west-1.aliyuncs.com/a.jpg?OSSAccessKeyId=x&Expires=1793900000&Signature=y"), 1793900000 * 1000);
+  // 不签名的地址（生成结果）和坏地址都不算过期。
+  assert.equal(signedUrlExpiry("https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a.jpg"), undefined);
+  assert.equal(signedUrlExpired("https://atlas-media-dev.oss-us-west-1.aliyuncs.com/assetd-history/v1/a.jpg"), false);
+  assert.equal(signedUrlExpired("not a url"), false);
+  assert.equal(signedUrlExpired(undefined), false);
+});

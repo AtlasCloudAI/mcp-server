@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { llmApi, api , generationApi} from "../services/api-client.js";
 import { findModelByExactId } from "../services/doc-fetcher.js";
@@ -10,9 +11,12 @@ import {
 import { executeIdempotently } from "../services/idempotency.js";
 import {
   chatUsageCostUsd,
+  applyDailyAutoSubmitBudget,
   evaluateChatSpend,
+  settleAutoSpend,
   formatUsd,
   type SpendDecision,
+  type AutoSpendReservation,
   confirmationValidSeconds,
   confirmationReuseNotice,
   confirmationValidityNotice,
@@ -35,6 +39,24 @@ import {
 import { toolAnnotations } from "../tool-policy.js";
 import { currentClientProfile } from "../services/client-profile.js";
 import {
+  CARD_META_KEY,
+  clientRendersCards,
+  generationCardEnabled,
+  generationCardToolMeta,
+  predictionCardData,
+  CARD_PREDICTION_PARAMS,
+  chargeStatusOf,
+  priceOf,
+  type ChargeStatus,
+} from "../apps/generation-card.js";
+import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  sanitizeModel,
+  taskHash,
+} from "../services/tool-call-telemetry.js";
+import {
   completedAtOf,
   createdAtOf,
   hasUntransferredMedia,
@@ -42,6 +64,7 @@ import {
   isFinished,
   secondsSince,
   predictionOutputUrls,
+  predictionWaitSeconds,
   probeSizes,
   waitForPrediction,
 } from "../services/prediction-wait.js";
@@ -50,6 +73,63 @@ import {
   predictionResponseSchema,
   type PredictionResponse,
 } from "../response-schemas.js";
+
+/** 和卡片同一种写法：不足 1 美元时保留到 4 位小数（$0.015），至少 2 位。 */
+function chargeUsd(value: number): string {
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  const trimmed = value.toFixed(4).replace(/0+$/, "");
+  return `$${(trimmed.split(".")[1]?.length ?? 0) < 2 ? value.toFixed(2) : trimmed}`;
+}
+
+/**
+ * 卡片已经显示出结果时，提醒模型别另画、另生成、另搜一张图（11-16 ChatGPT 回归 S12）。ChatGPT 用自己的
+ * 图片搜索组件放了一张不相干的纸飞机，而且它只读结构化结果，所以这句也放进 structuredContent.card_note。
+ */
+export const RESULT_CARD_NOTE =
+  "The user already sees this result in the Atlas card above, with the real media and a Download button. " +
+  "Do not show any other picture of it: no image search results, no generated, illustrative or placeholder image. " +
+  "Answer in a sentence or two with the status and what was actually charged.";
+
+/** 查结果里没有扣费信息时：别说「没报」，去列表里看实扣。 */
+export const CHARGE_NOT_IN_RECORD =
+  "this record does not include the charge. atlas_list_predictions shows the amount actually charged " +
+  "(charged_usd) for this prediction_id; check it there before telling the user what it cost.";
+
+/** 对话回答停在 max_tokens 时给模型的下一步（11-18 ChatGPT 回归 O04）。 */
+export const CHAT_TRUNCATED_NEXT_STEP =
+  "This answer stopped at max_tokens (finish_reason: length) and is incomplete. Reasoning models spend part of " +
+  "max_tokens on hidden reasoning. Tell the user the answer was cut off; to get the full answer, ask again with a " +
+  "larger max_tokens (at least 1024).";
+
+/**
+ * 查结果里给模型看的一行扣费（需求文档 6.3：结算完才写实际费用，没结算完写待结算，
+ * 不把未知费用说成 $0）。老网关没有 charge_status 时只在有价格时写价格。
+ */
+export function chargeLine(status: ChargeStatus | undefined, priceUsd: number | undefined): string | null {
+  const usd = priceUsd !== undefined ? chargeUsd(priceUsd) : null;
+  switch (status) {
+    case "charged":
+      return `- **Charge**: ${usd ?? "charged (amount not available yet)"}`;
+    case "partially_charged":
+      return `- **Charge**: ${usd ? `${usd}, ` : ""}a partial charge for the part of the job that ran`;
+    case "pending":
+      return "- **Charge**: pending settlement — the final amount is not known yet; do not report it as $0";
+    case "not_charged":
+      return "- **Charge**: not charged";
+    case "refunded":
+      return "- **Charge**: refunded";
+    default:
+      return usd ? `- **Charge**: ${usd}` : null;
+  }
+}
+
+
+/** 结果已出、还在转存到 Atlas 存储时，结构化结果里给模型的下一步。 */
+export const TRANSFER_NEXT_STEP =
+  "The file is finished but still being copied to Atlas storage, so outputs is empty for now. " +
+  "Call atlas_get_prediction again with this prediction_id in about 15 seconds and use the Atlas link it returns. " +
+  "temporary_outputs are provider links that are slow from many networks and expire within 24 hours; " +
+  "use them only if no Atlas link has appeared after about 5 minutes.";
 
 export function registerLLMTools(
   server: McpServer,
@@ -63,14 +143,14 @@ export function registerLLMTools(
         title: "Chat with LLM",
         description: `Chat completion with an Atlas Cloud LLM (OpenAI-compatible), billed to the signed-in Atlas account. Use it when the user asks for an answer from a specific Atlas model (for example DeepSeek, Kimi, Qwen or GLM) or wants to compare models; the exact model ID is verified against the live Text catalog first.
 
-Billing follows the same spend gate as the generation tools. Call once without confirmation_token. The server bounds the worst-case cost of this exact request (input size, max_tokens and the model's highest per-token rates): under the auto-submit limit it runs straight away and reports the cost from actual token usage — pass that cost on to the user. At or above the limit, or when the model's rates are unknown, it returns the bound and a confirmation_token and spends nothing; show it and stop, and only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). Do not add a confirmation step of your own on top of this.
+Pricing: the server bounds the worst-case cost of this exact request (input size, max_tokens and the model's highest per-token rates). Under the auto-submit limit the request runs right away and the result reports the cost from actual token usage. At or above the limit, or when the model's rates are unknown, the call returns that bound and a confirmation_token and spends nothing; the request then runs on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token (if the token was lost, the server matches the quote from the unchanged arguments).
 
 Args:
   - model (string, required): An exact current LLM model ID returned by atlas_list_models.
   - messages (array, required): Array of message objects with "role" and "content" fields.
     Roles: "system", "user", "assistant"
   - temperature (number, optional): Sampling temperature, 0-2. Default: 1
-  - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound.
+  - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound. Reasoning models spend part of it on hidden reasoning, so do not set it below about 1024 for them, or the answer is cut off.
   - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1
 
 Returns:
@@ -116,6 +196,8 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           model: z.string(),
           message: z.string().optional(),
           finish_reason: z.string().optional(),
+          truncated: z.boolean().optional(),
+          next_step: z.string().optional(),
           usage: z
             .object({
               prompt_tokens: z.number().int().nonnegative(),
@@ -144,8 +226,10 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         top_p,
       }) => {
         try {
+          annotateToolCall({ stage: "prepare" });
           const found = await findModelByExactId(model);
           if (!found || found.type !== "Text") {
+            recordToolCallError({ code: found ? "invalid_param" : "model_not_found" });
             return {
               isError: true,
               content: [{
@@ -157,6 +241,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
 
+          annotateToolCall({ model: found.model });
           const body: Record<string, unknown> = {
             model: found.model,
             messages,
@@ -169,9 +254,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             resolved_model: found.model,
             request_body: body,
           };
-          let spend: SpendDecision | undefined;
+          let spend: (SpendDecision & { reservation?: AutoSpendReservation }) | undefined;
           if (!confirmation_token && !confirmed) {
-            spend = evaluateChatSpend(found, { messages, max_tokens });
+            spend = await applyDailyAutoSubmitBudget(evaluateChatSpend(found, { messages, max_tokens }));
           }
           if (spend && !spend.autoSubmit) {
             const confirmation = await issueGenerationConfirmation(
@@ -183,7 +268,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             const bound =
               spend.quotedUsd === null
                 ? "- **Worst-case cost**: unknown — the catalog has no complete per-token rates or output limit for this model, so it cannot be bounded in advance."
-                : `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request (input size, max_tokens and the highest rate tier), at or above the ${formatUsd(spend.thresholdUsd)} auto-submit limit. The real charge follows actual token usage and is usually far lower; setting a smaller max_tokens lowers this bound.`;
+                : spend.dailyBudget
+                  ? `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request. It is under the per-request limit, but chat requests that ran without confirmation today already add up to ${formatUsd(spend.dailyBudget.usedUsd === Number.POSITIVE_INFINITY ? spend.dailyBudget.budgetUsd : spend.dailyBudget.usedUsd)} of the ${formatUsd(spend.dailyBudget.budgetUsd)} daily allowance, so this one needs the user's confirmation.`
+                  : `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request (input size, max_tokens and the highest rate tier), at or above the ${formatUsd(spend.thresholdUsd)} auto-submit limit. The real charge follows actual token usage and is usually far lower; setting a smaller max_tokens lowers this bound.`;
             return {
               structuredContent: {
                 status: "confirmation_required" as const,
@@ -201,7 +288,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                   `- **Model**: ${found.displayName} (\`${found.model}\`)\n` +
                   `${bound}\n` +
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                  `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                   "Show this to the user and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.",
               }],
@@ -227,6 +314,13 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               })
           );
 
+          if (spend?.reservation) {
+            // 放行前已经按最坏情况预占了今天的额度：按实际用量退回差额（空回答也扣了钱）；
+            // 算不出实际用量就保留预占。失败、超时走不到这里，预占同样保留。
+            const used = response.usage ? chatUsageCostUsd(found, response.usage) : null;
+            await settleAutoSpend(spend.reservation, used);
+          }
+
           const choice = response.choices?.[0];
           if (!choice || choice.message.content.trim() === "") {
             const usageSummary = response.usage
@@ -244,11 +338,15 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             };
           }
 
+          // 11-18 ChatGPT 回归 O04：ChatGPT 为了压低最坏花费自己传了 max_tokens=80，推理模型把它几乎全用在
+          // 推理上，回答只剩半句。说清楚是被截断了、该怎么重来；ChatGPT 只读结构化结果，所以放进 next_step。
+          const truncated = choice.finish_reason === "length";
           const lines = [`# Chat Response\n`];
           lines.push(`**Model**: \`${response.model || found.model}\``);
           lines.push(`**Finish Reason**: ${choice.finish_reason}\n`);
           lines.push("## Response\n");
           lines.push(choice.message.content);
+          if (truncated) lines.push(`\n${CHAT_TRUNCATED_NEXT_STEP}`);
 
           const costUsd = response.usage ? chatUsageCostUsd(found, response.usage) : null;
           if (response.usage) {
@@ -274,6 +372,7 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               model: response.model || found.model,
               message: choice.message.content,
               finish_reason: choice.finish_reason,
+              ...(truncated ? { truncated: true, next_step: CHAT_TRUNCATED_NEXT_STEP } : {}),
               ...(response.usage ? { usage: response.usage } : {}),
               ...(costUsd !== null ? { cost_usd: costUsd } : {}),
             },
@@ -305,7 +404,7 @@ The server waits up to about 20 seconds for an unfinished task before answering,
 
 When the result is ready (status is "completed" or "succeeded"), the output URLs are returned, and for most clients any image is also attached as an image block. You should then:
 1. Present the image to the user. An image block, when attached, may or may not be displayed by the client, so do not assume the user has already seen it.
-2. Follow the presentation notes in the result — they depend on the client. Where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video.
+2. Follow the presentation notes in the result — they depend on the client. For a result the user is waiting for in this conversation (a generation they just asked for, or a file they asked to get), where you have a shell, save the file into the working directory without asking first, wait for the download to finish, and show the saved file with Markdown image syntax and its absolute path (\`![title](/abs/path.mp4)\`), which renders a player for video. When you are only looking a task up (its status, its cost, or an older task from atlas_list_predictions), do not download anything: give the URL as a link.
 
 Args:
   - prediction_id (string, required): The prediction ID returned from a generation request
@@ -325,24 +424,50 @@ Examples:
         status: z.string(),
         outputs: z.array(z.string()),
         transfer_pending: z.boolean().optional(),
+        temporary_outputs: z.array(z.string()).optional(),
+        next_step: z.string().optional(),
         error: z.string().optional(),
         metrics: z.record(z.unknown()).optional(),
+        price_usd: z.number().optional(),
+        price_to_tell_user: z.string().optional(),
+        charge_status: z.string().optional(),
+        charge_note: z.string().optional(),
+        card_note: z.string().optional(),
       },
       annotations: toolAnnotations("atlas_get_prediction"),
+      ...(generationCardEnabled() ? { _meta: generationCardToolMeta() } : {}),
     },
     async ({ prediction_id }) => {
+      // 与 CLI 的 get / wait 对应：服务端会不会替调用方等一会儿，看部署配置。
+      const waits = predictionWaitSeconds() > 0;
+      annotateToolCall({
+        execution_mode: waits ? "wait" : "get",
+        stage: waits ? "wait" : "fetch",
+        task_hash: taskHash(prediction_id),
+      });
       try {
         const fetchOnce = (budget: { timeoutMs: number; maxRetries: number }) =>
           generationApi<PredictionResponse>(
             `/model/prediction/${encodeURIComponent(prediction_id)}`,
             {
+              // 卡片打开时多要一份原始请求，结果卡才能显示主要参数。
+              ...(generationCardEnabled() ? { params: CARD_PREDICTION_PARAMS } : {}),
               responseSchema: predictionResponseSchema,
               timeout: budget.timeoutMs,
               maxRetries: budget.maxRetries,
             }
           );
-        const { result, waitedSeconds } = await waitForPrediction(fetchOnce);
+        const waited = await waitForPrediction(fetchOnce);
+        // 工作流单查结果接口不给扣费：到历史账单里补（11-18 WorkBuddy H10、ChatGPT「Actual charge: Not reported」）。
+        const result = await withRecordedCharge(prediction_id, waited.result);
+        const { waitedSeconds } = waited;
         const status = result.data?.status || "unknown";
+        annotateToolCall({
+          model: sanitizeModel((result.data as Record<string, unknown> | undefined)?.model),
+          generation_status: normalizeGenerationStatus(result.data?.status),
+          // 等满预算还在跑就是 timed_out：服务端任务没停，调用方该接着查。
+          ...(waits ? { wait_outcome: isActive(status) ? "timed_out" : "completed" } : {}),
+        });
 
         const lines = [`# Prediction Result\n`];
         lines.push(`- **ID**: \`${prediction_id}\``);
@@ -351,6 +476,15 @@ Examples:
         if (result.data?.error) {
           lines.push(`## Error\n\n${result.data.error}`);
         }
+
+        const data = result.data as Record<string, unknown> | undefined;
+        const priceUsd = priceOf(data?.price);
+        const chargeStatus = chargeStatusOf(data?.charge_status);
+        const charge = chargeLine(chargeStatus, priceUsd);
+        if (charge) lines.push(`${charge}\n`);
+        // 11-18 ChatGPT 回归：模板单按 ID 查，回答写「实扣：没有报告」，列表里其实记着 $0.1408。
+        const chargeMissing = isFinished(status) && !charge;
+        if (chargeMissing) lines.push(`- **Charge**: ${CHARGE_NOT_IN_RECORD}\n`);
 
         const outputUrls = predictionOutputUrls(result);
         const transferPending =
@@ -383,7 +517,19 @@ Examples:
           }
         }
 
-        if (isActive(status)) {
+        const resultOnCard = isFinished(status) && !transferPending && outputUrls.length > 0 && clientRendersCards(server);
+        // 宿主会渲染卡片时，卡片自己刷新到出结果；模型再查一次只会在对话里多一张卡。
+        const cardTracksTask = isActive(status) && clientRendersCards(server);
+        if (cardTracksTask) {
+          lines.push(
+            `\nThe task is still running. The user sees a live Atlas card for it that refreshes ` +
+              `itself and shows the result as soon as it is ready, so do not call ` +
+              `\`atlas_get_prediction\` again for this task in this turn. Tell the user in one short ` +
+              `sentence that the card will update when it finishes. If they later ask about the ` +
+              `result, call \`atlas_get_prediction\` with this same ID. Do not submit the job ` +
+              `again — that would start and bill a second one.`
+          );
+        } else if (isActive(status)) {
           const runningFor = secondsSince(createdAtOf(result));
           lines.push(
             `\nThe task is still running` +
@@ -398,12 +544,17 @@ Examples:
               `will pick it up with the same ID — never imply it is finished or stuck. Do not submit ` +
               `the job again — that would start and bill a second one.`
           );
+        } else if (resultOnCard) {
+          // 11-16 ChatGPT 回归 S12：卡片已经显示了结果，ChatGPT 还自己画了一张「Illustrative preview, not the
+          // actual generated image」的示意图放在下面，看着像生成结果。
+          lines.push(`\n${RESULT_CARD_NOTE}`);
         }
 
         if (!isActive(status) && !isFinished(status) && status !== "failed" && status !== "unknown") {
           lines.push(
             `\nStatus "${status}" is not a running state. Treat it as final: stop polling, tell the ` +
-              `user what it says, and do not resubmit unless they ask (failed or canceled jobs are not billed).`
+              `user what it says, and do not resubmit unless they ask. For what it cost, go by the charge line above ` +
+              `(charge_status) or charged_usd in atlas_list_predictions: a failed job is usually not billed, but can be partly billed.`
           );
         }
 
@@ -414,14 +565,32 @@ Examples:
           lines.push("```");
         }
 
+        const cardMeta = generationCardEnabled()
+          ? { [CARD_META_KEY]: await predictionCardData(prediction_id, result) }
+          : undefined;
+
         return {
+          ...(cardMeta ? { _meta: cardMeta } : {}),
           structuredContent: {
+            // 排在最前面，只读结构化结果的 ChatGPT 先看到。
+            ...(resultOnCard ? { card_note: RESULT_CARD_NOTE } : {}),
             prediction_id,
             status,
-            outputs: outputUrls,
-            ...(transferPending ? { transfer_pending: true } : {}),
+            // 转存还没完成时，上游的临时链接不放进 outputs，另放 temporary_outputs，并在 next_step 里写明
+            // 过一会儿再查：只读结构化结果的客户端（Claude Code）看不到文字里那段，会直接拿上游链接
+            // 去下载（11-04 第 13 轮问题 47）。
+            outputs: transferPending ? [] : outputUrls,
+            ...(transferPending
+              ? { transfer_pending: true, temporary_outputs: outputUrls, next_step: TRANSFER_NEXT_STEP }
+              : {}),
             ...(result.data?.error ? { error: result.data.error } : {}),
             ...(result.data?.metrics ? { metrics: result.data.metrics } : {}),
+            ...(priceUsd !== undefined && chargeStatus !== "pending"
+              ? // 原始金额有 8 位小数，模型会照抄（「$0.59746528 USD」）；另给一个和卡片一样写法的金额让它照着说。
+                { price_usd: priceUsd, price_to_tell_user: chargeUsd(priceUsd) }
+              : {}),
+            ...(chargeStatus ? { charge_status: chargeStatus } : {}),
+            ...(chargeMissing ? { charge_note: CHARGE_NOT_IN_RECORD } : {}),
           },
           content: [
             { type: "text", text: lines.join("\n") },
@@ -431,6 +600,7 @@ Examples:
           ],
         };
       } catch (error) {
+        if (waits) annotateToolCall({ wait_outcome: "error" });
         return {
           isError: true,
           content: [{ type: "text", text: handleError(error) }],

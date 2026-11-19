@@ -4,6 +4,7 @@ import {
   parseCredentialEncryptionKeys,
   type CredentialEncryptionKey,
 } from "./services/credential-envelope.js";
+import type { LibraryUploadLimits } from "./services/request-context.js";
 
 /**
  * 全平台唯一的一套 scope（令牌契约 v3 §4）。资源服务器不得引入自己的前缀或
@@ -92,6 +93,7 @@ export type CredentialMode =
    */
   | "oauth-exchange";
 export type IdempotencyBackend = "memory" | "redis";
+export type AnalyticsEnvironment = "production" | "test" | "dev";
 
 export interface HttpServerConfig {
   nodeEnv: "development" | "test" | "production";
@@ -131,10 +133,21 @@ export interface HttpServerConfig {
   generationConfirmationTtlSeconds: number;
   uploadTicketTtlSeconds: number;
   uploadMaxBytes: number;
+  /**
+   * 上传存进资产库（资产库二期）：开通了资产库的用户，中转把字节边收边转给 AssetD，
+   * 按类型限大小；没开通的照旧走 /model/uploadMedia，限 uploadMaxBytes。
+   */
+  libraryUpload?: LibraryUploadLimits;
   uploadRequestsPerMinute: number;
   /** 上传中转端点的公网前缀，以 / 结尾；票据直接拼在后面。 */
   publicUploadBaseUrl: URL;
   redisUrl?: string;
+  /** 工具调用埋点（PostHog）。没配 POSTHOG_KEY 时为空，整套不启用。 */
+  analytics?: {
+    key: string;
+    host: string;
+    environment: AnalyticsEnvironment;
+  };
 }
 
 const envSchema = z.object({
@@ -176,6 +189,7 @@ const envSchema = z.object({
     .enum(["service-account", "subject-map", "redis-subject-map", "oauth-exchange"])
     .default("service-account"),
   ATLASCLOUD_API_KEY: z.string().min(1).optional(),
+  MCP_ALLOW_SHARED_CREDENTIAL: z.enum(["0", "1"]).optional(),
   MCP_ATLAS_SUBJECT_KEYS_JSON: z.string().optional(),
   MCP_CREDENTIAL_ENCRYPTION_KEYS_JSON: z.string().optional(),
   MCP_CREDENTIAL_REDIS_PREFIX: z
@@ -204,8 +218,22 @@ const envSchema = z.object({
     .min(1_048_576)
     .max(268_435_456)
     .default(33_554_432),
+  // 上传存进资产库：边收边转，不进内存，所以上限跟 AssetD 走（图片、音频 50MB，视频、3D 100MB）。
+  // Cloudflare 和 ingress 的请求体上限同样要高于视频上限。
+  MCP_UPLOAD_TO_ASSET_LIBRARY: z.enum(["true", "false", "1", "0"]).optional(),
+  MCP_LIBRARY_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(52_428_800),
+  MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(104_857_600),
+  // 下面两项跟 AssetD 的 ASSETD_MAX_IMAGE_PIXELS、ASSETD_USER_UPLOAD_QUOTA_BYTES 保持一致：像素卡片先查，
+  // 上传空间只用在「空间已满」那句提示里，真正的判断在 AssetD。
+  MCP_LIBRARY_UPLOAD_MAX_IMAGE_PIXELS: z.coerce.number().int().min(1_000_000).max(1_000_000_000).default(24_000_000),
+  MCP_LIBRARY_UPLOAD_QUOTA_BYTES: z.coerce.number().int().min(1_048_576).default(2_147_483_648),
   MCP_UPLOAD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(30),
   MCP_REDIS_URL: z.string().url().optional(),
+  // 工具调用埋点。项目令牌从 Secret 注入，代码里不写任何 key；不设就不发事件。
+  POSTHOG_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().default("https://us.i.posthog.com"),
+  // 事件里的 environment。不设则按部署推断，见 analyticsEnvironment。
+  MCP_ANALYTICS_ENVIRONMENT: z.enum(["production", "test", "dev"]).optional(),
 });
 
 function commaList(raw: string | undefined): string[] {
@@ -272,6 +300,23 @@ function isPlainHostname(host: string): boolean {
 function isDevelopmentOrStagingHostname(hostname: string): boolean {
   const labels = hostname.toLowerCase().split(".");
   return labels.some((label) => ["dev", "development", "stage", "staging", "test"].includes(label));
+}
+
+/**
+ * 埋点里的 environment，取值与 CLI 的 cli_command 一致，看板按 environment='production' 过滤。
+ *
+ * 生产发布档（PLUGIN_RELEASE_TIER=production）只能是生产：配置校验已经禁止它用带
+ * dev/test/staging 的主机名。test 环境的域名带 test 段（mcp.test.atlascloud.ai），
+ * 其余一律算 dev。推断不对的部署显式设 MCP_ANALYTICS_ENVIRONMENT。
+ */
+export function analyticsEnvironment(
+  releaseTier: ReleaseTier,
+  publicMcpUrl: URL,
+  explicit?: AnalyticsEnvironment
+): AnalyticsEnvironment {
+  if (explicit) return explicit;
+  if (releaseTier === "production") return "production";
+  return publicMcpUrl.hostname.toLowerCase().split(".").includes("test") ? "test" : "dev";
 }
 
 export function loadHttpServerConfig(
@@ -383,6 +428,19 @@ export function loadHttpServerConfig(
     }
   }
 
+  // 部署出去的服务（NODE_ENV=production，test 也是）不许用一把共享 key 记所有人的账：
+  // service-account 和 subject-map 只给本机开发用。以前只在 PLUGIN_RELEASE_TIER=production 时拦，
+  // test 的档位是 staging，有人配上 ATLASCLOUD_API_KEY 就等于让所有登录的人花服务器的钱
+  // （11-16 安全审查 A2）。MCP_ALLOW_SHARED_CREDENTIAL=1 是给本机跑生产模式的显式开关。
+  if (
+    env.NODE_ENV === "production" &&
+    (env.MCP_CREDENTIAL_MODE === "service-account" || env.MCP_CREDENTIAL_MODE === "subject-map") &&
+    env.MCP_ALLOW_SHARED_CREDENTIAL !== "1"
+  ) {
+    throw new Error(
+      `MCP_CREDENTIAL_MODE=${env.MCP_CREDENTIAL_MODE} bills every caller to a shared credential and is not allowed when NODE_ENV=production; use oauth-exchange or redis-subject-map`
+    );
+  }
   const scopesSupported = commaList(env.MCP_OAUTH_SCOPES);
   const finalScopes = scopesSupported.length > 0 ? scopesSupported : [...REMOTE_SCOPES];
   const unknownScopes = finalScopes.filter(
@@ -535,10 +593,31 @@ export function loadHttpServerConfig(
       env.MCP_GENERATION_CONFIRMATION_TTL_SECONDS,
     uploadTicketTtlSeconds: env.MCP_UPLOAD_TICKET_TTL_SECONDS,
     uploadMaxBytes: env.MCP_UPLOAD_MAX_BYTES,
+    ...(env.MCP_UPLOAD_TO_ASSET_LIBRARY === "true" || env.MCP_UPLOAD_TO_ASSET_LIBRARY === "1"
+      ? {
+          libraryUpload: {
+            maxBytes: env.MCP_LIBRARY_UPLOAD_MAX_BYTES,
+            maxVideoBytes: Math.max(env.MCP_LIBRARY_VIDEO_UPLOAD_MAX_BYTES, env.MCP_LIBRARY_UPLOAD_MAX_BYTES),
+            maxImagePixels: env.MCP_LIBRARY_UPLOAD_MAX_IMAGE_PIXELS,
+            quotaBytes: env.MCP_LIBRARY_UPLOAD_QUOTA_BYTES,
+          },
+        }
+      : {}),
     uploadRequestsPerMinute: env.MCP_UPLOAD_REQUESTS_PER_MINUTE,
     // 中转端点是 /mcp 的兄弟路径（/mcp → /upload/），同一个 origin，Host 校验、
     // 安全头、CORS 全部复用；挂在子路径下部署时也跟着 MCP 的前缀走。
     publicUploadBaseUrl: new URL("upload/", publicMcpUrl),
     redisUrl: env.MCP_REDIS_URL,
+    analytics: env.POSTHOG_KEY?.trim()
+      ? {
+          key: env.POSTHOG_KEY.trim(),
+          host: env.POSTHOG_HOST.replace(/\/+$/, ""),
+          environment: analyticsEnvironment(
+            env.PLUGIN_RELEASE_TIER,
+            publicMcpUrl,
+            env.MCP_ANALYTICS_ENVIRONMENT
+          ),
+        }
+      : undefined,
   };
 }

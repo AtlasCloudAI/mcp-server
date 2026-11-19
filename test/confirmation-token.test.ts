@@ -187,3 +187,16 @@ test("报价记录存储挂住时，报价和确认都不会被拖住", async ()
   assert.equal(resolved.idempotencyKey, KEY);
   assert.ok(Date.now() - started < 3000, `took ${Date.now() - started}ms`);
 });
+
+test("58：确认时不带幂等键，按报价记录找回报价时服务端生成的那个，不当成「换了一单」", async () => {
+  const request = { ...REQUEST, prompt: "quote without a key" };
+  const { idempotencyKey, confirmationToken } = await issueGenerationConfirmation("atlas_generate_image", KEY, request, PRICE);
+  const resolved = await resolveConfirmedIdempotencyKey(confirmationToken, "atlas_generate_image", undefined, request, PRICE);
+  assert.equal(resolved.idempotencyKey, idempotencyKey);
+  assert.equal(resolved.notice, undefined);
+  // 没有报价记录、也没带幂等键：不能凭令牌提交，要求重新报价
+  await assert.rejects(
+    resolveConfirmedIdempotencyKey(confirmationToken, "atlas_generate_image", undefined, { ...request, prompt: "never quoted" }, PRICE),
+    /No quote was found/
+  );
+});

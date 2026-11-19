@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { SERVER_VERSION } from "../src/version.js";
 import type { AddressInfo } from "node:net";
 import { request as httpRequest, type Server } from "node:http";
 import test from "node:test";
@@ -189,7 +190,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       (body.scopes_supported as string[]).includes("offline_access"),
       "不公示 offline_access，客户端拿不到 refresh token，令牌一过期就要重新授权"
     );
-    assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
+    const health = await fetch(`${baseUrl}/healthz`);
+    assert.equal(health.status, 200);
+    // 运维发版后要能一眼对上线上跑的是哪一版，不必去翻镜像 digest。
+    assert.equal(((await health.json()) as { version?: string }).version, SERVER_VERSION);
     assert.equal((await fetch(`${baseUrl}/readyz`)).status, 200);
   });
 
@@ -235,7 +239,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
-  await t.test("official MCP client initializes and lists exactly 15 remote tools", async () => {
+  await t.test("official MCP client initializes and lists exactly 18 remote tools", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: {
         headers: {
@@ -248,7 +252,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
+      assert.equal(listed.tools.length, 18);
       assert.deepEqual(
         listed.tools.map((tool) => tool.name).sort(),
         [...REMOTE_TOOL_NAMES].sort()
@@ -371,7 +375,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       const before = uploads.length;
       const tooBig = await fetch(`${small.baseUrl}${smallPath}`, {
         method: "POST",
-        headers: { "x-atlas-filename": "big.bin" },
+        headers: { "x-atlas-filename": "big.png" },
         body: Buffer.alloc(1_048_577),
       });
       assert.equal(tooBig.status, 413);
@@ -410,6 +414,80 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
+  await t.test("upload card: cards on → the tool opens the card, the card may reach the relay, any origin can upload", async () => {
+    const saved = process.env.MCP_UI_CARDS;
+    process.env.MCP_UI_CARDS = "1";
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+      requestInit: { headers: { Authorization: "Bearer all", Origin: "https://chatgpt.com" } },
+    });
+    // 声明能渲染 MCP Apps 卡片，像 ChatGPT 一样。
+    const client = new Client(
+      { name: "upload-card-test", version: "1.0.0" },
+      { capabilities: { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } } }
+    );
+    await client.connect(transport);
+    let uploadPath = "";
+    try {
+      const { tools } = await client.listTools();
+      // 上传卡是单独的兜底工具（2026-11-11 Cursor）：atlas_get_upload_url 不挂卡片，只给模型自己传。
+      const plain = tools.find((entry) => entry.name === "atlas_get_upload_url");
+      assert.equal((plain?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri, undefined);
+      const selfUpload = await client.callTool({ name: "atlas_get_upload_url", arguments: { filename_hint: "ref.png" } });
+      assert.equal(selfUpload._meta?.["atlascloud/upload"], undefined);
+      assert.match((selfUpload.content as Array<{ text?: string }>)[0]?.text ?? "", /curl/);
+
+      const tool = tools.find((entry) => entry.name === "atlas_open_upload_card");
+      const resourceUri = (tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri;
+      assert.match(String(resourceUri), /^ui:\/\/atlascloud\/generation-card-/);
+      assert.equal(tool?._meta?.["openai/widgetAccessible"], true);
+
+      const minted = await client.callTool({ name: "atlas_open_upload_card", arguments: {} });
+      const card = minted._meta?.["atlascloud/upload"] as Record<string, unknown>;
+      assert.equal(card.view, "upload");
+      assert.equal(card.upload_url, (minted.structuredContent as { upload_url: string }).upload_url);
+      assert.equal(typeof card.max_bytes, "number");
+      assert.equal(card.max_files, 10);
+      // 卡片在传：模型别再让用户贴附件、别自己跑 curl。
+      const text = (minted.content as Array<{ text?: string }>)[0]?.text ?? "";
+      assert.match(text, /upload card/i);
+      assert.doesNotMatch(text, /curl/);
+      uploadPath = new URL(String(card.upload_url)).pathname;
+
+      // 卡片页面声明能连上传中转的 origin，不然宿主的 CSP 会挡住卡片里的上传。
+      const read = await client.readResource({ uri: String(resourceUri) });
+      const meta = read.contents[0]?._meta as { ui?: { csp?: { connectDomains?: string[] } }; "openai/widgetCSP"?: { connect_domains?: string[] } };
+      assert.deepEqual(meta.ui?.csp?.connectDomains, ["http://127.0.0.1"]);
+      assert.deepEqual(meta["openai/widgetCSP"]?.connect_domains, ["http://127.0.0.1"]);
+    } finally {
+      await client.close();
+      if (saved === undefined) delete process.env.MCP_UI_CARDS;
+      else process.env.MCP_UI_CARDS = saved;
+    }
+
+    // 卡片沙箱的来源列不完：上传中转对任何来源放行（凭据在票据里），其余路径照旧只认白名单。
+    const sandbox = "https://abc123.web-sandbox.oaiusercontent.com";
+    const preflight = await fetch(`${baseUrl}${uploadPath}`, {
+      method: "OPTIONS",
+      headers: { Origin: sandbox, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type" },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+    assert.match(String(preflight.headers.get("access-control-allow-headers")), /Content-Type/);
+    const posted = await fetch(`${baseUrl}${uploadPath}?filename=ref.png`, {
+      method: "POST",
+      headers: { Origin: sandbox, "content-type": "image/png" },
+      body: Buffer.from("png"),
+    });
+    assert.equal(posted.status, 200);
+    assert.equal(posted.headers.get("access-control-allow-origin"), "*");
+    const mcp = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { Origin: sandbox, "content-type": "application/json" },
+      body: rpcBody("initialize"),
+    });
+    assert.equal(mcp.status, 403);
+  });
+
   await t.test("raw tools/list exposes per-tool OAuth security schemes", async () => {
     const response = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
@@ -437,9 +515,12 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
         expected
       );
     }
+    // 加 securitySchemes 时不能把工具自己的 _meta 冲掉：ChatGPT 靠 fileParams 才会把附件交过来
+    const importTool = tools.find((tool) => tool.name === "atlas_import_chat_files");
+    assert.deepEqual((importTool?._meta as Record<string, unknown>)["openai/fileParams"], ["files"]);
   });
 
-  await t.test("a server-side client sees the same tools, and atlas_chat needs tasks:write", async () => {
+  await t.test("a server-side client sees the same tools except the ChatGPT attachment importer, and atlas_chat needs tasks:write", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       // Claude 从服务端调用，不带 Origin
       requestInit: { headers: { Authorization: "Bearer claude" } },
@@ -448,8 +529,10 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 15);
-      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...REMOTE_TOOL_NAMES].sort());
+      // Claude 不会把附件当下载链接交给工具，导入附件的工具对它没用（11-03 Claude 实测露出来了）。
+      const expected = REMOTE_TOOL_NAMES.filter((name) => name !== "atlas_import_chat_files");
+      assert.equal(listed.tools.length, expected.length);
+      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...expected].sort());
       const chat = listed.tools.find((tool) => tool.name === "atlas_chat");
       assert.ok(chat, "atlas_chat must be listed for Claude");
       assert.deepEqual(chat.annotations, TOOL_POLICIES.atlas_chat.annotations);

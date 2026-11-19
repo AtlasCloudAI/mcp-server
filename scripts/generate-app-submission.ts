@@ -33,13 +33,20 @@ function justify(name: string) {
   return {
     read_only_justification: a.readOnlyHint
       ? `${base} It performs no writes to the user's Atlas account, tasks, or assets.`
-      : `${base} It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.`,
+      : p.billable
+        ? `${base} It is not read-only: it submits a billable job to the user's Atlas account and stores its output there.`
+        : `${base} It is not read-only: it stores new files in the user's Atlas account, but submits no generation job and bills nothing.`,
+    // 唯一「写入但不计费」的远程工具是导入聊天附件：它的外部来源是宿主的临时下载链接
     open_world_justification: a.openWorldHint
-      ? `Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.`
+      ? p.billable
+        ? `Calls the Atlas Cloud generation API, which dispatches to third-party model providers and stores output on external object storage; results are not bounded to a closed dataset.`
+        : `Downloads files from the chat host's temporary links, which are outside Atlas Cloud, and stores them on external object storage.`
       : `Bounded to the Atlas Cloud catalog and the authenticated account; it does not reach any system outside Atlas Cloud.`,
     destructive_justification: a.destructiveHint
       ? `Spends the user's own Atlas balance, which cannot be un-spent. Every request is priced against the live catalog before anything is submitted. A quote under the auto-submit limit (MCP_AUTOSUBMIT_MAX_USD, USD 20 by default) is submitted directly and the result reports the amount actually charged; a quote at or above the limit, or one the platform will not price firmly, returns the quote plus an opaque confirmation token and spends nothing until the user explicitly confirms in a later turn. The gate fails closed: a quote that cannot be obtained, or that the platform marks partial, also requires confirmation. A stable idempotency key deduplicates retries so a network retry cannot bill twice.${chatQuote}`
-      : `Alters no state; repeated calls return the same information at no charge.`,
+      : a.readOnlyHint
+        ? `Alters no state; repeated calls return the same information at no charge.`
+        : `Deletes and overwrites nothing; each call only adds new stored files at no charge. A retry with the same idempotency key returns the earlier result instead of storing the files again.`,
   };
 }
 

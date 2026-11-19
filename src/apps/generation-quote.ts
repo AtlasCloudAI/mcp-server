@@ -1,0 +1,441 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { balanceResponseSchema } from "../response-schemas.js";
+import { ESTIMATE_SETTLES_ON_USAGE, estimateMissingLabel } from "../services/spend-policy.js";
+import { inputsOf, kindFromField, modelCardExtras, positiveNumber, promptOf, settingsChips } from "./card-params.js";
+import { type ApiRequestOptions, publicApi } from "../services/api-client.js";
+import { billingAccount, describeBillingAccount, formatBalanceUsd } from "../services/billing-account.js";
+import { currentClientIsChatGpt } from "../services/client-profile.js";
+import { rememberedMedia } from "../services/media-names.js";
+import { mayHaveStarted, rememberNotStarted } from "../services/not-started.js";
+import type { BalanceResponse } from "../types.js";
+import {
+  CARD_META_KEY,
+  NOT_STARTED_META_KEY,
+  type GenerationCardData,
+  buildGenerationCardData,
+  clientRendersCards,
+  generationCardEnabled,
+  generationCardToolMeta,
+  cardMediaKind,
+  type CardMediaKind,
+  type QuoteInfo,
+} from "./generation-card.js";
+
+// 生成工具的报价卡：报价结果显示成「确认生成」卡片，用户在卡里点 Generate，卡片自己
+// 带着确认令牌再调一次同一个工具；提交后原地变成进度卡，再自己刷新到出结果。
+// 设计稿见 Figma「MCP 对话内组件 · 跟随宿主」的「报价确认」一节。
+//
+// 不改各个生成工具的逻辑：只在外面包一层，按工具已经返回的 structuredContent
+// （confirmation_required / submitted）拼卡片数据，放进 _meta。
+
+/** 挂卡片的生成工具。转写（atlas_transcribe_audio）出的是文字，没有作品卡，不挂。 */
+export const CARD_GENERATION_TOOLS = [
+  "atlas_generate_image",
+  "atlas_generate_video",
+  "atlas_generate_audio",
+  "atlas_quick_generate",
+] as const;
+
+const CONFIRMATION_FIELDS = new Set(["confirmation_token", "confirmed", "idempotency_key"]);
+
+const KIND_TYPE: Record<string, string> = { image: "Image", video: "Video", audio: "Audio" };
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export { settingsChips } from "./card-params.js";
+
+/** 视频报价和提交结果读出的第一张输入图片的比例（tools/video.ts）。 */
+function inputShapeOf(value: unknown): { ratio: string } | undefined {
+  const first = Array.isArray(value) ? record(value[0]) : undefined;
+  return typeof first?.ratio === "string" ? { ratio: first.ratio } : undefined;
+}
+
+/**
+ * 输入素材是什么类型：先看地址，认不出（资产库临时地址没有扩展名，资产又没带 mime）时按参数
+ * 字段名猜，image / product_image / images 是图，video、audio 同理。认不出时报价卡的缩略图是灰的
+ * （11-03 第 9 轮问题 37）。
+ */
+function inputKind(url: string, field: string | undefined): CardMediaKind {
+  const kind = cardMediaKind(url);
+  if (kind !== "other") return kind;
+  return kindFromField(field) ?? kind;
+}
+
+/** 报价卡上的「任务内容」和「输入素材」（需求文档 6.1）。 */
+function quoteTask(params: Record<string, unknown> | undefined): Pick<QuoteInfo, "prompt" | "inputs"> {
+  const prompt = promptOf(params);
+  const inputs = inputsOf(params).map(({ field, ...input }) => ({ ...input, kind: inputKind(input.url, field) }));
+  return {
+    ...(prompt ? { prompt } : {}),
+    ...(inputs.length > 0 ? { inputs } : {}),
+  };
+}
+
+/** 由工具结果拼卡片数据；不是报价也不是提交（比如出错）就返回 undefined。 */
+export function generationResultCard(
+  tool: string,
+  args: Record<string, unknown>,
+  structured: unknown
+): GenerationCardData | undefined {
+  const content = record(structured);
+  if (!content) return undefined;
+  const modelId = typeof content.model_id === "string" ? content.model_id : undefined;
+  const modelName = typeof content.model_name === "string" ? content.model_name : undefined;
+  const modelType = typeof content.kind === "string" ? KIND_TYPE[content.kind] : undefined;
+
+  const callArgs = Object.fromEntries(
+    Object.entries(args).filter(([name]) => !CONFIRMATION_FIELDS.has(name))
+  );
+
+  if (content.status === "confirmation_required") {
+    const token = content.confirmation_token;
+    const key = content.idempotency_key;
+    if (typeof token !== "string" || typeof key !== "string") return undefined;
+    const validSeconds = positiveNumber(content.confirmation_valid_seconds);
+    const estimate = typeof content.estimated_cost_usd === "number" ? content.estimated_cost_usd : undefined;
+    // 优先用工具给出的实际提交参数（含服务端补的默认值）；老结构里没有时，图片、视频、
+    // 音频工具的参数在 params 里，快速生成直接平铺在参数上。
+    const params = record(content.params) ?? record(args.params) ?? callArgs;
+    const account = record(content.billing_account);
+    const missing = Array.isArray(content.estimate_missing)
+      ? content.estimate_missing.filter((code): code is string => typeof code === "string")
+      : [];
+    return {
+      ...buildGenerationCardData({
+        predictionId: "",
+        status: "quote",
+        outputs: [],
+        transferPending: false,
+        modelId,
+        modelName,
+        modelType,
+      }),
+      ...modelCardExtras(content, args),
+      state: "quote",
+      quote: {
+        tool,
+        arguments: callArgs,
+        idempotency_key: key,
+        confirmation_token: token,
+        ...(validSeconds
+          ? { expires_at: new Date(Date.now() + validSeconds * 1000).toISOString(), valid_seconds: validSeconds }
+          : {}),
+        ...(estimate !== undefined ? { estimated_usd: estimate } : {}),
+        ...(content.estimate_partial === true ? { partial: true } : {}),
+        ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
+        ...submissionNotes(content),
+        ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
+        settings: settingsChips(
+          params,
+          inputShapeOf(content.input_images),
+          typeof content.kind === "string" ? content.kind : modelType?.toLowerCase()
+        ),
+        ...quoteTask(params),
+        ...(account && typeof account.name === "string"
+          ? {
+              // 不带邮箱：设计稿 v3（11-10）扣费行只写「名字 · Personal」，对话可能被分享，邮箱不该露在卡上。
+              account: {
+                name: account.name,
+                ...(typeof account.type === "string" ? { type: account.type } : {}),
+                ...(typeof account.available_usd === "number" ? { balance_usd: account.available_usd } : {}),
+              },
+            }
+          : {}),
+      },
+    };
+  }
+
+  if (content.status === "submitted" || content.status === "completed") {
+    const submittedParams = record(content.params) ?? record(args.params) ?? callArgs;
+    const predictionId = content.prediction_id;
+    if (typeof predictionId !== "string" || !predictionId) return undefined;
+    const outputs = Array.isArray(content.outputs)
+      ? content.outputs.filter((u): u is string => typeof u === "string")
+      : [];
+    return {
+      ...buildGenerationCardData({
+        predictionId,
+        // 同步出结果的模型直接给作品卡；其余先显示生成中，卡片自己刷新。
+        status: outputs.length > 0 ? "completed" : "processing",
+        outputs,
+        transferPending: false,
+        modelId,
+        modelName,
+        modelType,
+        createdAt: new Date().toISOString(),
+        settings: settingsChips(submittedParams, inputShapeOf(content.input_images)),
+      }),
+      ...modelCardExtras(content, args),
+      retry: { tool, arguments: callArgs },
+    };
+  }
+  return undefined;
+}
+
+/** 查余额最多等这么久：报错本身不能被它拖住。 */
+const BALANCE_TIMEOUT_MS = 3_000;
+
+/** 可用余额（美元，两位小数）；查不到（没有 billing:read、超时、不是美元）就返回 undefined。 */
+async function availableBalance(fetcher?: ApiRequestOptions["fetcher"]): Promise<string | undefined> {
+  try {
+    const res = await publicApi<BalanceResponse>("/balance", {
+      responseSchema: balanceResponseSchema,
+      maxRetries: 0,
+      timeout: BALANCE_TIMEOUT_MS,
+      ...(fetcher ? { fetcher } : {}),
+    });
+    const value = Number(res.available?.value);
+    if (!Number.isFinite(value) || res.available?.currency.toLowerCase() !== "usd") return undefined;
+    return formatBalanceUsd(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 余额不足时顺带查一次可用余额，接在报错后面（"Available balance: $8.50."）：卡片的余额不足状态
+ * 照设计稿显示预估费用和余额，模型也能告诉用户差多少。卡片认这几个词，改措辞要同步
+ * ui/generation-card/quote.ts。
+ */
+export async function withAvailableBalance(
+  result: CallToolResult,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<CallToolResult> {
+  const index = result.content.findIndex((block) => block.type === "text");
+  const first = result.content[index];
+  if (!first || first.type !== "text" || !/insufficient balance/i.test(first.text)) return result;
+  const balance = await availableBalance(options.fetcher);
+  if (!balance) return result;
+  const content = [...result.content];
+  content[index] = { ...first, text: `${first.text.trimEnd()} Available balance: ${balance}.` };
+  return { ...result, content };
+}
+
+// 提交后（模型在对话里确认的，11-11 Claude D2）卡片已经在跟这一单、会自己变成结果；模型再调
+// atlas_get_prediction 只会多出一张卡，文字里又贴一遍图。
+const TRACKING_CARD_NOTE =
+  "The Atlas card above already tracks this task and turns into the result by itself, so don't call " +
+  "atlas_get_prediction for it: tell the user it's generating and the card will show the result. " +
+  "Check it only if the user asks about it later.";
+
+// 报价没有金额时卡上写「Cost unavailable」、按钮是「Confirm anyway」（11-12 Claude R0：模型照着这里的
+// 「Confirm and generate」叫用户去点，卡上并没有这个按钮）。按钮名跟着卡片走。
+function confirmButtonOf(hasPrice: boolean): string {
+  return hasPrice ? "Confirm and generate" : "Confirm anyway";
+}
+
+// 11-13 Jia：Claude 不转告卡片上发生了什么，卡片早就出完结果，回复还在说「请点卡上的按钮」「没扣钱」。
+const quoteCardNote = (hasPrice: boolean) =>
+  `The Atlas card already shows this quote (model, settings, ${hasPrice ? "price" : "a note that the price isn't available"} and billing account) with a ` +
+  `"${confirmButtonOf(hasPrice)}" button, so a single short sentence pointing the user to the card is ` +
+  "enough: repeating the price or settings as a list duplicates the card. The settings and billing " +
+  "account lines above are for apps without a card; here the card already shows them. This card is " +
+  "the confirmation step, so a quote card, table, summary widget or confirm button drawn in your own " +
+  "reply would be a second copy that does not update after the user confirms, and a confirm button " +
+  "outside the Atlas card does not reach Atlas. If the user approves it there, the " +
+  "card submits this exact job and tracks it: do not call a generation tool for it again. If " +
+  "they confirm in the chat instead, call again as described above; the same idempotency_key " +
+  "returns the job the card already started rather than a second one. Some apps don't tell you " +
+  "what happened on the card (Claude doesn't), so never state this quote's status from memory: before any later " +
+  "reply says it is still waiting for confirmation, that nothing was charged, or that it is generating, check " +
+  "atlas_list_predictions first. " +
+  "It also lists confirms that did not start, and why. A confirm " +
+  "the card could not start (for example, not enough balance) charged nothing." +
+  (hasPrice ? "" : " The price could not be estimated for this job: say so, and that confirming charges the model's standard rate.");
+
+// 报价正文和 withQuoteDetails 都叫模型「把模型、费用、参数展示给用户」，那是给没有卡片的客户端写的。
+// 卡片已经画出来时还这么说，ChatGPT 会在卡片下面再列一张参数表、写「等待确认」，用户在卡上确认后
+// 那张表还停在旧状态（11-06 showcase 实测）。这时改成指向卡片的一句话。
+const SHOW_QUOTE_ASK = /Show the user[^.]*?estimated cost above,? (?:then|and) stop\./;
+const SHOW_QUOTE_ON_CARD =
+  "The Atlas card in this reply already shows the model, the estimated cost and a confirm button: point the user to it in one short sentence, then stop.";
+const INCLUDE_SETTINGS_ASK = /\nInclude these settings[^.]*when showing the quote\./;
+
+// ChatGPT 有时走 api_tool.call_tool（把工具当代码里的函数调用），这条路径上模型只拿到结构化结果，
+// content 里的文字块（上面的 QUOTE_CARD_NOTE）它看不到，照样自己画一张带「确认」按钮的报价卡，
+// 价格还按 estimated_cost_usd 的精度写成 US$0.000420（11-06 实测：content 里写的是 $0.0004）。
+// 同样的话再放进结构化结果的 card_note，价格那句也改成指向卡片。
+const quoteCardNoteStructured = (hasPrice: boolean) =>
+  `The Atlas card in this reply is the quote and the confirmation step: it shows the model, settings, ${hasPrice ? "price" : "a note that the price isn't available"} and ` +
+  `billing account with a "${confirmButtonOf(hasPrice)}" button. Point the user to it in one short sentence. Do not ` +
+  "draw your own quote card, table, summary widget or confirm button: it would be a second copy that does not " +
+  "update after the user confirms, and a confirm button outside the Atlas card does not reach Atlas. If the " +
+  "user confirms on the card, do not call a generation tool again; if they confirm in the chat instead, call " +
+  "again with the same idempotency_key.";
+
+// 11-12 ChatGPT 回归：用户在对话里只打「I confirm, generate it.」，ChatGPT 那一轮没挂上 Atlas 应用，
+// 模型答「工具用不了，请点卡片」，什么都没提交；同一句带上 @Atlas Cloud Test 就提交了。所以在 ChatGPT 里
+// 提到可以打字确认时，要让用户带上 @应用名；卡片按钮不受影响。
+const CHATGPT_TYPED_CONFIRM_NOTE =
+  " In ChatGPT a reply typed in the chat reaches these tools only when it mentions this app with @ (for example " +
+  '"@Atlas Cloud confirm"); a plain "I confirm" can arrive in a turn where the tools are not available. If you ' +
+  "mention confirming in the chat, tell the user to include that @ mention; the card button works either way." +
+  // 11-18 ChatGPT 回归 G06：一次报了 4 张价，ChatGPT 一轮只显示 1 张卡；打字确认 4 张时模型把同一个
+  // idempotency_key 用了三次，前三次拿回同一单，第四次失败，ChatGPT 又逐张重新报价。
+  " ChatGPT shows only one Atlas card per reply. When the user wants several images or videos, make them in one " +
+  "request if the model has a count parameter (such as num_images), so one quote and one card cover all of them; " +
+  "otherwise quote one, let the user confirm it, then quote the next. Every quote has its own idempotency_key and " +
+  "confirmation_token: never confirm one quote with another quote's values.";
+
+function forClient(note: string): string {
+  return currentClientIsChatGpt() ? `${note}${CHATGPT_TYPED_CONFIRM_NOTE}` : note;
+}
+
+/** 报价里有没有估出这一单的金额（没有时卡上是「Cost unavailable」+「Confirm anyway」）。 */
+function hasEstimate(content: Record<string, unknown> | undefined): boolean {
+  return typeof content?.estimated_cost_usd === "number";
+}
+
+function withCardNote(structured: CallToolResult["structuredContent"]): CallToolResult["structuredContent"] {
+  const content = record(structured);
+  if (!content) return structured;
+  const price = content.price_to_tell_user;
+  return {
+    // status 和 card_note 排在最前面，模型读结构化结果时先看到。
+    status: content.status,
+    card_note: forClient(quoteCardNoteStructured(hasEstimate(content))),
+    ...content,
+    ...(typeof price === "string" ? { price_to_tell_user: `${price} The Atlas card already shows the price: point the user to the card instead of repeating it.` } : {}),
+  };
+}
+
+function withoutShowQuoteAsk(block: CallToolResult["content"][number]): CallToolResult["content"][number] {
+  if (block.type !== "text") return block;
+  return { ...block, text: block.text.replace(SHOW_QUOTE_ASK, SHOW_QUOTE_ON_CARD).replace(INCLUDE_SETTINGS_ASK, "") };
+}
+
+/**
+ * 报价结果补上「主要参数」和扣费账户（需求文档 6.1）。不管卡片开没开都补：Codex、
+ * Claude Code 这类只看文字的客户端也要能告诉用户从哪个账户扣。查不到账户就只补参数。
+ */
+export async function withQuoteDetails(
+  result: CallToolResult,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): Promise<CallToolResult> {
+  const content = record(result.structuredContent);
+  if (result.isError || content?.status !== "confirmation_required") return result;
+  const settings = settingsChips(record(content.params));
+  const account = await billingAccount(options);
+  const lines = [
+    settings.length > 0 ? `- **Settings**: ${settings.join(" · ")}` : null,
+    account ? `- **Billing account**: ${describeBillingAccount(account)}` : null,
+  ].filter((line): line is string => line !== null);
+  if (lines.length === 0) return result;
+  return {
+    ...result,
+    structuredContent: { ...content, ...(account ? { billing_account: account } : {}) },
+    content: [
+      ...result.content,
+      {
+        type: "text" as const,
+        text:
+          lines.join("\n") +
+          "\nInclude these settings" +
+          (account ? " and the billing account the charge goes to" : "") +
+          " when showing the quote.",
+      },
+    ],
+  };
+}
+
+/**
+ * 给生成工具的处理函数套一层：报价补上参数和扣费账户，结果里带上卡片数据。卡片没打开时
+ * 只补报价信息。客户端声明能渲染卡片时，报价结果再多一句话，告诉模型卡片上能直接确认。
+ */
+export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
+  server: McpServer,
+  tool: (typeof CARD_GENERATION_TOOLS)[number],
+  handler: (args: Args, extra: Extra) => Promise<CallToolResult>,
+  options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
+): (args: Args, extra: Extra) => Promise<CallToolResult> {
+  return async (args, extra) => {
+    const result = await withQuoteDetails(await handler(args, extra), options);
+    const errorText = result.content.find((block) => block.type === "text");
+    if (
+      result.isError &&
+      (args.confirmed === true || typeof args.confirmation_token === "string") &&
+      !(errorText?.type === "text" && mayHaveStarted(errorText.text))
+    ) {
+      // 确认了却没开始：记下原因，模型之后查历史时能看到（not-started.ts）。
+      // 可能已经提交了的不记，那种要先查历史。
+      const text = errorText;
+      await rememberNotStarted(
+        typeof args.model === "string" ? args.model : tool,
+        text?.type === "text" ? text.text : "Did not start."
+      );
+    }
+    if (!generationCardEnabled()) return result;
+    if (result.isError) {
+      const withBalance = await withAvailableBalance(result);
+      // 报价前、提交前就被拒（参数不对、file:// 链接、模型找不到……）：卡片原来只看到 isError，显示成
+      // 「Couldn't load this task · Error + Refresh」，标题和按钮都不对（11-18 WorkBuddy S07、N01）。
+      // 肯定没开始的打个标记，卡片画成「没开始、没扣费、原因」；可能已经提交的不标，照旧。
+      // 标记放 _meta 不放 structuredContent：客户端 SDK 出错时也按 outputSchema 校验结构化结果。
+      if (errorText?.type !== "text" || mayHaveStarted(errorText.text)) return withBalance;
+      return { ...withBalance, _meta: { ...(withBalance._meta ?? {}), [NOT_STARTED_META_KEY]: true } };
+    }
+    const card = generationResultCard(tool, args, result.structuredContent);
+    if (!card) return result;
+    if (card.quote?.inputs?.length) {
+      // 存进 Atlas 的素材地址里是随机编号，换回上传时的原文件名（media-names.ts）。
+      // 来源（资产库 / 上传卡 / 对话附件）一起记着，报价卡写在名字下面。
+      const found = await rememberedMedia(card.quote.inputs.map((input) => input.url));
+      card.quote.inputs = card.quote.inputs.map((input) => {
+        const media = found.get(input.url);
+        return {
+          ...input,
+          name: media?.name ?? input.name,
+          // 地址认不出类型（资产库的临时地址没有扩展名）时用取用时记下的，缩略图才画得出来。
+          ...(input.kind === "other" && media?.kind ? { kind: media.kind } : {}),
+          ...(media?.source ? { source: media.source } : {}),
+        };
+      });
+    }
+    const rendersCards = clientRendersCards(server);
+    const onCard = card.state === "quote" && rendersCards;
+    const tracking = rendersCards && (card.state === "queued" || card.state === "running");
+    return {
+      ...result,
+      _meta: { ...(result._meta ?? {}), [CARD_META_KEY]: card },
+      ...(onCard
+        ? { structuredContent: withCardNote(result.structuredContent) }
+        : tracking
+          ? // 跟进卡的说明也放进结构化结果、排在最前面：只读结构化结果的 ChatGPT 看不到文字（11-18 审查 M9）。
+            { structuredContent: { card_note: TRACKING_CARD_NOTE, ...(record(result.structuredContent) ?? {}) } }
+          : {}),
+      content: onCard
+        ? [...result.content.map(withoutShowQuoteAsk), { type: "text" as const, text: forClient(quoteCardNote(hasEstimate(record(result.structuredContent)))) }]
+        : tracking
+          ? [...result.content, { type: "text" as const, text: TRACKING_CARD_NOTE }]
+          : result.content,
+    };
+  };
+}
+
+/** 生成工具定义上要挂的元数据（卡片关着时为空）。 */
+export function generationToolCardMeta(): { _meta?: Record<string, unknown> } {
+  return generationCardEnabled() ? { _meta: generationCardToolMeta() } : {};
+}
+
+/** 报价里「已经提交过」「是再跑一次」两条说明，原样带给卡片（卡片据此写一句提示）。 */
+export function submissionNotes(content: Record<string, unknown>): {
+  already_submitted?: { prediction_id?: string; status?: string };
+  repeat_of?: { prediction_id?: string };
+} {
+  const pick = (value: unknown) => {
+    const note = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+    if (!note) return undefined;
+    return {
+      ...(typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {}),
+      ...(typeof note.status === "string" ? { status: note.status } : {}),
+    };
+  };
+  const already = pick(content.already_submitted);
+  const repeat = pick(content.repeat_of);
+  return { ...(already ? { already_submitted: already } : {}), ...(repeat ? { repeat_of: repeat } : {}) };
+}

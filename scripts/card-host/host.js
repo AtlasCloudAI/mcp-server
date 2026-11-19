@@ -1,0 +1,511 @@
+// 浏览器端：每张卡一个沙箱 iframe + 一个 AppBridge，和真宿主走同一套协议。
+import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+
+// 卡片地址里带页面内容哈希，从工具列表里取（哪个工具挂了卡片就用它的地址）。
+let CARD_URI = "";
+const VARIANTS = [
+  "image",
+  "images",
+  "video",
+  "audio",
+  "workflow",
+  "queued",
+  "running",
+  "failed",
+  "failed_rate_limited",
+  "failed_unavailable",
+  "canceled",
+  "charge_pending",
+  "failed_partial",
+  "blocked",
+  "expired",
+  "images_many",
+  "model_3d",
+  "template_running",
+  "running_stalled",
+  "preview_failed",
+  "signed_out",
+  "quote",
+  "quote_partial",
+  "quote_unpriced",
+  "quote_expired",
+  "quote_low_balance",
+  "quote_submitting",
+  "quote_checking",
+  "quote_uncertain",
+  "quote_in_progress",
+  "quote_price_changed",
+  "quote_settings_changed",
+  "quote_rate_limited",
+  "quote_model_unavailable",
+  "quote_template",
+  "quote_input_missing",
+  "quote_signed_out",
+  "history",
+  "upload",
+  "upload_uploading",
+  "upload_done",
+  "upload_problem",
+  "upload_failed",
+  "upload_expired",
+  "upload_too_many",
+  "upload_signed_out",
+  "upload_library_full",
+  "assets",
+  "assets_empty",
+  "assets_no_match",
+  "assets_locked",
+  "assets_signed_out",
+];
+
+// 上传卡的模拟场景（不碰真实存储）：卡片打开时拿到一张指向测试宿主模拟中转的地址，
+// 选文件后真的走 XHR 上传。卡片换新地址（调 atlas_open_upload_card）时给一张 ok 的地址。
+const UPLOAD_MOCKS = {
+  "upload-ok": "ok",
+  // 存进资产库（资产库二期）：传完带资产编号，卡上显示「Saved to Asset Library」。
+  "upload-to-library": "library",
+  "upload-fail-once": "fail-once",
+  "upload-link-expired": "expired",
+  "upload-too-large": "toolarge",
+  // 卡片换地址时 ChatGPT 那样直接抛错：第一次抛、自动重试成功；或者一直抛。
+  "upload-renew-retry": "renew-retry",
+  "upload-renew-fails": "renew-fails",
+  // 传的时候 Atlas 登录失效：中转回 401，换地址时 ChatGPT 回「Connector authorization required」
+  // （用户没在连接框里点允许）；点 Reconnect 再换就换到了。
+  "upload-signed-out": "signed-out",
+  // 资产库上传空间满了：中转回 413 并给一张普通上传的地址，卡片改传那里，留一句说明。
+  "upload-library-full": "libraryfull",
+  // 中转回 AssetD 的超像素（422 image_too_large）。
+  "upload-too-many-pixels": "pixels",
+};
+
+function mockUploadCaller(mode) {
+  const withUrl = async (m) => {
+    const result = await callTool("atlas_card_selftest", { variant: "upload" });
+    const data = { ...result._meta["atlascloud/upload"], upload_url: `${location.origin}/mock-upload/${m}` };
+    delete data.sample;
+    delete data.sample_files;
+    return { ...result, _meta: { "atlascloud/upload": data } };
+  };
+  // 第一次是宿主把卡片打开那次调用；之后的是卡片自己来换新地址。
+  let calls = 0;
+  return async () => {
+    const n = calls++;
+    if (mode === "signed-out") {
+      if (n === 0) return withUrl("rejected");
+      if (n === 1) throw chatgptStyleError("Connector authorization required");
+      return withUrl("ok");
+    }
+    if (mode === "renew-retry" || mode === "renew-fails") {
+      if (n === 0) return withUrl("expired");
+      if (mode === "renew-fails" || n === 1) throw chatgptStyleError("Error: simulated failure while issuing an upload URL");
+      return withUrl("ok");
+    }
+    return withUrl(n > 0 && mode === "expired" ? "ok" : mode);
+  };
+}
+
+// 资产库的模拟场景（不调真实接口）：样例素材当成真的用，卡片调 atlas_use_assets 时回样例图地址。
+//   assets-pick          模型搜出来的资产库卡：选了点 Use，交给模型
+//   upload-from-library  上传卡里点「Choose from Asset Library」：全屏选，回到上传卡
+//   assets-empty-upload  资产库为空：「Upload from device」换成上传卡
+//   assets-signed-out    卡片自己第一次调工具（换筛选、点 Use）时 Atlas 登录失效，点 Reconnect 后正常
+const ASSET_MOCKS = {
+  "assets-pick": { tool: "atlas_search_assets", empty: false },
+  "upload-from-library": { tool: "atlas_open_upload_card", empty: false },
+  "assets-empty-upload": { tool: "atlas_search_assets", empty: true },
+  "assets-signed-out": { tool: "atlas_search_assets", empty: false, signedOut: true },
+};
+
+function mockAssetsCaller(empty, signedOut = false) {
+  // 存进资产库的上传（带资产编号）：资产库卡里的上传格传完要选中新素材，得有编号。
+  const upload = mockUploadCaller("library");
+  let calls = 0;
+  return async (name, args) => {
+    // 第一次是宿主把卡片打开那次调用；卡片自己的第一次调用被挡下。
+    if (signedOut && calls++ === 1) throw chatgptStyleError("Connector authorization required");
+    if (name === "atlas_open_upload_card") return upload();
+    if (name === "atlas_search_assets") {
+      const result = await callTool("atlas_card_selftest", { variant: empty ? "assets_empty" : "assets" });
+      const data = { ...result._meta["atlascloud/assets"] };
+      delete data.sample;
+      if (args.media_type) data.items = data.items.filter((item) => item.kind === args.media_type);
+      return { ...result, _meta: { "atlascloud/assets": data } };
+    }
+    if (name === "atlas_use_assets") {
+      const sample = (await callTool("atlas_card_selftest", { variant: "assets" }))._meta["atlascloud/assets"].items;
+      const byId = new Map(sample.map((item) => [item.asset_id, item]));
+      const assets = args.asset_ids.map((id) => ({ asset_id: id, url: byId.get(id)?.thumb_url ?? byId.get(id)?.preview_url ?? "https://example.invalid/x", expires_at: new Date(Date.now() + 900_000).toISOString() }));
+      return { structuredContent: { assets, missing: [] }, content: [{ type: "text", text: "mock asset urls" }] };
+    }
+    return callTool(name, args);
+  };
+}
+
+// 报价卡的模拟场景（不花钱）：开头是一张真能点的报价卡（去掉 sample 标记），
+// 卡片点 Generate 时按场景回「已提交」、「报价过期」或「余额不足」。
+const QUOTE_MOCKS = {
+  "quote-submit": "submit",
+  "quote-expires": "expired",
+  "quote-no-balance": "balance",
+  // 确认时令牌对不上（价格变了）：卡片自己重新报价，显示新旧价格。
+  "quote-price-changed": "price",
+  "quote-rate-limited": "rate",
+  "quote-fail-retry": "fail",
+  // ChatGPT 的做法：工具报错时不回错误结果，而是让卡片这次调用直接失败（报错原文夹在信息里）。
+  "quote-chatgpt-error": "throw-route",
+  // 提交没拿到确定的回答：卡片自己调 atlas_card_check_submission 核实。
+  "quote-unconfirmed-started": "unconfirmed-started",
+  "quote-unconfirmed-not-started": "unconfirmed-none",
+  // 用户没点卡片、在对话里打字确认（11-12 Jia 第二轮 G2）：模型那次调用约 12 秒后提交，卡片在后台问到了就自己切成进度。
+  "quote-typed-confirm": "typed",
+};
+
+const UNCONFIRMED =
+  "Error: Atlas Cloud didn't answer in time. The request ended without a confirmed response, so it may already have gone through. Check recent predictions or billing before sending it again.";
+
+const chatgptStyleError = (text) =>
+  new Error(
+    `Error code: INVALID_ARGUMENT; Error: RuntimeException: Error calling MCP tool: [TextContent(type='text', text='${text}', annotations=None, meta=None)]`
+  );
+
+const MISMATCH =
+  "Error: Generation confirmation does not match this request: the arguments, price or user changed, or the token was not copied exactly. Request a new quote. No billable request was submitted.";
+
+function mockQuoteCaller(outcome) {
+  let polls = 0;
+  let checks = 0;
+  let mismatched = false;
+  const mountedAt = Date.now();
+  const unsample = (result, overrides = {}) => {
+    const card = { ...result._meta["atlascloud/card"], ...overrides };
+    delete card.sample;
+    return { ...result, _meta: { "atlascloud/card": card } };
+  };
+  return async (name, args) => {
+    if (name === "atlas_card_selftest" || (name === "atlas_generate_video" && !args.confirmed)) {
+      if (name === "atlas_generate_video") log("      mock re-quote", JSON.stringify({ idempotency_key: args.idempotency_key, params: args.params }));
+      const quote = unsample(await callTool("atlas_card_selftest", { variant: "quote" }));
+      if (outcome === "price" && mismatched) {
+        const card = quote._meta["atlascloud/card"];
+        card.quote = { ...card.quote, estimated_usd: 1.52, confirmation_token: "selftest-repriced" };
+      }
+      return quote;
+    }
+    if (name === "atlas_generate_video") {
+      log("      mock got", JSON.stringify({ keys: Object.keys(args).sort(), idempotency_key: args.idempotency_key, params: args.params }));
+      await new Promise((r) => setTimeout(r, 1200));
+      if (outcome === "throw-route") throw chatgptStyleError("Error: model[black-forest-labs/flux-schnell] router not found");
+      if (outcome === "unconfirmed-started") throw chatgptStyleError(UNCONFIRMED);
+      if (outcome === "unconfirmed-none") return { isError: true, content: [{ type: "text", text: UNCONFIRMED }] };
+      if (outcome === "expired") {
+        return { isError: true, content: [{ type: "text", text: "Generation confirmation expired. Request a new quote. No billable request was submitted." }] };
+      }
+      if (outcome === "balance") {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Error: Insufficient balance. Please top up your account at: https://www.atlascloud.ai/console/billing Available balance: $0.42." }],
+        };
+      }
+      if (outcome === "price" && !mismatched) {
+        mismatched = true;
+        return { isError: true, content: [{ type: "text", text: MISMATCH }] };
+      }
+      if (outcome === "rate") return { isError: true, content: [{ type: "text", text: "Error: Rate limit exceeded. Please wait and try again later." }] };
+      // 提交结果带上 retry（服务端包装层会这么给），失败后卡片用它重新报价。
+      return unsample(await callTool("atlas_card_selftest", { variant: "running" }), {
+        prediction_id: "mock_quote",
+        retry: { tool: "atlas_generate_video", arguments: { model: args.model, params: args.params } },
+      });
+    }
+    if (name === "atlas_card_check_submission" && outcome === "typed") {
+      const typed = Date.now() - mountedAt > 12_000;
+      log("      mock quiet check", JSON.stringify({ on_load: args.on_load, typed_confirm_happened: typed }));
+      if (!typed) return { structuredContent: { outcome: "not_submitted" }, content: [{ type: "text", text: "Not submitted." }] };
+      const started = unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+      return { ...started, structuredContent: { outcome: "started", prediction_id: "mock_quote" } };
+    }
+    if (name === "atlas_card_check_submission") {
+      checks += 1;
+      log("      mock check", JSON.stringify({ tool: args.tool, idempotency_key: args.idempotency_key, model: args.model, submitted_at: Boolean(args.submitted_at) }));
+      await new Promise((r) => setTimeout(r, 800));
+      if (checks < 2) return { structuredContent: { outcome: "checking" }, content: [{ type: "text", text: "Still checking." }] };
+      if (outcome === "unconfirmed-none") {
+        return {
+          structuredContent: { outcome: "not_started", message: "Atlas Cloud has no record of this job, so it didn't start." },
+          content: [{ type: "text", text: "Not started." }],
+        };
+      }
+      const started = unsample(await callTool("atlas_card_selftest", { variant: "running" }), { prediction_id: "mock_quote" });
+      return { ...started, structuredContent: { outcome: "started", prediction_id: "mock_quote" } };
+    }
+    if (name === "atlas_card_status") {
+      polls += 1;
+      await new Promise((r) => setTimeout(r, 1500));
+      const done = outcome === "fail" ? "failed" : "video";
+      return unsample(await callTool("atlas_card_selftest", { variant: polls < 2 ? "running" : done }), { prediction_id: "mock_quote" });
+    }
+    return callTool(name, args);
+  };
+}
+
+const $ = (selector) => document.querySelector(selector);
+const logEl = $("#log");
+
+function log(...parts) {
+  const line = document.createElement("div");
+  const time = new Date().toLocaleTimeString();
+  line.textContent = `${time}  ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}`;
+  logEl.prepend(line);
+}
+
+async function callTool(name, args) {
+  const response = await fetch("/api/call", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, arguments: args }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+  return body;
+}
+
+let resource;
+async function cardResource() {
+  if (!CARD_URI) {
+    const { tools } = await fetch("/api/tools").then((r) => r.json());
+    CARD_URI = tools.find((t) => t._meta?.ui?.resourceUri)?._meta.ui.resourceUri ?? "";
+  }
+  if (!resource) {
+    const body = await fetch(`/api/resource?uri=${encodeURIComponent(CARD_URI)}`).then((r) => r.json());
+    resource = body.contents[0];
+  }
+  return resource;
+}
+
+// 和真宿主一样只放行资源里声明的来源：没声明的图片、视频会加载失败。
+function cspFor(meta) {
+  const domains = (meta?.ui?.csp?.resourceDomains ?? []).join(" ");
+  // 上传卡要连上传中转；测试宿主自己的模拟中转也放行。
+  const connect = [...(meta?.ui?.csp?.connectDomains ?? []), location.origin].join(" ");
+  return [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    `img-src data: blob: ${domains}`,
+    `media-src blob: ${domains}`,
+    `font-src data: ${domains}`,
+    `connect-src ${connect}`,
+  ].join("; ");
+}
+
+function settings() {
+  return {
+    host: $("#host").value,
+    theme: $("#theme").value,
+    width: Number($("#width").value),
+  };
+}
+
+// 不花钱验证卡片的自动刷新：开头给一张「生成中」，卡片调 atlas_card_status 时
+// 前两次仍回「生成中」，第三次回成片。数据取自测试卡片，去掉 sample 标记让卡片照常轮询。
+function mockPollCaller() {
+  let polls = 0;
+  const strip = (result) => {
+    const card = { ...result._meta["atlascloud/card"], prediction_id: "mock_poll" };
+    delete card.sample;
+    return { ...result, _meta: { "atlascloud/card": card } };
+  };
+  return async (name, args) => {
+    if (name === "atlas_card_status") {
+      polls += 1;
+      await new Promise((r) => setTimeout(r, 1500));
+      const variant = polls < 3 ? "running" : "video";
+      return strip(await callTool("atlas_card_selftest", { variant }));
+    }
+    return strip(await callTool("atlas_card_selftest", { variant: "running" }));
+  };
+}
+
+async function mountCard(slot, tool, args, caller = callTool) {
+  const res = await cardResource();
+  const s = settings();
+  const iframe = document.createElement("iframe");
+  // ?sameorigin=1：让测试脚本能伸进卡片里放文件、读文字（只在本地测试宿主用，真宿主都是跨源沙箱）。
+  const sameOrigin = new URLSearchParams(location.search).get("sameorigin") === "1";
+  iframe.setAttribute("sandbox", `allow-scripts allow-popups allow-popups-to-escape-sandbox${sameOrigin ? " allow-same-origin" : ""}`);
+  iframe.setAttribute("title", `${tool} card`);
+  iframe.className = "card-frame";
+  slot.replaceChildren(iframe);
+
+  // Cursor（11-05/06、11-11 真机实测）：只能内嵌；握手不声明 message / updateModelContext，但实际处理这两个请求
+  // （Higgsfield 的上传卡在 Cursor 里能把 media_id 发回对话）。所以下面只是不声明，处理器照挂。
+  // ?nometa=1 再模拟它不把工具结果的 _meta 转给卡片（报价卡只能从 structuredContent 兜底）。样例卡的数据只在
+  // _meta 里，所以默认不去掉，否则资产库、历史这些样例都是空的。
+  const cursor = s.host === "cursor";
+  const dropMeta = new URLSearchParams(location.search).get("nometa") === "1";
+  const hostContext = {
+    theme: s.theme,
+    platform: cursor ? "desktop" : "web",
+    displayMode: "inline",
+    availableDisplayModes: cursor ? ["inline"] : ["inline", "fullscreen"],
+    locale: "en-US",
+    containerDimensions: { maxWidth: s.width },
+  };
+  const bridge = new AppBridge(
+    null,
+    { name: s.host === "claude" ? "Claude" : cursor ? "Cursor" : "ChatGPT", version: "1.0.0" },
+    cursor
+      ? { openLinks: {}, serverTools: {}, downloadFile: {} }
+      : { openLinks: {}, serverTools: {}, downloadFile: {}, message: { text: {} }, updateModelContext: { text: {} } },
+    { hostContext }
+  );
+  bridge.onsizechange = ({ height }) => {
+    if (height) iframe.style.height = `${Math.ceil(height)}px`;
+  };
+  bridge.oncalltool = async (params) => {
+    log("card → tools/call", params.name, params.arguments ?? {});
+    const result = await caller(params.name, params.arguments ?? {});
+    log("      ← state", result?._meta?.["atlascloud/card"]?.state ?? (result?._meta?.["atlascloud/upload"] ? "upload link" : result?._meta?.["atlascloud/assets"] ? "assets" : result?.structuredContent?.assets ? "asset urls" : result.isError ? "error" : "?"));
+    return result;
+  };
+  // 全屏：把这张卡的外框放大到 720 宽，再告诉卡片现在是全屏。
+  bridge.onrequestdisplaymode = async ({ mode }) => {
+    log("card → display mode", mode);
+    const pane = slot.closest(".chat");
+    if (pane) pane.style.width = mode === "fullscreen" ? "748px" : "";
+    bridge.setHostContext({ ...hostContext, displayMode: mode });
+    return { mode };
+  };
+  bridge.onopenlink = async ({ url }) => {
+    log("card → open link", url);
+    window.open(url, "_blank", "noopener");
+    return {};
+  };
+  bridge.ondownloadfile = async ({ contents }) => {
+    log("card → download", contents.map((c) => c.uri ?? c.resource?.uri));
+    return {};
+  };
+  bridge.onupdatemodelcontext = async (params) => {
+    log("card → model context", (params.content ?? []).map((c) => c.text ?? c.type).join(" "));
+    return {};
+  };
+  bridge.onmessage = async (params) => {
+    log("card → message", params.content.map((c) => c.text ?? c.type).join(" "));
+    return {};
+  };
+  bridge.oninitialized = async () => {
+    await bridge.sendToolInput({ arguments: args });
+    try {
+      const result = await caller(tool, args);
+      if (dropMeta) {
+        const { _meta, ...withoutMeta } = result ?? {};
+        await bridge.sendToolResult(withoutMeta);
+      } else {
+        await bridge.sendToolResult(result);
+      }
+      log(`${tool}`, args, "→", result?._meta?.["atlascloud/card"]?.state ?? "no card data");
+    } catch (error) {
+      log(`${tool} failed`, String(error));
+    }
+  };
+  await bridge.connect(new PostMessageTransport(iframe.contentWindow, iframe.contentWindow));
+  iframe.srcdoc = res.text.replace(
+    "<head>",
+    `<head><meta http-equiv="Content-Security-Policy" content="${cspFor(res._meta)}">`
+  );
+}
+
+function hostFrame(label) {
+  const wrap = document.createElement("section");
+  wrap.className = "pane";
+  wrap.innerHTML = `<h2></h2><div class="chat"><div class="app-name"><span class="logo">A</span>Atlas Cloud</div><div class="slot"></div></div>`;
+  wrap.querySelector("h2").textContent = label;
+  return wrap;
+}
+
+function applyHostLook() {
+  const s = settings();
+  document.body.dataset.host = s.host;
+  document.body.dataset.theme = s.theme;
+  document.documentElement.style.setProperty("--card-width", `${s.width}px`);
+}
+
+async function renderAll() {
+  applyHostLook();
+  const grid = $("#grid");
+  grid.replaceChildren();
+  const id = $("#prediction").value.trim();
+  const jobs = [];
+  if (id) {
+    const pane = hostFrame(`atlas_get_prediction · ${id}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: id }));
+  }
+  const only = $("#variant").value;
+  for (const [label, outcome] of Object.entries(QUOTE_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_generate_video", { model: "bytedance/seedance-2.5/text-to-video", idempotency_key: "mock-key" }, mockQuoteCaller(outcome)));
+  }
+  for (const [label, mock] of Object.entries(ASSET_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), mock.tool, {}, mockAssetsCaller(mock.empty, mock.signedOut)));
+  }
+  // 历史卡点开一条时网关报错（11-12 test 的 aiproxy 返回 service unavailable）：错误提示要一眼看得到。
+  if (only === "history-open-fails") {
+    const pane = hostFrame("mock · history-open-fails");
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_list_predictions", {}, async (name, args) => {
+      if (name === "atlas_card_status") return { isError: true, content: [{ type: "text", text: "Error: service unavailable" }] };
+      const result = await callTool("atlas_card_selftest", { variant: "history" });
+      const key = Object.keys(result._meta ?? {}).find((k) => k.startsWith("atlascloud/"));
+      const data = { ...result._meta[key] };
+      delete data.sample;
+      return { ...result, _meta: { [key]: data } };
+    }));
+  }
+  for (const [label, mode] of Object.entries(UPLOAD_MOCKS)) {
+    if (only && only !== label) continue;
+    const pane = hostFrame(`mock · ${label}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_open_upload_card", {}, mockUploadCaller(mode)));
+  }
+  if (!only || only === "poll") {
+    const pane = hostFrame("mock · running → refresh → result");
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_get_prediction", { prediction_id: "mock_poll" }, mockPollCaller()));
+  }
+  for (const variant of only ? (only === "poll" || only === "history-open-fails" || only in QUOTE_MOCKS || only in UPLOAD_MOCKS || only in ASSET_MOCKS ? [] : [only]) : VARIANTS) {
+    const pane = hostFrame(`atlas_card_selftest · ${variant}`);
+    grid.append(pane);
+    jobs.push(mountCard(pane.querySelector(".slot"), "atlas_card_selftest", { variant }));
+  }
+  await Promise.all(jobs);
+}
+
+const variantSelect = $("#variant");
+for (const variant of ["poll", "history-open-fails", ...Object.keys(QUOTE_MOCKS), ...Object.keys(UPLOAD_MOCKS), ...Object.keys(ASSET_MOCKS), ...VARIANTS]) {
+  const option = document.createElement("option");
+  option.value = variant;
+  option.textContent = variant;
+  variantSelect.append(option);
+}
+
+const params = new URLSearchParams(location.search);
+for (const key of ["host", "theme", "width", "variant", "prediction"]) {
+  if (params.has(key)) $(`#${key}`).value = params.get(key);
+}
+for (const el of document.querySelectorAll("select")) el.addEventListener("change", renderAll);
+$("#load").addEventListener("click", renderAll);
+
+fetch("/api/tools")
+  .then((r) => r.json())
+  .then(({ tools }) => {
+    const withCard = tools.filter((t) => t._meta?.ui?.resourceUri).map((t) => t.name);
+    log("tools with card:", withCard.join(", "));
+  });
+renderAll();

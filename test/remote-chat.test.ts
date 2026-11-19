@@ -30,7 +30,7 @@ function textModel(price: Model["price"], extra: Partial<Model> = {}): Model {
 
 test("atlas_chat is a remote tool for every client; only the upload tool stays local", () => {
   assert.ok(REMOTE_TOOL_NAMES.includes("atlas_chat"));
-  assert.equal(REMOTE_TOOL_NAMES.length, 15);
+  assert.equal(REMOTE_TOOL_NAMES.length, 18);
   assert.ok(!REMOTE_TOOL_NAMES.includes("atlas_upload_media"));
   assert.equal(TOOL_POLICIES.atlas_chat.scope, "tasks:write");
 });
@@ -81,11 +81,11 @@ test("missing rates fail closed: no auto-submit", () => {
 test("chat auto-submits under the limit and stops at or above it", () => {
   const previous = process.env.MCP_AUTOSUBMIT_MAX_USD;
   try {
-    delete process.env.MCP_AUTOSUBMIT_MAX_USD; // 默认 $20
+    delete process.env.MCP_AUTOSUBMIT_MAX_USD; // 默认 $1
     const cheap = textModel({ actual: { input_price: "0.3", output_price: "1.2" } });
     const under = evaluateChatSpend(cheap, { messages: [{ role: "user", content: "hello" }] });
     assert.equal(under.autoSubmit, true);
-    assert.ok(under.quotedUsd !== null && under.quotedUsd < 20);
+    assert.ok(under.quotedUsd !== null && under.quotedUsd < 1);
 
     // $15/M 输出、最大输出 2M token：最坏 $30，必须确认；给了 max_tokens 就能直接跑
     const pricey = textModel({ actual: { input_price: "3", output_price: "15" } }, { maxCompletionTokens: 2_000_000 });

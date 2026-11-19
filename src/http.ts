@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { pathToFileURL } from "node:url";
+import { SERVER_VERSION } from "./version.js";
 import type { Server as NodeHttpServer } from "node:http";
 import type { Express, Request, RequestHandler, Response } from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -27,12 +28,24 @@ import {
   type UploadTicketStore,
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
+import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
+import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration } from "./services/card-clients.js";
+import { clientProfile } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
   JwtAccessTokenVerifier,
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
+import {
+  createPostHogSink,
+  toolCallOf,
+  trackToolCalls,
+  type AnalyticsSink,
+} from "./http/tool-call-analytics.js";
 import { createUploadRelay, type UploadFetcher } from "./http/upload-relay.js";
+import { disableEnvironmentApiKey } from "./services/api-client.js";
+import { MEDIA_NAME_REDIS_PREFIX } from "./services/media-names.js";
+import { prewarmDocSearch } from "./services/doc-search.js";
 import {
   challengeUnauthenticated,
   createPreAuthRateLimiter,
@@ -40,7 +53,9 @@ import {
   createUploadRateLimiter,
   enforceExactHost,
   enforceToolScopes,
+  limitJsonRpcBatches,
   restrictedCors,
+  uploadCors,
   securityHeaders,
   ensureChallengeScope,
 } from "./http/middleware.js";
@@ -64,6 +79,9 @@ export interface HttpAppDependencies {
   /** 短上传地址的票据存储。省略时用进程内存储（单副本、测试）。 */
   uploadTicketStore?: UploadTicketStore;
   quoteStore?: UploadTicketStore;
+  mediaNameStore?: UploadTicketStore;
+  /** 工具调用埋点的发送器。省略即不发（没配 POSTHOG_KEY、测试）。 */
+  analytics?: AnalyticsSink;
 }
 
 /**
@@ -122,10 +140,12 @@ export function createHttpApp(
 ): Express {
   const uploadTicketStore = dependencies.uploadTicketStore ?? new InMemoryUploadTicketStore();
   const quoteStore = dependencies.quoteStore ?? new InMemoryUploadTicketStore();
+  const mediaNameStore = dependencies.mediaNameStore ?? new InMemoryUploadTicketStore();
   const resourceMetadataUrl = new URL(
     "/.well-known/oauth-protected-resource",
     config.publicMcpUrl
   ).toString();
+  disableEnvironmentApiKey();
   const app = createMcpExpressApp({
     host: config.listenHost,
     allowedHosts: config.allowedHosts,
@@ -151,7 +171,7 @@ export function createHttpApp(
     res.status(200).type("text/plain").send(config.challengeToken);
   });
   app.get("/healthz", (_req, res) => {
-    res.status(200).json({ status: "ok", service: "atlascloud-ai-media" });
+    res.status(200).json({ status: "ok", service: "atlascloud-ai-media", version: SERVER_VERSION });
   });
   app.get("/readyz", async (_req, res) => {
     const authorizationServerReady = dependencies.readiness?.ready() ?? true;
@@ -178,12 +198,15 @@ export function createHttpApp(
   app.post(
     config.publicMcpUrl.pathname,
     createPreAuthRateLimiter(config),
+    limitJsonRpcBatches(),
     requireAuthorizationServerReady(dependencies),
     ensureChallengeScope(),
     requireBearerAuth({
       verifier: dependencies.verifier,
       resourceMetadataUrl,
     }),
+    // 认证之后才知道是谁、哪个客户端；限流之前，被限流的调用也算一次调用。
+    trackToolCalls(config, dependencies.analytics),
     createSubjectRateLimiter(config),
     enforceToolScopes(config, resourceMetadataUrl),
     async (req, res) => {
@@ -217,12 +240,26 @@ export function createHttpApp(
         throw error;
       }
 
-      const server = createAtlasCloudServer("remote");
+      // 认不出的客户端：initialize 时记下它声明没声明 MCP Apps，并打一行日志（名字、版本、声明）。
+      // 不据此拿掉卡片工具：WorkBuddy（CodeBuddy 引擎）显示卡片却不声明这个扩展（11-13 查安装包），
+      // 按声明拦会把它的卡片弄坏。GrokBot 怎么认，等日志里看到它 initialize 报了什么再定。
+      if (generationCardEnabled() && clientProfile(req.auth?.clientId) === "other") {
+        const declared = declaresMcpApps(req.body);
+        if (declared !== undefined) {
+          await rememberUiDeclaration(req.auth?.clientId, declared, quoteStore);
+          console.log(`[initialize] ${initializeSummary(req.body, declared)}`);
+        }
+      }
+      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const transport = new OpenAIToolMetadataTransport(baseTransport);
+      const toolCall = toolCallOf(res);
+      const transport = new OpenAIToolMetadataTransport(
+        baseTransport,
+        toolCall ? (message) => toolCall.observeResponse(message) : undefined
+      );
       let closed = false;
       const close = (): void => {
         if (closed) return;
@@ -234,6 +271,11 @@ export function createHttpApp(
 
       try {
         await server.connect(transport);
+        // 自行注册的客户端（Cursor）认不出会不会显示卡片，查一下它以前调没调过卡片专用工具。
+        const knownCardClient =
+          generationCardEnabled() && clientProfile(req.auth?.clientId) === "other"
+            ? await isKnownCardClient(req.auth?.clientId, quoteStore)
+            : false;
         await runWithRequestContext(
           {
             authInfo: req.auth,
@@ -250,8 +292,12 @@ export function createHttpApp(
             uploadBaseUrl: config.publicUploadBaseUrl.toString(),
             uploadTicketTtlSeconds: config.uploadTicketTtlSeconds,
             uploadMaxBytes: config.uploadMaxBytes,
+            ...(config.libraryUpload ? { libraryUpload: config.libraryUpload } : {}),
             uploadTicketStore,
             quoteStore,
+            mediaNameStore,
+            knownCardClient,
+            toolCall,
           },
           () => baseTransport.handleRequest(req, res, req.body)
         );
@@ -282,16 +328,15 @@ export function createHttpApp(
   );
 
   // 上传中转：拿票据换一次上传，没有 bearer——凭据在票据里，见 services/upload-ticket.ts。
-  // 挂在 MCP 同一个 origin 下，Host 校验、安全头、CORS 全部复用。
+  // 挂在 MCP 同一个 origin 下，Host 校验、安全头复用；跨域单独放开，对话里的上传卡要直接传。
   const uploadPath = `${config.publicUploadBaseUrl.pathname}:ticket`;
-  app.options(uploadPath, (_req, res) => {
-    res.status(204).end();
-  });
+  app.options(uploadPath, uploadCors());
   app.post(
     uploadPath,
+    uploadCors(),
     createPreAuthRateLimiter(config),
     createUploadRateLimiter(config),
-    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore })
+    ...createUploadRelay(config, { fetcher: dependencies.uploadFetcher, ticketStore: uploadTicketStore, mediaNameStore })
   );
 
   app.use((_req, res) => {
@@ -365,10 +410,17 @@ export async function startHttpServer(
     config.idempotencyBackend === "redis"
       ? await createRedisUploadTicketStore(config.redisUrl!, QUOTE_REDIS_PREFIX)
       : new InMemoryUploadTicketStore();
+  // 素材原文件名：上传和报价也可能落在不同 pod。
+  const mediaNameStore: UploadTicketStore =
+    config.idempotencyBackend === "redis"
+      ? await createRedisUploadTicketStore(config.redisUrl!, MEDIA_NAME_REDIS_PREFIX)
+      : new InMemoryUploadTicketStore();
   let credentialResolver: AtlasCredentialResolver | undefined;
+  let analytics: AnalyticsSink | undefined;
   let server: NodeHttpServer;
   try {
     credentialResolver = await createConfiguredCredentialResolver(config);
+    analytics = await createPostHogSink(config.analytics);
     const dependencies: HttpAppDependencies = {
       readiness,
       verifier: new JwtAccessTokenVerifier(config),
@@ -376,25 +428,38 @@ export async function startHttpServer(
       credentialResolver,
       uploadTicketStore,
       quoteStore,
+      mediaNameStore,
+      analytics,
     };
     const app = createHttpApp(config, dependencies);
     server = await new Promise<NodeHttpServer>((resolve, reject) => {
       const listening = app.listen(config.port, config.listenHost, () => resolve(listening));
+      // 存进资产库的上传边收边转，100MB 的视频按用户 250~300KB/s 的上行要传 6 分钟左右，
+      // Node 默认 5 分钟收不完整个请求就断开（requestTimeout）。
+      if (config.libraryUpload) listening.requestTimeout = 30 * 60_000;
       listening.once("error", reject);
     });
+    prefetchCardCatalog();
   } catch (error) {
     readiness.stop();
     await Promise.allSettled([
       idempotencyStore.close(),
       uploadTicketStore.close(),
       quoteStore.close(),
+      mediaNameStore.close(),
       credentialResolver?.close?.() ?? Promise.resolve(),
+      analytics?.shutdown() ?? Promise.resolve(),
     ]);
     throw error;
   }
   console.error(
-    `Atlas Cloud MCP HTTPS backend listening on ${config.listenHost}:${config.port} for ${config.publicMcpUrl.toString()}`
+    `Atlas Cloud MCP HTTPS backend listening on ${config.listenHost}:${config.port} for ${config.publicMcpUrl.toString()}` +
+      (config.analytics
+        ? `; tool-call analytics on (environment=${config.analytics.environment})`
+        : "; tool-call analytics off (POSTHOG_KEY not set)")
   );
+  // 文档搜索第一次要把几十篇正文读进缓存，放在启动时做，第一个用户不用等。
+  if (process.env.MCP_DOCS_PREWARM !== "off") prewarmDocSearch();
 
   const close = async (): Promise<void> => {
     readiness.stop();
@@ -404,7 +469,10 @@ export async function startHttpServer(
     await idempotencyStore.close();
     await uploadTicketStore.close();
     await quoteStore.close();
+    await mediaNameStore.close();
     await credentialResolver?.close?.();
+    // 最后冲一次队列：滚动发布时 pod 退出前还没发出去的事件不丢。
+    await analytics?.shutdown().catch(() => undefined);
   };
   return { server, close };
 }

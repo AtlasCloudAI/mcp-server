@@ -1,0 +1,1110 @@
+// 报价确认卡：设计稿「报价确认 · Quote Confirm」。
+// 用户在卡里点 Generate，卡片带着确认令牌再调一次同一个生成工具（和模型在对话里确认走同一条路，
+// 服务端照常核对报价）。提交成功后卡片变成进度卡，接着自己刷新到出结果。
+// 不替用户往对话里发「确认」——那句话在 ChatGPT 里会被它自带的生图接走。
+
+import type { App } from "@modelcontextprotocol/ext-apps";
+import {
+  type CardData,
+  type QuoteInfo,
+  RATE_LIMIT_WAIT_MS,
+  RECONNECT_NOTE,
+  billingUrlFor,
+  formatBalance,
+  formatClock,
+  formatUsd,
+  isModelUnavailable,
+  isRateLimited,
+  isSignedOut,
+  isTemplate,
+  modelLabel,
+  newIdempotencyKey,
+  readableReason,
+  typeLabel,
+} from "./card.js";
+import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
+import { withTimeout } from "./handoff.js";
+import { say, sendForUser, userLang } from "./voice.js";
+
+const CHECK_TOOL = "atlas_card_check_submission";
+/** 核实「到底提交没有」：每 5 秒问一次，两分钟还说不准就交给用户。服务端 90 秒查不到就会说没开始。 */
+const CHECK_GAP_MS = 5_000;
+const CHECK_BUDGET_MS = 120_000;
+/** 报价出来超过这么久卡片才被打开，算「重新打开」：先问一次这份报价提交过没有。 */
+const REOPENED_AFTER_MS = 15_000;
+/**
+ * 卡上还在等确认时，后台悄悄问「这份报价交过没有」的间隔：先密后疏，问满 WATCH_FOR_MS 就不再定时问，
+ * 之后只在用户切回这个页面时问一次。用户在对话里打字确认时，提交的是模型那次调用，结果出在新卡里，
+ * 这张旧卡自己不知道，还挂着「Confirm and generate」（11-12 Jia 第二轮 G2）。
+ */
+const WATCH_FIRST_MS = 10_000;
+/**
+ * 前 5 分钟每 15 秒问一次，之后每分钟一次。原来是 10/20/30 秒后就改成每分钟：用户看报价、打字确认多半在
+ * 一分钟以后，提交刚好落在两次检查之间时，旧卡要再挂将近一分钟（11-16 ChatGPT 回归 G02：提交后 38 秒
+ * 还是报价，70 秒才变）。问一次只查幂等记录（on_load），很便宜。
+ */
+const WATCH_FAST_MS = 15_000;
+const WATCH_FAST_FOR_MS = 5 * 60_000;
+const WATCH_EVERY_MS = 60_000;
+export const WATCH_FOR_MS = 10 * 60_000;
+/** 切回页面时，离上次问不到这么久就不再问。 */
+const WATCH_REFOCUS_MIN_MS = 3_000;
+const RESUME_FAILED =
+  "Couldn't check whether this quote was already submitted. Confirming again won't charge twice: you'd get the same job back.";
+
+// quoting：重新报价中（不花钱）；submitting：带确认令牌提交中。两种按钮文案不同，别让用户以为在扣费。
+// verifying：提交没拿到确定的回答，卡片在自己核实；核实两分钟还说不准才变成 uncertain，交给用户。
+// 卡上不放取消（设计稿 v2，Jade、Lucas 10-29）：不做了就在对话里说，模型不提交就是了。
+// price_changed：确认时价格已经变了，卡片重新报了价，等用户按新价再确认。
+// settings_changed：确认令牌和这次请求对不上、重新报价也没成，只能再要一份报价。
+// rate_limited / model_unavailable：提交被拒，原因是限流 / 模型暂时用不了。
+// input_missing：确认时发现引用的资产库素材被删了（设计稿 v2「素材失效」），什么都没提交。
+// signed_out：Atlas 登录失效了（设计稿 v2「需要重新连接」），什么都没提交。
+export type QuotePhase =
+  // 重新打开对话、正在问这份报价交没交过：先不画报价，免得闪一下「Needs confirmation」（11-11 Claude H）。
+  | "resuming"
+  | "ready"
+  | "quoting"
+  | "submitting"
+  | "verifying"
+  | "expired"
+  | "low_balance"
+  | "price_changed"
+  | "settings_changed"
+  | "rate_limited"
+  | "model_unavailable"
+  | "uncertain"
+  | "in_progress"
+  | "input_missing"
+  | "signed_out"
+  // 报价作废了（atlas_cancel_quote，11-13 Jia A12/A14）：用户说不要了，或者改了需求另报了价。不能再确认。
+  | "canceled"
+  | "error";
+
+export interface QuoteState {
+  phase: QuotePhase;
+  /** phase = "error" / "model_unavailable" 时的原话。 */
+  message?: string;
+  /** low_balance：服务端随报错带回的可用余额（美元）。 */
+  balanceUsd?: number;
+  /** price_changed：用户先前同意的价格。 */
+  previousUsd?: number;
+  /** rate_limited：到这个时刻（毫秒）才放开 Retry。 */
+  retryAt?: number;
+  /** input_missing：被删掉的素材的名字（服务端报错里写的）。 */
+  missing?: string[];
+  /** canceled：因为改了需求、另报了价（显示 Settings changed），而不是用户说不要了。 */
+  replaced?: boolean;
+}
+
+/** 后台核实回来的作废原因 → 卡片状态。 */
+export function canceledState(reason: unknown): QuoteState {
+  return reason === "replaced" ? { phase: "canceled", replaced: true } : { phase: "canceled" };
+}
+
+export interface QuoteDeps {
+  app: App;
+  card(): CardData | undefined;
+  /** 卡片现在的报价状态。 */
+  state(): QuoteState;
+  setState(state: QuoteState): void;
+  /**
+   * 宿主让卡片不打扰用户地调工具（Claude、ChatGPT）。Cursor 这类每次都要用户点授权的不算：
+   * 后台定时问会一直弹授权框。
+   */
+  quietCalls(): boolean;
+  /** 收下一个工具结果（新报价或已提交），返回是否认得。carry 里的字段在结果没给时补上。 */
+  accept(result: unknown, carry?: Partial<CardData>): boolean;
+  /** 已提交后开始自己刷新。 */
+  startPolling(): void;
+  /** 「Choose another file」：在卡里打开资产库重新选，选好交给模型重新报价。宿主不让卡片调工具时没有它。 */
+  chooseReplacement?(missing: string[]): void;
+  notice(text: string): void;
+  openUrl(url: string): void;
+}
+
+export interface QuoteActions {
+  /** 带确认令牌提交这份报价。 */
+  confirm(): void;
+  /** 用同一个幂等键重新报价（报价过期时：那一单从没提交过）。 */
+  requote(): void;
+  /**
+   * 用新的幂等键重新报价。提交出过错之后只能这样：防重复扣费的锁会挡住同一个键的任何重试。
+   * 只报价、不扣费，用户还要再确认一次。
+   */
+  requoteFresh(): void;
+  editSettings(): void;
+  /** 模型用不了：请模型换一个。 */
+  switchModel(): void;
+  /** 素材被删了：重新选一个。 */
+  chooseAnother(missing: string[]): void;
+  /** 再核实一次刚才那一单开没开始。 */
+  checkAgain(): void;
+  /** 卡片重新打开在一份旧报价上：这份报价已经提交过就直接接着显示进度。 */
+  resume(): void;
+  /** 等确认期间在后台留意这份报价是不是已经在对话里打字确认、提交了；提交了就直接切成进度。 */
+  watch(): void;
+  topUp(): void;
+  openInAtlas(): void;
+}
+
+function priceLabel(quote: QuoteInfo | undefined): string | null {
+  return quote?.estimated_usd !== undefined ? formatUsd(quote.estimated_usd) : null;
+}
+
+function errorText(result: { content?: unknown }): string {
+  const blocks = (result.content ?? []) as Array<{ type: string; text?: string }>;
+  return blocks.find((block) => block.type === "text")?.text?.replace(/^Error:\s*/, "").slice(0, 2000) ?? "";
+}
+
+/**
+ * 卡片发起的工具调用失败时拿到的原因。ChatGPT 不把工具的错误结果交回卡片，而是让这次调用
+ * 直接失败，报错原文夹在错误信息里（10-27 test 实测）：
+ *   Error calling MCP tool: [TextContent(type='text', text='Error: …', …)]
+ * 取出里面那段 text；取不到就用整条信息。
+ */
+export function thrownErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const inner = message.match(/text=(['"])([\s\S]*?)\1,\s*annotations/) ?? message.match(/text=(['"])([\s\S]*?)\1/);
+  const text = inner ? inner[2] : message;
+  return text.replace(/^Error:\s*/, "").trim().slice(0, 2000);
+}
+
+/** 服务端在余额不足的报错后面附的那句 "Available balance: $8.50."（src/apps/generation-quote.ts）。 */
+function balanceIn(text: string): number | undefined {
+  const match = text.match(/available balance:?\s*(-?)\$(\d[\d,]*(?:\.\d+)?)/i);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[2]!.replace(/,/g, ""));
+  return Number.isFinite(value) ? (match[1] ? -value : value) : undefined;
+}
+
+/** 服务端「素材失效」那句话里的文件名：…no longer available: a.jpg, b.png (deleted from the Asset Library)。 */
+function missingNames(text: string): string[] {
+  const match = text.match(/no longer available:\s*(.+?)\s*\(deleted from the Asset Library\)/i);
+  return match ? match[1]!.split(/,\s*/).filter(Boolean) : [];
+}
+
+/** 按报错原文决定卡片显示哪种状态。 */
+export function failureState(text: string, now = Date.now()): QuoteState {
+  if (/no longer available/i.test(text) && /asset library/i.test(text)) return { phase: "input_missing", missing: missingNames(text) };
+  if (isSignedOut(text)) return { phase: "signed_out" };
+  // 服务端 IdempotencyCanceledError（src/services/idempotency.ts）：这份报价作废了，不再按 settings_changed 去重新报价。
+  if (/this quote was canceled/i.test(text)) return canceledState(/request changed|newer quote/i.test(text) ? "replaced" : "declined");
+  if (/confirmation expired|quote (has )?expired|expired\. request a new quote/i.test(text)) return { phase: "expired" };
+  if (/insufficient balance|top up/i.test(text)) {
+    const balance = balanceIn(text);
+    return balance === undefined ? { phase: "low_balance" } : { phase: "low_balance", balanceUsd: balance };
+  }
+  // 防重复扣费的锁说同一个请求还在处理（src/services/idempotency.ts）：这一单明确在跑，
+  // 不归到「不确定」那套（设计走查 11-05）。
+  if (/still in progress/i.test(text)) return { phase: "in_progress" };
+  // 提交没拿到确定的回答（服务端那句 "without a confirmed response"）：可能已经开跑，也可能没有。
+  // 卡片先自己核实。上游收下了却没给任务号（"did not return a prediction ID"）也一样：可能已经在跑。
+  if (/without a confirmed response|did not return a prediction id/i.test(text)) return { phase: "verifying" };
+  // 确认令牌和这次请求对不上（src/services/generation-confirmation.ts）。卡片带的参数不会变，
+  // 多半是价格变了：卡片会先按同一个幂等键重新报价，比一比价格（见 createQuoteActions）。
+  if (/does not match this request|confirmation is invalid|no quote was found for these exact arguments/i.test(text)) {
+    return { phase: "settings_changed" };
+  }
+  if (isRateLimited(text)) return { phase: "rate_limited", retryAt: now + RATE_LIMIT_WAIT_MS };
+  if (isModelUnavailable(text)) return { phase: "model_unavailable", message: text };
+  return { phase: "error", message: text || undefined };
+}
+
+/**
+ * 调用本身失败（不是工具回了错误结果）。能从报错里取出服务端的原话，就按原话判断；
+ * 取不出来（宿主超时把调用掐了、连接断了），请求可能已经到了服务端，先核实。
+ */
+export function thrownFailureState(error: unknown): QuoteState {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  // 宿主自己挡下的 401（请求没到工具）：没提交，直接请用户重新连接。
+  if (!/text=(['"])/.test(message) && isSignedOut(message, true)) return { phase: "signed_out" };
+  if (!/text=(['"])/.test(message)) return { phase: "verifying" };
+  return failureState(thrownErrorText(error));
+}
+
+/** 服务端的幂等锁说这个键之前被拒过、什么都没提交，要换新键（src/services/idempotency.ts）。 */
+export function keyBurned(text: string | undefined): boolean {
+  return !!text && /rejected by Atlas Cloud before it started|use a new idempotency key/i.test(text);
+}
+
+/** 报价已过期：先看卡片自己的计时，没有计时就等服务端说。 */
+export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): boolean {
+  if (!quote?.expires_at) return false;
+  const at = Date.parse(quote.expires_at);
+  return Number.isFinite(at) && at <= now;
+}
+
+/** 第 n 次（从 0 数）后台检查前等多久；加上已经问了的时长超过 WATCH_FOR_MS 就不再定时问（undefined）。 */
+export function watchGap(n: number, elapsedMs: number): number | undefined {
+  const gap = n === 0 ? WATCH_FIRST_MS : elapsedMs < WATCH_FAST_FOR_MS ? WATCH_FAST_MS : WATCH_EVERY_MS;
+  return elapsedMs + gap > WATCH_FOR_MS ? undefined : gap;
+}
+
+/** 卡上还是一份等用户确认的报价（没过期、不是样例）：这时才值得在后台问交过没有。 */
+export function awaitingConfirmation(card: CardData | undefined, state: QuoteState, now = Date.now()): boolean {
+  if (card?.state !== "quote" || !card.quote || card.sample === true) return false;
+  if (state.phase !== "ready" && state.phase !== "price_changed") return false;
+  return !quoteExpired(card.quote, now);
+}
+
+export function initialQuoteState(card: CardData, now = Date.now()): QuoteState {
+  const quote = card.quote;
+  // 测试卡片直接显示某个问题状态。
+  switch (quote?.problem) {
+    case "insufficient_balance":
+      return quote.sample_balance_usd !== undefined
+        ? { phase: "low_balance", balanceUsd: quote.sample_balance_usd }
+        : { phase: "low_balance" };
+    case "price_changed":
+      return quote.sample_previous_usd !== undefined
+        ? { phase: "price_changed", previousUsd: quote.sample_previous_usd }
+        : { phase: "price_changed" };
+    case "settings_changed":
+      return { phase: "settings_changed" };
+    case "rate_limited":
+      return { phase: "rate_limited", retryAt: now + RATE_LIMIT_WAIT_MS };
+    case "model_unavailable":
+      return { phase: "model_unavailable" };
+    case "input_missing":
+      return { phase: "input_missing", missing: quote.sample_missing ?? [] };
+    case "signed_out":
+      return { phase: "signed_out" };
+    case "submitting":
+    case "verifying":
+    case "uncertain":
+    case "in_progress":
+      return { phase: quote.problem };
+  }
+  return { phase: quoteExpired(quote) ? "expired" : "ready" };
+}
+
+/**
+ * 卡片是不是重新打开在一份旧报价上（ChatGPT 重新渲染对话时只给当初报价那次的工具结果）。
+ * 刚报出来的不用问：那时还没人确认过。
+ */
+export function reopenedOnQuote(quote: QuoteInfo | undefined, now = Date.now()): boolean {
+  if (!quote) return false;
+  const expires = quote.expires_at ? Date.parse(quote.expires_at) : NaN;
+  if (!Number.isFinite(expires) || !quote.valid_seconds) return true;
+  return now - (expires - quote.valid_seconds * 1000) > REOPENED_AFTER_MS;
+}
+
+/** 重新报价拿到的新价格和用户先前同意的不一样（按显示出来的金额比，不比浮点尾数）。 */
+export function priceChanged(approvedUsd: number | undefined, fresh: QuoteInfo | undefined): boolean {
+  return (
+    approvedUsd !== undefined &&
+    fresh?.estimated_usd !== undefined &&
+    formatUsd(approvedUsd) !== formatUsd(fresh.estimated_usd)
+  );
+}
+
+export function createQuoteActions(deps: QuoteDeps): QuoteActions {
+  const sample = () => deps.card()?.sample === true;
+  /** 最近一次带确认令牌提交的时间，核实时告诉服务端从哪儿往后找。 */
+  let submittedAt: string | undefined;
+  let checking = false;
+  /** 令牌对不上后重新报来的那份报价：再对不上就不再自动重报，交给用户。 */
+  let repricedQuote: QuoteInfo | undefined;
+  /** 已经因为「这个键之前被拒过」自动换键重报过的那份报价：只换一次。 */
+  let rekeyedQuote: QuoteInfo | undefined;
+
+  /** 服务端核实接口说开始了：接着显示进度。tell：告诉模型卡片刚提交了这一单（重新打开时不用说）。 */
+  function startedFrom(result: unknown, quote: QuoteInfo, tell = true): boolean {
+    const before = deps.card();
+    const carry = {
+      ...(quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {}),
+      ...(quote.settings ? { settings: quote.settings } : {}),
+    };
+    if (!deps.accept(result, carry)) return false;
+    const after = deps.card();
+    if (!after || after.state === "quote") return false;
+    deps.setState({ phase: "ready" });
+    if (tell) tellModel(deps.app, before, after);
+    deps.startPolling();
+    return true;
+  }
+
+  async function resume(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || sample() || checking) return;
+    // 问的这段时间画一张中性的「加载中」，不先画报价：已经出过图的对话重开时，报价卡和 Checking
+    // 会先闪一下再变成结果（11-11 Claude H）。有的宿主（Cursor）卡片调工具前要用户先点授权，
+    // 加载卡上写着在查什么，用户不至于看着一张待确认的报价不知道卡片在等什么（验收问题 59）。
+    deps.setState({ phase: "resuming" });
+    const backToQuote = (failed: boolean): void => {
+      const card = deps.card();
+      if (card?.quote !== quote) return;
+      deps.setState(initialQuoteState(card));
+      if (failed) deps.notice(RESUME_FAILED);
+    };
+    try {
+      const result = await deps.app.callServerTool({
+        name: CHECK_TOOL,
+        arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
+      });
+      const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
+      const outcome = content?.outcome;
+      // 只认「开始了」和「作废了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
+      if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
+      else if (!result.isError && outcome === "canceled" && deps.card()?.quote === quote) deps.setState(canceledState(content?.reason));
+      else backToQuote(Boolean(result.isError));
+    } catch {
+      // 问不到就照旧显示报价；再点确认时服务端按幂等键认出提交过的，不会重复扣钱。
+      backToQuote(true);
+    }
+  }
+
+  let watchingSince = 0;
+  let watchInflight = false;
+  let lastQuietCheck = 0;
+
+  /** 悄悄问一次：不改卡片的样子，只有「开始了」才切成进度；问不到、没提交，都照旧。 */
+  async function quietCheck(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || checking || watchInflight || !deps.quietCalls()) return;
+    if (!awaitingConfirmation(deps.card(), deps.state())) return;
+    watchInflight = true;
+    lastQuietCheck = Date.now();
+    try {
+      const result = await deps.app.callServerTool({
+        name: CHECK_TOOL,
+        arguments: { tool: quote.tool, idempotency_key: quote.idempotency_key, on_load: true },
+      });
+      const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
+      const outcome = content?.outcome;
+      // 问的这会儿用户可能自己点了确认：那一路自己会接着显示，这里不插手。
+      const stillWaiting = !result.isError && deps.card()?.quote === quote && awaitingConfirmation(deps.card(), deps.state());
+      if (stillWaiting && outcome === "started") startedFrom(result, quote, false);
+      // 模型按用户的话作废了这份报价（atlas_cancel_quote）：卡片不再让人确认。
+      else if (stillWaiting && outcome === "canceled") deps.setState(canceledState(content?.reason));
+    } catch {
+      // 问不到：下次再问。真点了确认，服务端按幂等键认出提交过的，不会重复扣钱。
+    } finally {
+      watchInflight = false;
+    }
+  }
+
+  function watch(): void {
+    if (watchingSince || sample()) return;
+    watchingSince = Date.now();
+    let n = 0;
+    const next = (): void => {
+      const gap = watchGap(n++, Date.now() - watchingSince);
+      if (gap === undefined) return;
+      setTimeout(() => {
+        void quietCheck().finally(() => {
+          if (deps.card()?.state === "quote") next();
+        });
+      }, gap);
+    };
+    next();
+    const refocus = (): void => {
+      if (document.visibilityState !== "visible" || Date.now() - lastQuietCheck < WATCH_REFOCUS_MIN_MS) return;
+      void quietCheck();
+    };
+    document.addEventListener("visibilitychange", refocus);
+    window.addEventListener("focus", refocus);
+  }
+
+  async function verify(): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote || checking) return;
+    checking = true;
+    deps.setState({ phase: "verifying" });
+    const started = Date.now();
+    try {
+      while (Date.now() - started < CHECK_BUDGET_MS && deps.card()?.quote === quote) {
+        try {
+          const result = await deps.app.callServerTool({
+            name: CHECK_TOOL,
+            arguments: {
+              tool: quote.tool,
+              idempotency_key: quote.idempotency_key,
+              arguments: quote.arguments,
+              ...(modelOf(deps.card(), quote) ? { model: modelOf(deps.card(), quote) } : {}),
+              ...(submittedAt ? { submitted_at: submittedAt } : {}),
+            },
+          });
+          const outcome = (result.structuredContent as { outcome?: string; message?: string } | undefined) ?? {};
+          if (!result.isError && outcome.outcome === "started" && startedFrom(result, quote)) return;
+          if (!result.isError && outcome.outcome === "not_started") {
+            deps.setState({
+              phase: "error",
+              message: `${outcome.message ?? "This generation didn't start."} Nothing was charged.`,
+            });
+            return;
+          }
+        } catch {
+          // 核实本身失败（网络抖动）：下一轮再问。
+        }
+        await sleep(CHECK_GAP_MS);
+      }
+      if (deps.card()?.quote === quote) deps.setState({ phase: "uncertain" });
+    } finally {
+      checking = false;
+    }
+  }
+
+  function fail(quote: QuoteInfo, confirmed: boolean, state: QuoteState): void {
+    // 确认令牌对不上：这一单没提交。按同一个幂等键重新报价（不扣费），价格变了就请用户按新价再确认。
+    if (confirmed && state.phase === "settings_changed" && quote !== repricedQuote) {
+      void call({ approvedUsd: quote.estimated_usd, repricing: true });
+      return;
+    }
+    // 这个幂等键之前提交被拒过（比如掉线时点过确认，11-02 实测重连后就是这样）：什么都没扣，
+    // 防重复扣费的锁不让再用这个键。换新键重新报一次价（不扣费），用户再确认。
+    if (confirmed && state.phase === "error" && keyBurned(state.message) && quote !== rekeyedQuote) {
+      rekeyedQuote = quote;
+      void call({ freshKey: true }).then(() => {
+        if (deps.card()?.quote !== quote) deps.notice("The last try didn't go through, so here's a fresh quote. Nothing was charged.");
+      });
+      return;
+    }
+    if (state.phase === "verifying") void verify();
+    else {
+      deps.setState(state);
+      if (confirmed) tellModelNotStarted(deps.app, deps.card(), state);
+    }
+  }
+
+  /**
+   * 调一次生成工具。confirm：带确认令牌提交；freshKey：换新的幂等键再报价；
+   * repricing：令牌对不上之后的重新报价，approvedUsd 是用户先前同意的价格。
+   */
+  async function call(
+    opts: { confirm?: boolean; freshKey?: boolean; repricing?: boolean; approvedUsd?: number } = {}
+  ): Promise<void> {
+    const quote = deps.card()?.quote;
+    if (!quote) return;
+    if (sample()) {
+      deps.notice("This is a sample card, so nothing was submitted.");
+      return;
+    }
+    const withConfirmation = opts.confirm === true;
+    deps.setState({ phase: withConfirmation ? "submitting" : "quoting" });
+    if (withConfirmation) submittedAt = new Date().toISOString();
+    try {
+      const result = await deps.app.callServerTool({
+        name: quote.tool,
+        arguments: {
+          ...quote.arguments,
+          idempotency_key: opts.freshKey ? newIdempotencyKey() : quote.idempotency_key,
+          ...(withConfirmation ? { confirmation_token: quote.confirmation_token, confirmed: true } : {}),
+        },
+      });
+      if (result.isError) {
+        fail(quote, withConfirmation, failureState(errorText(result)));
+        return;
+      }
+      const before = deps.card();
+      const carry = {
+        ...(withConfirmation && quote.estimated_usd !== undefined ? { price_usd: quote.estimated_usd } : {}),
+        ...(quote.settings ? { settings: quote.settings } : {}),
+      };
+      if (!deps.accept(result, carry)) {
+        deps.setState({ phase: "error", message: "Atlas Cloud sent back something this card can't show." });
+        return;
+      }
+      const after = deps.card();
+      if (after?.state === "quote") {
+        // 又拿到一份报价（重新报价，或服务端要求重新确认）：回到待确认；令牌对不上之后重报的，
+        // 价格变了就显示新旧价格。
+        if (opts.repricing) {
+          repricedQuote = after.quote;
+          if (priceChanged(opts.approvedUsd, after.quote)) {
+            deps.setState({ phase: "price_changed", previousUsd: opts.approvedUsd });
+            return;
+          }
+          deps.setState({ phase: "ready" });
+          deps.notice("The quote was refreshed. Nothing was charged. Approve it again to generate.");
+          return;
+        }
+        deps.setState({ phase: "ready" });
+        return;
+      }
+      deps.setState({ phase: "ready" });
+      if (after && withConfirmation) tellModel(deps.app, before, after);
+      deps.startPolling();
+    } catch (error) {
+      // 不能说「什么都没提交」：请求可能已经到了服务端（ChatGPT 把工具报错也当成调用失败）。
+      fail(quote, withConfirmation, thrownFailureState(error));
+    }
+  }
+
+  return {
+    confirm: () => void call({ confirm: true }),
+    requote: () => void call(),
+    requoteFresh: () => void call({ freshKey: true }),
+    editSettings() {
+      if (sample()) {
+        deps.notice("This is a sample card, so nothing was sent.");
+        return;
+      }
+      sendForUser(deps.app, say.changeRequest(userLang(deps.app)), deps.notice);
+    },
+    switchModel() {
+      if (sample()) {
+        deps.notice("This is a sample card, so nothing was sent.");
+        return;
+      }
+      sendForUser(deps.app, say.switchModel(userLang(deps.app), modelLabel(deps.card() ?? {})), deps.notice);
+    },
+    checkAgain: () => void verify(),
+    resume: () => void resume(),
+    watch,
+    chooseAnother(missing) {
+      // 打开资产库重选（测试卡片打开样例资产库，选好也不发送）。
+      if (deps.chooseReplacement) {
+        deps.chooseReplacement(missing);
+        return;
+      }
+      if (sample()) {
+        deps.notice("This is a sample card, so nothing was sent.");
+        return;
+      }
+      // 宿主不让卡片调工具：请模型打开资产库。
+      sendForUser(deps.app, say.missingFromLibrary(userLang(deps.app), missing), deps.notice);
+    },
+    topUp: () => deps.openUrl(billingUrlFor(deps.card()?.open_url)),
+    openInAtlas: () => deps.openUrl(deps.card()?.open_url || "https://www.atlascloud.ai"),
+  };
+}
+
+/**
+ * 卡片里确认的这一单，模型并不知道（工具结果只回到卡片）。告诉它一声，
+ * 免得它再报一次价、或者把用户后面那句「好了吗」当成没提交。
+ */
+function tellModel(app: App, quoteCard: CardData | undefined, submitted: CardData): void {
+  const price = priceLabel(quoteCard?.quote);
+  const text =
+    `The user approved the Atlas Cloud quote in the card` +
+    (price ? ` (${modelLabel(submitted)}, about ${price})` : ` (${modelLabel(submitted)})`) +
+    `. The card submitted it as prediction ${submitted.prediction_id} and is tracking it, so do not ` +
+    `submit it again. Call atlas_get_prediction with this ID if the user asks about the result.`;
+  // 宿主没声明也试（Cursor 不声明但处理这个请求，2026-11-11），失败就算了：报价结果里的说明兜底。
+  void withTimeout(app.updateModelContext({ content: [{ type: "text", text }] }), app.getHostCapabilities()?.updateModelContext !== undefined).catch(() => undefined);
+}
+
+/** 卡片里确认了、但这一单没开始时，告诉模型为什么（每种都没扣钱）。 */
+const NOT_STARTED: Partial<Record<QuotePhase, string>> = {
+  low_balance: "the account doesn't have enough balance",
+  model_unavailable: "the model is unavailable right now",
+  rate_limited: "Atlas Cloud is rate limiting this account; the card offers Retry after a short wait",
+  expired: "the quote expired; the card offers a new quote",
+  input_missing: "an input file is no longer in the Asset Library",
+  signed_out: "the Atlas Cloud sign-in expired; the user needs to reconnect",
+  error: "Atlas Cloud refused it",
+};
+
+/**
+ * 用户在卡片里点了确认，但没开始（余额不足、模型不可用……）。不说的话，模型以为还在等确认，
+ * 用户问起时会答错（11-03 Claude 实测）。宿主不把上下文交给模型时，靠报价结果里那段说明兜底。
+ */
+function tellModelNotStarted(app: App, card: CardData | undefined, state: QuoteState): void {
+  const reason = NOT_STARTED[state.phase];
+  if (!reason) return;
+  const detail = state.phase === "error" && state.message ? ` (${readableReason(state.message)})` : "";
+  const text =
+    `The user pressed Confirm on the Atlas Cloud quote in the card for ${card ? modelLabel(card) : "this job"}, ` +
+    `but it did not start: ${reason}${detail}. Nothing was charged. Do not say it is still waiting for the user's ` +
+    `confirmation; tell them what is needed, and quote again only if they ask.`;
+  // 宿主没声明也试（Cursor 不声明但处理这个请求，2026-11-11），失败就算了：报价结果里的说明兜底。
+  void withTimeout(app.updateModelContext({ content: [{ type: "text", text }] }), app.getHostCapabilities()?.updateModelContext !== undefined).catch(() => undefined);
+}
+
+/** 核实时按哪个模型找：卡片上的模型 ID，没有就用报价参数里的。 */
+function modelOf(card: CardData | undefined, quote: QuoteInfo): string | undefined {
+  if (card?.model_id) return card.model_id;
+  return typeof quote.arguments.model === "string" ? quote.arguments.model : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 报价卡上「生成什么、用什么」（需求文档 6.1、5.2）：提示词两行，引用的素材带缩略图和名称。 */
+function task(quote: QuoteInfo | undefined): HTMLElement[] {
+  const parts: HTMLElement[] = [];
+  if (quote?.prompt) parts.push(h("p", { class: "quote-prompt", title: quote.prompt }, quote.prompt));
+  const inputs = quote?.inputs ?? [];
+  if (inputs.length > 0) {
+    const shown = inputs.slice(0, MAX_INPUTS_SHOWN);
+    parts.push(
+      h(
+        "div",
+        { class: "quote-inputs", "aria-label": `${inputs.length} input file${inputs.length === 1 ? "" : "s"}` },
+        ...shown.map((input) => inputItem(input)),
+        inputs.length > shown.length ? h("span", { class: "quote-input-more" }, `+${inputs.length - shown.length}`) : null
+      )
+    );
+  }
+  return parts;
+}
+
+const MAX_INPUTS_SHOWN = 4;
+
+/** 素材名字下面那行：从哪儿来的（设计稿 v2「sneaker-front.jpg / Asset Library」）。 */
+const SOURCE_LABEL: Record<NonNullable<NonNullable<QuoteInfo["inputs"]>[number]["source"]>, string> = {
+  library: "Asset Library",
+  upload: "Uploaded",
+  chat: "From chat",
+};
+
+/** gone：确认时发现已从资产库删掉（设计稿 v2「素材失效」：红框 + Deleted from Asset Library）。 */
+function inputItem(input: NonNullable<QuoteInfo["inputs"]>[number], gone = false): HTMLElement {
+  const thumb = h("span", { class: "quote-input-thumb" });
+  const fallback = () => thumb.replaceChildren(h("span", { html: input.kind === "image" ? ICON_IMAGE : ICON_FILE }));
+  if (input.kind === "image") {
+    const img = h("img", { src: input.url, alt: "", decoding: "async", loading: "lazy", referrerpolicy: "no-referrer" });
+    img.addEventListener("error", fallback, { once: true });
+    thumb.append(img);
+  } else if (input.kind === "video") {
+    const video = h("video", { src: `${input.url}#t=0.1`, preload: "metadata", muted: true, playsinline: "", referrerpolicy: "no-referrer" });
+    video.addEventListener("error", fallback, { once: true });
+    thumb.append(video);
+  } else {
+    fallback();
+  }
+  return h(
+    "span",
+    { class: `quote-input${gone ? " gone" : ""}`, title: input.name },
+    thumb,
+    h(
+      "span",
+      { class: "quote-input-text" },
+      h("span", { class: "quote-input-name" }, input.name),
+      gone
+        ? h("span", { class: "quote-input-source" }, "Deleted from Asset Library")
+        : input.source
+          ? h("span", { class: "quote-input-source" }, SOURCE_LABEL[input.source])
+          : null
+    )
+  );
+}
+
+/** 「报价 10 分钟内有效」里的时长。 */
+function validFor(seconds: number | undefined): string | null {
+  if (!seconds || seconds < 60) return null;
+  if (seconds % 3600 === 0) return seconds === 3600 ? "1 hour" : `${seconds / 3600} hours`;
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+/** 有效期倒计时（每秒由 tickTimers 走字）；拿不到失效时间就不显示。 */
+function countdown(quote: QuoteInfo | undefined, now = Date.now()): HTMLElement | null {
+  const at = quote?.expires_at ? Date.parse(quote.expires_at) : NaN;
+  if (!Number.isFinite(at) || at <= now) return null;
+  return h("span", { "data-countdown-to": quote!.expires_at }, formatClock((at - now) / 1000));
+}
+
+
+export function renderQuoteCard(
+  card: CardData,
+  state: QuoteState,
+  opts: ViewOptions,
+  actions: QuoteActions
+): HTMLElement {
+  const quote = card.quote;
+  const price = priceLabel(quote);
+  const template = isTemplate(card);
+  const subtitle = modelLine(card, template);
+
+  if (state.phase === "expired") {
+    const duration = validFor(quote?.valid_seconds);
+    return h(
+      "section",
+      { class: "card" },
+      head("Quote expired", badge("Expired")),
+      h(
+        "p",
+        { class: "desc" },
+        duration ? `This quote expired after ${duration}. Nothing was charged.` : "This quote expired. Nothing was charged."
+      ),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requote)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "low_balance") {
+    // 报错里带回的余额最新；没有时用报价时查到的。
+    const balance = state.balanceUsd ?? quote?.account?.balance_usd;
+    // 写出还差多少（11-11 Claude B1）：报价和余额都知道、余额确实不够时才写。
+    const estimate = quote?.estimated_usd;
+    const shortBy = estimate !== undefined && balance !== undefined && estimate > balance ? estimate - balance : undefined;
+    return h(
+      "section",
+      { class: "card" },
+      head("Not enough balance", badge("Low balance", { danger: true })),
+      subtitle,
+      price
+        ? h(
+            "div",
+            { class: "rows" },
+            row("Estimated cost", price),
+            shortBy !== undefined ? row("You need", `${formatUsd(Math.ceil(shortBy * 100 - 1e-6) / 100)} more`) : null
+          )
+        : null,
+      billingLine(quote?.account, balance, true),
+      h("p", { class: "note" }, "After you top up, refresh to check your balance and the quote again. Nothing was charged."),
+      h(
+        "div",
+        { class: "actions" },
+        button("Top up", "primary", actions.topUp),
+        // 设计稿 v2「Refresh balance」：充值回来重新报一次价（同时查余额），不扣费，用户还要再确认。
+        quote ? button("Refresh balance", "secondary", actions.requoteFresh) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "price_changed") {
+    const was = state.previousUsd !== undefined ? formatUsd(state.previousUsd) : null;
+    return h(
+      "section",
+      { class: "card" },
+      head("Price changed", badge("Price changed", { warn: true })),
+      subtitle,
+      chips(quote?.settings ?? []),
+      h(
+        "p",
+        { class: "quote-price" },
+        was ? h("s", { class: "was" }, was) : null,
+        was ? h("span", { class: "arrow", "aria-hidden": "true" }, "→") : null,
+        price ?? "Cost unavailable"
+      ),
+      h("p", { class: "desc" }, "The price changed after you confirmed. Nothing was charged yet."),
+      h(
+        "div",
+        { class: "actions" },
+        button(price ? "Confirm and generate" : "Confirm anyway", "primary", actions.confirm),
+        opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "settings_changed") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Settings changed", badge("Re-quote needed", { warn: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Settings changed after this quote. Get a new quote to continue. Nothing was charged."),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "canceled") {
+    // 改了需求另报了价：和 settings_changed 长得一样，但不能在这张卡上重新报价（旧的幂等键已作废），去用新的那张卡。
+    if (state.replaced) {
+      return h(
+        "section",
+        { class: "card" },
+        head("Settings changed", badge("Replaced", { warn: true })),
+        subtitle,
+        h("p", { class: "desc" }, "The request changed and a newer quote replaced this one. Use the newer quote. Nothing was charged."),
+        notice(opts)
+      );
+    }
+    return h(
+      "section",
+      { class: "card" },
+      head("Quote canceled", badge("Canceled")),
+      subtitle,
+      h("p", { class: "desc" }, "You declined this quote, so it can't be confirmed. Nothing was charged."),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "rate_limited") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Too many requests", badge("Rate limited", { warn: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Atlas Cloud is limiting requests right now. Nothing was charged. Try again in a moment."),
+      // 被拒的那一单用过的幂等键不能再用：Retry 换新键重新报价，用户再确认一次。
+      quote ? h("div", { class: "actions" }, retryButton(state.retryAt ?? Date.now(), actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "model_unavailable") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Model unavailable", badge("Unavailable", { danger: true })),
+      h(
+        "p",
+        { class: "desc", title: state.message },
+        `${modelLabel(card)} is temporarily unavailable. Nothing was charged.`
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        quote ? button("Retry", "primary", actions.requoteFresh) : null,
+        opts.canMessage ? button("Switch model", "secondary", actions.switchModel) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "resuming") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Loading this generation", badge("Loading", { spinner: true })),
+      subtitle,
+      h("p", { class: "note" }, "Looking up whether it was already submitted."),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "verifying") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Checking whether it started", badge("Checking", { spinner: true, warn: true })),
+      subtitle,
+      h(
+        "p",
+        { class: "desc" },
+        "Atlas Cloud didn't confirm this submission, so we're checking whether it went through. Don't submit it again, or you may be charged twice."
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "uncertain") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Not sure it started", badge("Check first")),
+      subtitle,
+      h(
+        "p",
+        { class: "desc" },
+        "We couldn't confirm whether this job is running. Check again, or look at your generations in Atlas."
+      ),
+      // 不放「Get a new quote」：这时不知道扣没扣钱，重新报价容易让用户再提交一次（设计走查 11-05）。
+      h(
+        "div",
+        { class: "actions" },
+        quote ? button("Check again", "primary", actions.checkAgain) : null,
+        button("Open in Atlas", quote ? "secondary" : "primary", actions.openInAtlas)
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "in_progress") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Generation in progress", badge("Already running", { spinner: true })),
+      subtitle,
+      h("p", { class: "desc" }, "The same request is already being processed."),
+      quote ? h("div", { class: "actions" }, button("Refresh", "primary", actions.checkAgain)) : null,
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "input_missing") {
+    // 报错里的名字对不上卡上的素材时（比如名字被截过），至少说清楚有文件没了。
+    const missing = new Set(state.missing ?? []);
+    const inputs = quote?.inputs ?? [];
+    const count = Math.max(1, missing.size);
+    return h(
+      "section",
+      { class: "card" },
+      head(count === 1 ? "One file is no longer available" : `${count} files are no longer available`, badge("Replace file", { danger: true })),
+      quote?.prompt ? h("p", { class: "quote-prompt", title: quote.prompt }, quote.prompt) : subtitle,
+      inputs.length > 0
+        ? h("div", { class: "quote-inputs" }, ...inputs.map((input) => inputItem(input, missing.has(input.name))))
+        : null,
+      h("p", { class: "desc" }, "Choose another file to continue. Nothing was charged."),
+      h(
+        "div",
+        { class: "actions" },
+        button("Choose another file", "primary", () => actions.chooseAnother([...missing])),
+        opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
+      ),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "signed_out") {
+    // 「Reconnect」重新报一次价（不扣费，换新幂等键：上一次提交可能已经占了旧键）。ChatGPT 见到这次
+    // 调用被 401 挡下会自己弹出连接；连上之后拿到新报价，用户再确认。
+    return h(
+      "section",
+      { class: "card" },
+      head("Reconnect Atlas Cloud", badge("Sign in required", { danger: true })),
+      subtitle,
+      h("p", { class: "desc" }, "Your Atlas Cloud sign-in expired, so nothing was submitted or charged. Reconnect to get the quote again."),
+      quote ? h("div", { class: "actions" }, button("Reconnect", "primary", actions.requoteFresh)) : null,
+      h("p", { class: "note" }, RECONNECT_NOTE),
+      notice(opts)
+    );
+  }
+
+  if (state.phase === "error") {
+    return h(
+      "section",
+      { class: "card" },
+      head("Couldn't start the generation", badge("Failed", { danger: true })),
+      subtitle,
+      h("p", { class: "desc" }, state.message ? readableReason(state.message) : "Atlas Cloud didn't accept this request."),
+      quote ? h("div", { class: "actions" }, button("Get a new quote", "primary", actions.requoteFresh)) : null,
+      notice(opts)
+    );
+  }
+
+  const submitting = state.phase === "submitting";
+  const busy = submitting || state.phase === "quoting";
+  const status = busy
+    ? badge(submitting ? "Submitting" : "Getting quote", { spinner: true })
+    : price === null
+      ? badge("No estimate", { warn: true })
+      : quote?.partial
+        ? badge("Estimate only", { warn: true })
+        : badge("Needs confirmation");
+
+  // 设计稿 v3：价格下面一行「Estimated · USD · quote valid for 9:42」；提交中不写有效期。
+  const timer = busy ? null : countdown(quote);
+  const validity = timer ? [" · quote valid for ", timer] : [];
+  const amount =
+    price === null
+      ? [
+          h("p", { class: "quote-price unavailable" }, "Cost unavailable"),
+          h("p", { class: "desc" }, "You'll be charged the model's standard rate.", ...validity),
+        ]
+      : [
+          h("p", { class: "quote-price" }, quote?.partial ? `≈ ${price}` : price),
+          h("p", { class: "note quote-note" }, withCurrency(estimateNote(quote, template)), ...validity),
+        ];
+
+  // 没有工具名（宿主没把卡片数据转过来）就没法在卡里确认，请用户在对话里回复。
+  const canConfirm = quote !== undefined && quote.tool !== "";
+  const generateLabel = busy
+    ? submitting
+      ? "Submitting…"
+      : "Getting quote…"
+    : price === null
+      ? "Confirm anyway"
+      : "Confirm and generate";
+  return h(
+    "section",
+    { class: "card" },
+    head("Confirm this generation", status),
+    subtitle,
+    // 设计稿 v3：模型那一行下面写选它的理由。模型自己挑的才有；用户点名的模型不写。
+    card.model_reason ? h("p", { class: "desc quote-why" }, `Why this model: ${card.model_reason}`) : null,
+    ...task(quote),
+    chips(quote?.settings ?? []),
+    ...amount,
+    submissionNote(quote),
+    // 需求文档 6.1：报价写明从哪个账户扣、余额多少（设计稿 v2 收成底部一行）。
+    billingLine(quote?.account, quote?.account?.balance_usd),
+    // 设计稿 v2：按钮只留确认和修改，不放取消。
+    canConfirm
+      ? h(
+          "div",
+          { class: "actions" },
+          button(generateLabel, "primary", actions.confirm, { disabled: busy }),
+          !busy && opts.canMessage ? button("Edit request", "secondary", actions.editSettings) : null
+        )
+      : h("p", { class: "note" }, "Reply in the chat to confirm or change this."),
+    notice(opts)
+  );
+}
+
+/**
+ * 模型那一行（设计稿 v3）：厂商图标 + 模型名 + 灰色类型。图标加载失败就去掉，只留文字，
+ * 不留破图框；没有图标的老结果、目录里查不到的模型也是只有文字。
+ */
+function modelLine(card: CardData, template: boolean): HTMLElement {
+  const icon = card.model_icon
+    ? h("img", { class: "model-icon", src: card.model_icon, alt: "", referrerpolicy: "no-referrer", decoding: "async" })
+    : null;
+  icon?.addEventListener("error", () => icon.remove(), { once: true });
+  return h(
+    "div",
+    { class: "model-line" },
+    icon,
+    h("span", { class: "model-name" }, modelLabel(card)),
+    h("span", { class: "model-kind" }, template ? "Marketing Studio template" : typeLabel(card))
+  );
+}
+
+function notice(opts: ViewOptions): HTMLElement | null {
+  return opts.notice ? h("p", { class: "note", role: "status" }, opts.notice) : null;
+}
+
+/**
+ * 同样的请求之前提交过时，在价格下面写一句：是拿回原来那一单（不另扣），还是再跑一次（另扣一次）。
+ * 原来只有模型看得到这条说明，用户在卡上点确认时不知道会不会再扣（11-19 第二轮复审）。
+ */
+function submissionNote(quote: QuoteInfo | undefined): HTMLElement | null {
+  const id = (note: { prediction_id?: string } | undefined) => (note?.prediction_id ? ` (${note.prediction_id})` : "");
+  if (quote?.repeat_of) {
+    return h("p", { class: "note quote-repeat", role: "note" }, `This request was already run${id(quote.repeat_of)}. Confirming runs it again and is charged again.`);
+  }
+  if (quote?.already_submitted) {
+    // 提交没拿到确定答复（unconfirmed）或还在提交（in_progress）：不能说「确认就是看那一单」，确认会先去核实。
+    if (quote.already_submitted.status && quote.already_submitted.status !== "submitted") {
+      return h("p", { class: "note quote-repeat", role: "note" }, "This request may already have been submitted. Confirming checks for that job first; it won't start a second one.");
+    }
+    return h("p", { class: "note quote-repeat", role: "note" }, `This request was already submitted${id(quote.already_submitted)}. Confirming shows that job; nothing new is charged.`);
+  }
+  return null;
+}
+
+/** 设计稿 v3：「Estimated · USD · …」，币种紧跟在 Estimated 后面；别的说法（部分估算）放在句尾。 */
+function withCurrency(note: string): string {
+  return /^Estimated(?: ·|$)/.test(note) ? note.replace(/^Estimated/, "Estimated · USD") : `${note} · USD`;
+}
+
+/** 价格下面那行：为什么是预估。 */
+function estimateNote(quote: QuoteInfo | undefined, template = false): string {
+  if (quote?.partial) {
+    const missing = quote.estimate_missing?.join(", ");
+    return missing
+      ? `Doesn't include ${missing} yet. The final cost may be higher`
+      : "Some settings can't be priced exactly. The final cost may differ";
+  }
+  if (template) return "Estimated total for the whole template";
+  return quote?.settles_on_usage ? "Estimated · settles on actual use" : "Estimated";
+}
+
+const ACCOUNT_TYPE_LABEL: Record<string, string> = { personal: "Personal", team: "Team", organization: "Team" };
+
+/**
+ * 底部一行「Billed to Ada Lovelace · Personal      Balance $24.60」。设计稿 v3（11-10）去掉了邮箱：对话可能被分享。
+ * 账户类型要写出来：授权页和控制台都说费用从个人账户扣、和官网当前选的团队无关，确认扣费的地方也要看得到。
+ * short：余额不够这一单时余额标红（余额不足卡）。没有账户、也没有余额就不画。
+ */
+function billingLine(account: QuoteInfo["account"], balance: number | undefined, short = false): HTMLElement | null {
+  if (!account && balance === undefined) return null;
+  const kind = account?.type ? ACCOUNT_TYPE_LABEL[account.type.toLowerCase()] ?? account.type : null;
+  const label = account ? account.name : null;
+  return h(
+    "div",
+    { class: "billing" },
+    // 账户类型单独一段、不参与截断：地方不够时只截名字，「Personal」总能看到。
+    label
+      ? h(
+          "span",
+          { class: "billing-to", title: kind ? `${label} · ${kind}` : label },
+          h("span", { class: "billing-prefix" }, "Billed to "),
+          h("strong", {}, label),
+          kind ? h("span", { class: "billing-kind" }, ` · ${kind}`) : null
+        )
+      : h("span"),
+    balance !== undefined
+      ? h("span", { class: "billing-balance" }, "Balance ", h("strong", { class: short ? "danger" : "" }, formatBalance(balance)))
+      : null
+  );
+}

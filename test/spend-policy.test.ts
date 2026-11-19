@@ -36,15 +36,15 @@ function withEnv(t: import("node:test").TestContext, vars: Record<string, string
   });
 }
 
-test("阈值默认 20，写坏了退回 0（= 全部要确认）而不是放行", (t) => {
+test("阈值默认 1，写坏了退回 0（= 全部要确认）而不是放行", (t) => {
   withEnv(t, { MCP_AUTOSUBMIT_MAX_USD: undefined });
-  assert.equal(autoSubmitThresholdUsd(), 20);
+  assert.equal(autoSubmitThresholdUsd(), 1);
 
   // 一个配错的阈值绝不能把闸门开得更大。
   for (const bad of ["", "  ", "abc", "-1", "NaN"]) {
     process.env.MCP_AUTOSUBMIT_MAX_USD = bad;
     const value = autoSubmitThresholdUsd();
-    assert.ok(value === 0 || value === 20, `${bad} → ${value}`);
+    assert.ok(value === 0 || value === 1, `${bad} → ${value}`);
     if (bad.trim() !== "") assert.equal(value, 0, `${bad} 应当退回 0`);
   }
 
@@ -132,10 +132,10 @@ test("生成类阈值为 0 且报价失败：照样要确认，价格标为未�
   assert.equal(decision.quotedUsd, null);
 });
 
-test("生成类默认每次确认；对话保留 20 美元的自动上限", (t) => {
+test("生成类默认每次确认；对话保留 1 美元的自动上限", (t) => {
   withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: undefined, MCP_AUTOSUBMIT_MAX_USD: undefined });
   assert.equal(generationAutoSubmitThresholdUsd(), 0);
-  assert.equal(autoSubmitThresholdUsd(), 20);
+  assert.equal(autoSubmitThresholdUsd(), 1);
   for (const bad of ["abc", "-1", "NaN"]) {
     process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD = bad;
     assert.equal(generationAutoSubmitThresholdUsd(), 0, `${bad} 应当退回 0`);
@@ -145,12 +145,15 @@ test("生成类默认每次确认；对话保留 20 美元的自动上限", (t) 
 });
 
 test("不足一分钱的价格不被四舍五入成 $0.01", () => {
-  assert.equal(formatUsd(0.009), "$0.0090");
+  assert.equal(formatUsd(0.009), "$0.009");
   assert.equal(formatUsd(0.0000221), "$0.000022");
   assert.equal(formatUsd(0.0000058), "$0.0000058");
   assert.equal(formatUsd(0.000001), "$0.0000010");
   assert.equal(formatUsd(0), "$0.00");
-  assert.equal(formatUsd(0.036), "$0.04");
+  // 一美元以下不再四舍五入到分：$0.072 被写成 $0.07，模型照着报给了用户（11-04）。
+  assert.equal(formatUsd(0.036), "$0.036");
+  assert.equal(formatUsd(0.072), "$0.072");
+  assert.equal(formatUsd(0.5), "$0.50");
   assert.equal(formatUsd(20), "$20.00");
 });
 
@@ -161,7 +164,7 @@ test("直接提交时文案给的是预估、不是已扣费，且要求告知�
     thresholdUsd: 20,
     reason: "",
   });
-  assert.match(notice, /\$0\.04/);
+  assert.match(notice, /\$0\.036/);
   assert.match(notice, /\$20\.00/);
   assert.match(notice, /Give the user this estimate/);
   // 异步任务失败不计费，所以这句永远不能说成已经扣掉了。
@@ -195,6 +198,8 @@ test("工具总说明不再说低于限额直接提交、不要自己加确认",
   assert.match(instructions, /do not judge expiry from a clock/);
   assert.doesNotMatch(instructions, /Do not add a confirmation step of your own/);
   assert.doesNotMatch(instructions, /submits it straight away and reports the amount/);
+  // 「别自己用 curl 调 REST、没有 API key」从工具描述挪到了这里。
+  assert.match(instructions, /do not call the Atlas REST API directly/);
 });
 
 test("报价里写出本次的幂等键，要求确认时原样传回", () => {
@@ -202,4 +207,37 @@ test("报价里写出本次的幂等键，要求确认时原样传回", () => {
   assert.match(notice, /8d66f088-d57c-42f7-b899-44eef0d7717a/);
   assert.match(notice, /send this exact value back/);
   assert.match(notice, /do not generate a new one/);
+});
+
+test("报价带上预估原因和漏掉的部分，确认文字说清楚", async (t) => {
+  withEnv(t, { MCP_GENERATION_AUTOSUBMIT_MAX_USD: undefined, ATLASCLOUD_API_KEY: "test-key" });
+  const settles = await evaluateSpend(
+    {},
+    { fetcher: quoteFetcher({ code: 200, data: { price: "1.5", estimated: true, estimate_reason: "settles_on_usage" } }) }
+  );
+  assert.equal(settles.estimateReason, "settles_on_usage");
+  assert.match(confirmationCostNotice(settles), /\$1\.50 for these exact parameters.*settled on what the job actually uses/);
+
+  const partial = await evaluateSpend(
+    {},
+    {
+      fetcher: quoteFetcher({
+        code: 200,
+        data: {
+          price: "0.5",
+          estimated: true,
+          estimate_partial: true,
+          estimate_reason: "settles_on_usage",
+          estimate_missing: ["reference_video_duration"],
+        },
+      }),
+    }
+  );
+  assert.deepEqual(partial.estimateMissing, ["reference_video_duration"]);
+  assert.match(confirmationCostNotice(partial), /at least \$0\.50 .*not included: the reference videos' length/);
+
+  // 老网关不给这两个字段：文字和以前一样。
+  const plain = await evaluateSpend({}, { fetcher: quoteFetcher({ code: 200, data: { price: "0.2" } }) });
+  assert.equal(plain.estimateReason, undefined);
+  assert.doesNotMatch(confirmationCostNotice(plain), /settled/);
 });

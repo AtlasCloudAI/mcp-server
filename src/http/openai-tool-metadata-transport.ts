@@ -6,10 +6,7 @@ import type {
   JSONRPCMessage,
   MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  isAtlasToolName,
-  TOOL_POLICIES,
-} from "../tool-policy.js";
+import { remoteToolPolicy } from "../tool-policy.js";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -18,8 +15,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function securitySchemes(name: string): Array<{ type: "oauth2"; scopes: string[] }> | undefined {
-  if (!isAtlasToolName(name) || !TOOL_POLICIES[name].remote) return undefined;
-  const scope = TOOL_POLICIES[name].scope;
+  const policy = remoteToolPolicy(name);
+  if (!policy?.remote) return undefined;
+  const scope = policy.scope;
   // 目录类工具不要求 scope（契约 v3 §4.2），公示成空集而不是编造一个 scope 名。
   return [{ type: "oauth2", scopes: scope === null ? [] : [scope] }];
 }
@@ -58,7 +56,14 @@ export class OpenAIToolMetadataTransport implements Transport {
     extra?: MessageExtraInfo
   ) => void;
 
-  constructor(private readonly inner: Transport) {}
+  /**
+   * onSend 能看到每条发出的消息（改写前的原样），工具调用埋点靠它拿到真实的返回结果。
+   * 放在这里是因为这是每个请求唯一的出口，不必为它再套一层传输。
+   */
+  constructor(
+    private readonly inner: Transport,
+    private readonly onSend?: (message: JSONRPCMessage) => void
+  ) {}
 
   get sessionId(): string | undefined {
     return this.inner.sessionId;
@@ -75,6 +80,7 @@ export class OpenAIToolMetadataTransport implements Transport {
     message: JSONRPCMessage,
     options?: TransportSendOptions
   ): Promise<void> {
+    this.onSend?.(message);
     await this.inner.send(withOpenAIToolSecuritySchemes(message), options);
   }
 

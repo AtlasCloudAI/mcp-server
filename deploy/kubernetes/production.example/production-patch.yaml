@@ -52,6 +52,15 @@ spec:
                   name: atlas-mcp-token-exchange
                   key: client-secret
 
+            # ---- 工具调用埋点（PostHog）----
+            # 没有这个 Secret 键就不发事件，服务照常起（optional: true）。
+            - name: POSTHOG_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: atlascloud-openai-plugin
+                  key: posthog-key
+                  optional: true
+
             # ---- 上游 ----
             # 同集群优先走内网：省一跳公网和一次 TLS，也绕开网关的路径白名单。
             # 拿不到内网地址就都填 https://api.atlascloud.ai（公网可用，只是慢一点）。

@@ -350,6 +350,16 @@ export function playbackGuidance(
     "coming from the chat app, so it renders as a broken image. Mention the URL only as a " +
     "plain link for downloading.";
 
+  // 认不出的客户端里也有会显示卡片的（Cursor，验收问题 58）：卡片里已经有图和 Download，
+  // 再让它 curl 一遍只会多一次 shell 授权、往用户目录里塞文件。
+  if (kinds.size > 0) {
+    notes.push(
+      "If this result is already shown in an Atlas card in the chat (with its own Download button), " +
+        "do not download it again: give the URL as a plain link and stop. The same goes when you only " +
+        "looked this task up (its status, its cost, or an older task from the history list) rather than " +
+        "delivering a result the user is waiting for: give the link and do not save the file. Otherwise:"
+    );
+  }
   if (kinds.has("image")) {
     notes.push(
       "Show the image inline: save it with `curl -L --fail --max-time 120 -o <descriptive-name>.png '<url>'` " +

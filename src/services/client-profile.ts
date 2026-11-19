@@ -30,10 +30,14 @@ function hostMatches(host: string, domains: string[]): boolean {
   return domains.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
-type KnownClient = "chatgpt" | "codex" | "claude" | "claude-code";
+type KnownClient = "chatgpt" | "codex" | "claude" | "claude-code" | "hermes";
+
+/** Hermes Agent 的元数据文档地址，和后端 authzserver 的 knownClients 一致。 */
+const HERMES_CLIENT_ID = "https://nousresearch.github.io/hermes-agent/docs/oauth/client-metadata.json";
 
 function knownClient(clientId: string | undefined): KnownClient | null {
   if (!clientId) return null;
+  if (clientId === HERMES_CLIENT_ID) return "hermes";
   let url: URL;
   try {
     url = new URL(clientId);
@@ -55,6 +59,7 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
   switch (knownClient(clientId)) {
     case "codex":
     case "claude-code":
+    case "hermes":
       return "shell";
     case "chatgpt":
     case "claude":
@@ -64,9 +69,100 @@ export function clientProfile(clientId: string | undefined): ClientProfile {
   }
 }
 
+/**
+ * Does this client hand chat attachments to tools as download links (what
+ * atlas_import_chat_files reads)? ChatGPT does. Claude on the web, Claude Code and
+ * Codex don't, so the tool only clutters their tool list (seen in Claude on
+ * 2026-11-03). Unknown clients keep it: some of them may pass links the same way.
+ */
+export function passesChatAttachmentLinks(clientId: string | undefined): boolean {
+  const client = knownClient(clientId);
+  return client === null || client === "chatgpt";
+}
+
+/**
+ * Can this client show the Atlas cards (MCP Apps)? Codex, Claude Code and Hermes
+ * can't: they list the card-only tools (atlas_card_status,
+ * atlas_card_check_submission, atlas_card_selftest) to the model as ordinary
+ * tools instead of hiding them (seen with Hermes on 2026-11-04, issue 48).
+ * Unknown clients keep them: WorkBuddy's engine, for one, does render cards.
+ */
+export function rendersCards(clientId: string | undefined): boolean {
+  const client = knownClient(clientId);
+  return client !== "codex" && client !== "claude-code" && client !== "hermes";
+}
+
+/**
+ * Which product is calling, for usage analytics (`client_platform` on
+ * `mcp_tool_call`).
+ *
+ * Metadata-document clients are told apart by their client_id URL, as above.
+ * Dynamically registered clients get a random client_id, so they are told apart
+ * by name prefix instead. Names seen at registration on the Atlas authorization
+ * server (2026-10-15): "WorkBuddy", "WorkBuddy Connector (custom-mcp:...)",
+ * "Hermes Agent", "OpenClaw MCP", "Cursor". The resource server never sees that
+ * registration, so the name it matches comes from the MCP `initialize`
+ * clientInfo, or failing that the User-Agent header.
+ */
+export type ClientPlatform =
+  | "chatgpt"
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "workbuddy"
+  | "hermes"
+  | "openclaw"
+  | "grok"
+  | "unknown";
+
+const NAME_PREFIXES: ReadonlyArray<readonly [string, ClientPlatform]> = [
+  ["workbuddy", "workbuddy"],
+  ["hermes", "hermes"],
+  ["openclaw", "openclaw"],
+  ["cursor", "cursor"],
+  ["grok", "grok"],
+  ["claude", "claude"],
+  ["codex", "codex"],
+  ["chatgpt", "chatgpt"],
+  ["openai", "chatgpt"],
+];
+
+/** The platform a client or user-agent name belongs to, or undefined if none matches. */
+export function platformFromName(name: string | undefined): ClientPlatform | undefined {
+  const normalized = name?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return NAME_PREFIXES.find(([prefix]) => normalized.startsWith(prefix))?.[1];
+}
+
+export function clientPlatform(
+  clientId: string | undefined,
+  clientName?: string
+): ClientPlatform {
+  switch (knownClient(clientId)) {
+    case "chatgpt":
+      return "chatgpt";
+    case "codex":
+      return "codex";
+    case "claude":
+    case "claude-code":
+      return "claude";
+    default:
+      return platformFromName(clientName) ?? "unknown";
+  }
+}
+
+/** Is the request being served coming from ChatGPT (not Codex)? */
+export function currentClientIsChatGpt(): boolean {
+  return knownClient(getRequestContext()?.authInfo.clientId) === "chatgpt";
+}
+
 /** The profile of the client behind the request being served, or "other". */
 export function currentClientProfile(): ClientProfile {
-  return clientProfile(getRequestContext()?.authInfo.clientId);
+  const context = getRequestContext();
+  const profile = clientProfile(context?.authInfo.clientId);
+  // 认不出、但显示过卡片的客户端（Cursor）：结果已经在卡片里，按聊天类客户端给指引，
+  // 不让模型再用 curl 下载一遍（问题 58）。
+  return profile === "other" && context?.knownCardClient ? "chat" : profile;
 }
 
 /**

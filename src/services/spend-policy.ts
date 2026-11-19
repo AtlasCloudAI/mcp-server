@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
+import { getRequestContext } from "./request-context.js";
+import { InMemoryUploadTicketStore } from "./upload-ticket-store.js";
 import { schemaDefaults } from "../utils/schema-validator.js";
 import type { Model, PromptThresholdPrice } from "../types.js";
 
@@ -47,6 +50,11 @@ const calculateResponseSchema = z.preprocess(
       // videos it was not allowed to probe, for instance. The true cost is then
       // higher than what came back, so the number cannot clear a threshold.
       estimate_partial: z.boolean().optional(),
+      // Why the figure is an estimate ("settles_on_usage": billed on what the job
+      // actually used) and, for a partial one, what it left out
+      // ("reference_video_duration"). aiproxy#1074; older gateways omit both.
+      estimate_reason: z.string().optional(),
+      estimate_missing: z.array(z.string()).optional(),
     })
     .passthrough()
 );
@@ -62,11 +70,19 @@ export interface SpendDecision {
   reason: string;
   /** The platform flagged the quote as incomplete: the real charge is higher. */
   partial?: boolean;
+  /** Why the quote is an estimate, as the platform put it. */
+  estimateReason?: string;
+  /** What a partial quote left out. */
+  estimateMissing?: string[];
+  /** Set when the per-request limit passed but the user's daily auto-run budget did not. */
+  dailyBudget?: { budgetUsd: number; usedUsd: number };
 }
 
 export interface Quote {
   usd: number | null;
   partial: boolean;
+  reason?: string;
+  missing?: string[];
 }
 
 /**
@@ -83,7 +99,19 @@ export async function fetchQuote(
     responseSchema: calculateResponseSchema,
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
   });
-  return { usd: quote.price ?? null, partial: quote.estimate_partial === true };
+  return {
+    usd: quote.price ?? null,
+    partial: quote.estimate_partial === true,
+    ...(quote.estimate_reason ? { reason: quote.estimate_reason } : {}),
+    ...(quote.estimate_missing?.length ? { missing: quote.estimate_missing } : {}),
+  };
+}
+
+function estimateDetails(quote: Quote | null): Pick<SpendDecision, "estimateReason" | "estimateMissing"> {
+  return {
+    ...(quote?.reason ? { estimateReason: quote.reason } : {}),
+    ...(quote?.missing ? { estimateMissing: quote.missing } : {}),
+  };
 }
 
 /**
@@ -94,7 +122,7 @@ export async function fetchQuote(
  * after testers found jobs had started — and been billed — before they knew which
  * model was used or what it cost. MCP_GENERATION_AUTOSUBMIT_MAX_USD raises it.
  * atlas_chat keeps its own limit (autoSubmitThresholdUsd): a per-message
- * confirmation would make chat unusable, and its worst case is cents.
+ * confirmation would make chat unusable.
  */
 export function generationAutoSubmitThresholdUsd(): number {
   const raw = process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD;
@@ -104,9 +132,17 @@ export function generationAutoSubmitThresholdUsd(): number {
   return parsed;
 }
 
+/**
+ * Per-request auto-run limit for atlas_chat (worst-case bound, not the real charge).
+ *
+ * Was $20. A prompt-injected agent can call atlas_chat in a loop, and every call
+ * under the limit ran without the user seeing anything (11-16 security review M1).
+ * $1 still covers ordinary chat — its real cost is usually cents — and anything
+ * bigger stops for a confirmation. MCP_AUTOSUBMIT_MAX_USD overrides it.
+ */
 export function autoSubmitThresholdUsd(): number {
   const raw = process.env.MCP_AUTOSUBMIT_MAX_USD;
-  if (raw === undefined || raw.trim() === "") return 20;
+  if (raw === undefined || raw.trim() === "") return 1;
   const parsed = Number.parseFloat(raw);
   // A malformed threshold must not silently widen the gate. Fall back to
   // confirming everything, which is the behaviour this replaced.
@@ -141,6 +177,7 @@ export async function evaluateSpend(
       quotedUsd: quote?.usd ?? null,
       thresholdUsd,
       ...(quote?.partial ? { partial: true } : {}),
+      ...estimateDetails(quote),
       reason: "every generation is confirmed with the user",
     };
   }
@@ -172,6 +209,7 @@ export async function evaluateSpend(
       quotedUsd,
       thresholdUsd,
       partial: true,
+      ...estimateDetails(quote),
       reason: "quote is partial, the real charge is higher",
     };
   }
@@ -180,6 +218,7 @@ export async function evaluateSpend(
       autoSubmit: false,
       quotedUsd,
       thresholdUsd,
+      ...estimateDetails(quote),
       reason: "quote is at or above the threshold",
     };
   }
@@ -187,6 +226,7 @@ export async function evaluateSpend(
     autoSubmit: true,
     quotedUsd,
     thresholdUsd,
+    ...estimateDetails(quote),
     reason: "quote is below the threshold",
   };
 }
@@ -266,6 +306,134 @@ export function evaluateChatSpend(model: Model, request: ChatRequestShape): Spen
   return { autoSubmit: true, quotedUsd: worst, thresholdUsd, reason: "worst-case cost is below the threshold" };
 }
 
+// ---- 对话自动执行的每日额度 ----
+//
+// 单次上限只管一次调用。被注入的 agent 可以一次次调 atlas_chat，每次都在上限以下，用户一次确认
+// 都看不到（11-16 安全审查 M1）。所以每个用户每天（UTC）自动执行的花费再记一笔总账，超过就和
+// 单次超限一样停下来要确认。存储和报价记录同一个（有 Redis 时多副本共用）；出错时按「已经用完」处理，
+// 宁可多问一次。
+//
+// 放行之前先原子地预占这次的最坏成本（Redis INCRBYFLOAT，内存实现同步加），超额就退回预占、要求确认；
+// 跑完按实际用量把差额退回去；失败、超时、算不出实际用量都保留预占。原来是先读再在跑完后写，并发的
+// 几次调用读到的都是同一个旧值，一起放行，额度形同虚设（11-18 上线前审查 M6）。
+
+const DEFAULT_DAILY_AUTO_SUBMIT_USD = 5;
+const AUTO_SPEND_TTL_SECONDS = 26 * 3600;
+const AUTO_SPEND_STORE_TIMEOUT_MS = 800;
+const localAutoSpend = new InMemoryUploadTicketStore();
+
+/** 每个用户每天自动执行的总额度（美元）。MCP_AUTOSUBMIT_DAILY_MAX_USD 覆盖；写坏了按 0（全部要确认）。 */
+export function dailyAutoSubmitBudgetUsd(): number {
+  const raw = process.env.MCP_AUTOSUBMIT_DAILY_MAX_USD;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_DAILY_AUTO_SUBMIT_USD;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+}
+
+function autoSpendKey(now: Date): string {
+  const subject = getRequestContext()?.subject ?? "stdio";
+  const digest = createHash("sha256").update(subject).digest("hex");
+  return `auto-spend:${digest}:${now.toISOString().slice(0, 10)}`;
+}
+
+function autoSpendStore() {
+  return getRequestContext()?.quoteStore ?? localAutoSpend;
+}
+
+function withStoreTimeout<T>(operation: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("auto-spend store timed out")), AUTO_SPEND_STORE_TIMEOUT_MS);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+/** 今天已经自动执行了多少（美元，含正在跑的预占）；存储出错时返回 Infinity（按用完处理）。 */
+export async function autoSpentTodayUsd(now: Date = new Date()): Promise<number> {
+  try {
+    const raw = await withStoreTimeout(autoSpendStore().get(autoSpendKey(now)));
+    if (!raw) return 0;
+    const value = Number.parseFloat(raw);
+    return Number.isFinite(value) && value >= 0 ? value : Number.POSITIVE_INFINITY;
+  } catch (error) {
+    console.error(`[auto-spend] read failed: ${error instanceof Error ? error.message : String(error)}`);
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** 给今天的总账加一笔（可以是负数），返回加完后的总数。存储没有原子加法时退回先读后写。 */
+async function addAutoSpend(key: string, delta: number): Promise<number> {
+  const store = autoSpendStore();
+  if (store.incrementBy) return await withStoreTimeout(store.incrementBy(key, delta, AUTO_SPEND_TTL_SECONDS));
+  const current = Number.parseFloat((await withStoreTimeout(store.get(key))) ?? "0");
+  if (!Number.isFinite(current)) return Number.POSITIVE_INFINITY;
+  const next = Math.max(0, current) + delta;
+  await withStoreTimeout(store.put(key, String(next), AUTO_SPEND_TTL_SECONDS));
+  return next;
+}
+
+/** 一次已放行的自动执行占着的额度：跑完后交给 settleAutoSpend。 */
+export interface AutoSpendReservation {
+  key: string;
+  usd: number;
+}
+
+/**
+ * 单次闸门放行之后再过每日额度：先把这次的最坏成本原子地记上，记完超过额度就退回、改成要确认。
+ * 放行时返回的决定带着 reservation，跑完用 settleAutoSpend 结算。不放行的决定原样返回。
+ */
+export async function applyDailyAutoSubmitBudget(
+  decision: SpendDecision,
+  now: Date = new Date()
+): Promise<SpendDecision & { reservation?: AutoSpendReservation }> {
+  if (!decision.autoSubmit || decision.quotedUsd === null) return decision;
+  const budgetUsd = dailyAutoSubmitBudgetUsd();
+  const key = autoSpendKey(now);
+  const usd = Math.max(0, decision.quotedUsd);
+  let total: number;
+  try {
+    total = await addAutoSpend(key, usd);
+  } catch (error) {
+    console.error(`[auto-spend] reserve failed: ${error instanceof Error ? error.message : String(error)}`);
+    return { ...decision, autoSubmit: false, dailyBudget: { budgetUsd, usedUsd: Number.POSITIVE_INFINITY }, reason: "daily auto-run budget unavailable" };
+  }
+  if (total <= budgetUsd + 1e-9) return { ...decision, reservation: { key, usd } };
+  // 超额：退回刚才的预占。退不回去（存储出错）就让它占着，只会让后面更早要求确认。
+  await addAutoSpend(key, -usd).catch((error: unknown) => {
+    console.error(`[auto-spend] release failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  return {
+    ...decision,
+    autoSubmit: false,
+    dailyBudget: { budgetUsd, usedUsd: Number.isFinite(total) ? Math.max(0, total - usd) : Number.POSITIVE_INFINITY },
+    reason: "daily auto-run budget reached",
+  };
+}
+
+/**
+ * 跑完结算：知道实际花费就把「预占 - 实际」退回去（实际比最坏情况多时补上差额）；不知道（失败、超时、
+ * 没给用量）就保留预占。
+ */
+export async function settleAutoSpend(reservation: AutoSpendReservation | undefined, actualUsd: number | null): Promise<void> {
+  if (!reservation || actualUsd === null || !Number.isFinite(actualUsd) || actualUsd < 0) return;
+  const delta = actualUsd - reservation.usd;
+  if (Math.abs(delta) < 1e-12) return;
+  try {
+    await addAutoSpend(reservation.key, delta);
+  } catch (error) {
+    console.error(`[auto-spend] settle failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** 按实际用量算这次对话的花费：输入超过阶梯门槛就用那一档的单价。 */
 export function chatUsageCostUsd(
   model: Model,
@@ -292,8 +460,10 @@ export function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.0001) {
     return `$${amount.toFixed(Math.min(10, 1 - Math.floor(Math.log10(amount))))}`;
   }
-  const decimals = amount > 0 && amount < 0.01 ? 4 : 2;
-  return `$${amount.toFixed(decimals)}`;
+  // 一美元以下保留到 4 位小数再去掉末尾的 0：$0.072 不能写成 $0.07，模型会照着报给用户
+  // （11-04 WorkBuddy 复测）。一美元以上照旧两位。
+  if (amount > 0 && amount < 1) return `$${amount.toFixed(4).replace(/(\.\d\d\d*?)0+$/, "$1")}`;
+  return `$${amount.toFixed(2)}`;
 }
 
 /**
@@ -302,7 +472,8 @@ export function formatUsd(amount: number): string {
  * The user still has to be told what this costs — skipping the confirmation is
  * about not blocking them, not about spending quietly. It says "estimated"
  * because submission is not settlement: generation is async, and a run that ends
- * in status "failed" is not billed at all. Calling this a charge made the model
+ * in status "failed" is usually not billed (a workflow can be partly billed for the
+ * steps that ran — go by charge_status / charged_usd). Calling this a charge made the model
  * report money as spent on jobs that later failed and cost nothing.
  */
 export function autoSubmitNotice(decision: SpendDecision): string {
@@ -310,9 +481,9 @@ export function autoSubmitNotice(decision: SpendDecision): string {
   return (
     `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} — submitted without a ` +
     `separate confirmation because it is under the ${formatUsd(decision.thresholdUsd)} limit. ` +
-    `Give the user this estimate. It is not a settled charge: generation is async, ` +
-    `so treat it as spent only once polling returns a successful result, and a run ` +
-    `that ends in status "failed" is not billed.`
+    `Give the user this estimate. It is not a settled charge: generation is async, and the ` +
+    `settled charge is in charge_status (atlas_get_prediction) or charged_usd ` +
+    `(atlas_list_predictions). A run that fails is usually not billed, but can be partly billed.`
   );
 }
 
@@ -341,10 +512,12 @@ export function confirmationValidSeconds(expiresAt: string, now: number = Date.n
 }
 
 /** 报价里写出这次的幂等键，确认时让模型原样传回（见 GenerationConfirmationQuote）。 */
-export function confirmationReuseNotice(idempotencyKey: string): string {
+export function confirmationReuseNotice(idempotencyKey: string, confirmationToken?: string): string {
   return (
     `- **idempotency_key**: \`${idempotencyKey}\`. When the user confirms, send this exact value back ` +
-    `with the confirmation_token and unchanged arguments; do not generate a new one.`
+    `with the confirmation_token and unchanged arguments; do not generate a new one.` +
+    // 有的客户端只把文字结果交给模型（WorkBuddy 引擎，11-04 问题 46），令牌也写在这里。
+    (confirmationToken ? `\n- **confirmation_token**: \`${confirmationToken}\`` : "")
   );
 }
 
@@ -366,27 +539,53 @@ export function confirmationCostNotice(decision: SpendDecision): string {
     );
   }
   if (decision.partial) {
+    const missing = decision.estimateMissing?.map(estimateMissingLabel).join(", ");
     return (
       `- **Estimated cost**: at least ${formatUsd(decision.quotedUsd)} — the platform could not ` +
-      `see everything it needs to price this request (for example a reference video's length), ` +
+      `see everything it needs to price this request (${missing ? `not included: ${missing}` : "for example a reference video's length"}), ` +
       `so the real charge will be higher.`
     );
   }
+  const settles =
+    decision.estimateReason === ESTIMATE_SETTLES_ON_USAGE
+      ? " The final charge is settled on what the job actually uses, so it can differ slightly."
+      : "";
   if (decision.thresholdUsd <= 0) {
     return (
       `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
-      `every generation is confirmed with the user before it runs).`
+      `every generation is confirmed with the user before it runs).${settles}`
     );
   }
   return (
     `- **Estimated cost**: ${formatUsd(decision.quotedUsd)} for these exact parameters (live quote; ` +
-    `at or above the ${formatUsd(decision.thresholdUsd)} auto-submit limit, so it needs confirmation).`
+    `at or above the ${formatUsd(decision.thresholdUsd)} auto-submit limit, so it needs confirmation).${settles}`
   );
 }
 
+/** estimate_reason when the charge is settled on actual usage (token-billed video, for one). */
+export const ESTIMATE_SETTLES_ON_USAGE = "settles_on_usage";
+
+const ESTIMATE_MISSING_LABELS: Record<string, string> = {
+  reference_video_duration: "the reference videos' length",
+};
+
+export function estimateMissingLabel(code: string): string {
+  return ESTIMATE_MISSING_LABELS[code] ?? code.replace(/_/g, " ");
+}
+
 /** The same figure for structuredContent. */
-export function costEstimate(decision: SpendDecision): { usd: number | null; partial: boolean } {
-  return { usd: decision.quotedUsd, partial: decision.partial === true };
+export function costEstimate(decision: SpendDecision): {
+  usd: number | null;
+  partial: boolean;
+  reason?: string;
+  missing?: string[];
+} {
+  return {
+    usd: decision.quotedUsd,
+    partial: decision.partial === true,
+    ...(decision.estimateReason ? { reason: decision.estimateReason } : {}),
+    ...(decision.estimateMissing ? { missing: decision.estimateMissing } : {}),
+  };
 }
 
 /**

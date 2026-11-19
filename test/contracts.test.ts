@@ -24,7 +24,15 @@ import { buildQuickGenerateParams } from "../src/tools/quick-generate.js";
 import { exactModelById } from "../src/services/doc-fetcher.js";
 import type { Model } from "../src/types.js";
 
-test("stdio exposes all 16 tools with exact annotations and output schemas", async () => {
+const QUOTE_FIRST_TOOLS = new Set([
+  "atlas_generate_image",
+  "atlas_generate_video",
+  "atlas_generate_audio",
+  "atlas_transcribe_audio",
+  "atlas_quick_generate",
+]);
+
+test("stdio exposes all 19 tools with exact annotations and output schemas", async () => {
   const server = createAtlasCloudServer("stdio");
   const client = new Client({ name: "contract-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -36,7 +44,7 @@ test("stdio exposes all 16 tools with exact annotations and output schemas", asy
     ) as { version: string };
     assert.equal(client.getServerVersion()?.version, packageManifest.version);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 16);
+    assert.equal(listed.tools.length, 19);
     assert.deepEqual(
       listed.tools.map((tool) => tool.name).sort(),
       [...ALL_TOOL_NAMES].sort()
@@ -45,7 +53,11 @@ test("stdio exposes all 16 tools with exact annotations and output schemas", asy
       const name = tool.name as keyof typeof TOOL_POLICIES;
       assert.ok(tool.outputSchema, `${name} must declare outputSchema`);
       assert.deepEqual(tool.annotations, TOOL_POLICIES[name].annotations);
-      if (!TOOL_POLICIES[name].annotations.readOnlyHint) {
+      // 先报价的生成工具：报价那次可以不传幂等键，服务端生成并在报价里返回（验收问题 58），
+      // 但参数里仍要有这个字段。其余写操作照旧必填。
+      if (QUOTE_FIRST_TOOLS.has(name)) {
+        assert.ok("idempotency_key" in (tool.inputSchema.properties ?? {}), `${name} must accept idempotency_key`);
+      } else if (!TOOL_POLICIES[name].annotations.readOnlyHint) {
         assert.ok(
           Array.isArray(tool.inputSchema.required) &&
             tool.inputSchema.required.includes("idempotency_key"),
@@ -92,6 +104,9 @@ test("stdio exposes all 16 tools with exact annotations and output schemas", asy
       for (const field of ["count", "total_count", "offset", "has_more", "models"]) {
         assert.ok(outputRequired.includes(field), `${toolName} output must require ${field}`);
       }
+      if (toolName === "atlas_search_docs") {
+        assert.ok(outputRequired.includes("docs"), "atlas_search_docs output must require docs");
+      }
     }
   } finally {
     await client.close();
@@ -114,6 +129,14 @@ test("OpenAI review annotations distinguish first-party reads from billable writ
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
+        openWorldHint: true,
+      });
+    } else if (name === "atlas_import_chat_files") {
+      // 只把用户附上的文件存进他自己的 Atlas，不计费、不改动已有内容（同 Higgsfield 的上传类工具）。
+      assert.deepEqual(policy.annotations, {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
         openWorldHint: true,
       });
     } else if (name === "atlas_upload_media") {

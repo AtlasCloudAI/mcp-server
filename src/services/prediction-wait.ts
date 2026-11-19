@@ -1,6 +1,6 @@
-import { headContentLength } from "./api-client.js";
+import { publicContentLength } from "./input-link-check.js";
 import { classifyOutput } from "./media-preview.js";
-import { isAtlasStorageUrl, isPendingTransfer } from "./owned-storage.js";
+import { isAtlasStorageUrl, isConfiguredMediaHost, isPendingTransfer } from "./owned-storage.js";
 import type { PredictionResponse } from "../response-schemas.js";
 
 // 一次 atlas_get_prediction 在服务端多等一会儿再回答，原因有三（都是 2026-10-19 实测）：
@@ -147,7 +147,7 @@ export async function probeSizes(urls: string[]): Promise<Map<string, number>> {
   const sizes = new Map<string, number>();
   // Images too: half-written storyboards and edits were reproduced, not just videos.
   const targets = urls.filter((url) => classifyOutput(url) !== "other" && isAtlasStorageUrl(url));
-  const settled = await Promise.all(targets.slice(0, 4).map((url) => headContentLength(url)));
+  const settled = await Promise.all(targets.slice(0, 4).map((url) => publicContentLength(url, 3_000, { allowPrivate: isConfiguredMediaHost(url) })));
   targets.slice(0, 4).forEach((url, i) => {
     const size = settled[i];
     if (size) sizes.set(url, size);

@@ -1,0 +1,1573 @@
+/*
+ * 生成卡样式。数值取自 Figma「MCP 对话内组件 · 跟随宿主」的「生成进度」「作品图库」两节（宽 560）。
+ * 颜色、字体优先用宿主下发的标准变量（--color-*、--font-*），拿不到时退回设计稿的值；
+ * 所以同一张卡在 ChatGPT、Claude 的浅色、深色里各自跟着宿主走。
+ */
+
+:root {
+  --ac-text: var(--color-text-primary, #0d0d0d);
+  --ac-text-2: var(--color-text-secondary, #5d5d5d);
+  --ac-text-3: var(--color-text-tertiary, #8f8f8f);
+  --ac-border: var(--color-border-primary, #e3e3e3);
+  /* 浅底色（媒体留白、播放条、标签、参数小标签）用正文色按比例调出来，不读宿主的
+     background-secondary/tertiary：ChatGPT 下发的这两个和卡片底色一样，
+     标签、小标签会没有底（10-27 test 实测）。正文色跟宿主走，所以深浅色都对。 */
+  --ac-surface: color-mix(in srgb, var(--ac-text) 4.5%, transparent);
+  --ac-badge-bg: color-mix(in srgb, var(--ac-text) 8%, transparent);
+  --ac-primary-bg: var(--color-background-inverse, #161616);
+  --ac-primary-text: var(--color-text-inverse, #ffffff);
+  --ac-secondary-border: var(--color-border-secondary, #d9d9d9);
+  --ac-secondary-text: var(--color-text-secondary, #4a4a4a);
+  --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 12%, transparent);
+  --ac-danger-text: var(--color-text-danger, #d03434);
+  --ac-success-text: var(--color-text-success, #1a7f37);
+  --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 12%, transparent);
+  --ac-warn-text: var(--color-text-warning, #b45309);
+  --ac-warn-bg: color-mix(in srgb, var(--ac-warn-text) 12%, transparent);
+  --ac-card-bg: var(--color-background-primary, #ffffff);
+  --ac-wave-rest: #c9c9c9;
+  --ac-font: var(
+    --font-sans,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  );
+  --ac-mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  /* ChatGPT 的按钮是胶囊，Claude 是 8px 圆角；宿主名在脚本里判断后写到 data-host。 */
+  --ac-button-radius: 999px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --ac-text: var(--color-text-primary, #ececec);
+  --ac-text-2: var(--color-text-secondary, #b4b4b4);
+  --ac-text-3: var(--color-text-tertiary, #8f8f8f);
+  --ac-border: var(--color-border-primary, #3a3a3a);
+  --ac-surface: color-mix(in srgb, var(--ac-text) 7%, transparent);
+  --ac-badge-bg: color-mix(in srgb, var(--ac-text) 12%, transparent);
+  --ac-primary-bg: var(--color-background-inverse, #f3f3f3);
+  --ac-primary-text: var(--color-text-inverse, #161616);
+  --ac-secondary-border: var(--color-border-secondary, #4a4a4a);
+  --ac-secondary-text: var(--color-text-secondary, #d0d0d0);
+  --ac-danger-bg: color-mix(in srgb, var(--ac-danger-text) 18%, transparent);
+  --ac-danger-text: var(--color-text-danger, #ff8a8a);
+  --ac-success-text: var(--color-text-success, #5cc87a);
+  --ac-success-bg: color-mix(in srgb, var(--ac-success-text) 18%, transparent);
+  --ac-warn-text: var(--color-text-warning, #f0a35c);
+  --ac-warn-bg: color-mix(in srgb, var(--ac-warn-text) 18%, transparent);
+  --ac-card-bg: var(--color-background-primary, #212121);
+  --ac-wave-rest: #5a5a5a;
+  color-scheme: dark;
+}
+
+:root[data-host="claude"] {
+  --ac-button-radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  font-family: var(--ac-font);
+  color: var(--ac-text);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  max-width: 560px;
+}
+
+button {
+  font: inherit;
+}
+
+/* 段落间距全部由各自的 margin-top 决定。 */
+p {
+  margin: 0;
+}
+
+/* ---- 卡片外框 ---- */
+
+.card {
+  border: 1px solid var(--ac-border);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+/* ---- 媒体 ---- */
+
+.media {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ac-surface);
+}
+
+.media img,
+.media video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.media video {
+  background: #000;
+}
+
+/* 竖版视频：框按视频比例收窄并居中，高度不超过 420px，也不超过卡片宽度的 1.25 倍。 */
+.media.portrait {
+  width: min(100%, calc(420px * var(--media-ratio)), calc(125% * var(--media-ratio)));
+  margin-inline: auto;
+}
+
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.play-overlay svg {
+  width: 22px;
+  height: 22px;
+  margin-left: 3px;
+}
+
+.placeholder {
+  height: 200px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 16px;
+  color: var(--ac-text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.placeholder.tall {
+  height: 284px;
+}
+
+.placeholder svg {
+  width: 40px;
+  height: 40px;
+  color: var(--ac-text-3);
+  display: block;
+  margin: 0 auto 8px;
+}
+
+.placeholder .placeholder-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.caption {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  overflow-wrap: anywhere;
+}
+
+/* ---- 按钮 ---- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: var(--ac-button-radius);
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn:focus-visible,
+.play-overlay:focus-visible,
+.audio-play:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--ac-primary-bg);
+  color: var(--ac-primary-text);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ac-secondary-text);
+  border-color: var(--ac-secondary-border);
+}
+
+.btn-small {
+  height: 30px;
+  padding: 0 14px;
+}
+
+/* ---- 多图轮播（宿主规范：3–8 个结果用轮播，外面不再套卡片框） ---- */
+
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* 全部结果：一行 4 个，窄屏 3 个（设计稿 v2「全部结果」）。 */
+.results-grid.all {
+  margin-top: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 8px;
+}
+
+@media (max-width: 420px) {
+  .results-grid.all {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.results .caption {
+  margin-top: 10px;
+}
+
+.tile {
+  min-width: 0;
+}
+
+.tile-open {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  cursor: zoom-in;
+}
+
+.tile-open:focus-visible {
+  outline: 2px solid var(--ac-text-2);
+  outline-offset: 2px;
+}
+
+.tile-media {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.tile-media img,
+.tile-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---- 音频 ---- */
+
+.title-lg {
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.audio-player {
+  margin-top: 12px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.audio-play {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--ac-primary-bg);
+  color: var(--ac-primary-text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.audio-play svg {
+  width: 14px;
+  height: 14px;
+}
+
+.audio-play.paused svg {
+  margin-left: 2px;
+}
+
+.wave {
+  flex: 0 1 180px;
+  min-width: 60px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.wave span {
+  flex: none;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ac-wave-rest);
+}
+
+.wave span.played {
+  background: var(--ac-text);
+}
+
+.audio-time {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- 进度、失败、过期 ---- */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--ac-badge-bg);
+  color: var(--ac-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge.danger {
+  background: var(--ac-danger-bg);
+  color: var(--ac-danger-text);
+}
+
+.badge.success {
+  background: var(--ac-success-bg);
+  color: var(--ac-success-text);
+}
+
+/* 设计稿里的浅橙标签：Estimate only、No estimate、Price changed、Re-quote needed、Rate limited。 */
+.badge.warn {
+  background: var(--ac-warn-bg);
+  color: var(--ac-warn-text);
+}
+
+.badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+.spin {
+  animation: ac-spin 0.9s linear infinite;
+}
+
+@keyframes ac-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+.desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ac-text-2);
+}
+
+.desc.lg {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.rows {
+  margin-top: 10px;
+  display: grid;
+  /* 单列也要 minmax(0, 1fr)：不然一行长文字把整列撑宽，别的行的值被挤到卡片外（验收问题 33）。 */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.row-label {
+  font-size: 12px;
+  color: var(--ac-text-3);
+  flex: none;
+}
+
+.row-value {
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 失败原因：可以折行，最多三行。 */
+.row-value.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.mono {
+  font-family: var(--ac-mono);
+  font-size: 12px;
+}
+
+.note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* 测试卡片的诊断区（只在 atlas_card_selftest 的示例卡片上出现）。 */
+.diagnostics {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--ac-text-3);
+}
+
+.diagnostics pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--ac-mono);
+}
+
+/* ---- 报价确认 ---- */
+
+.chips {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--ac-badge-bg);
+  color: var(--ac-text-2);
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.quote-price {
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-price.unavailable {
+  font-size: 17px;
+  line-height: 22px;
+}
+
+/* 价格变了：旧价划掉、箭头、新价（设计稿 ~~$24.12~~ → $26.40）。 */
+.quote-price .was {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ac-text-3);
+}
+
+.quote-price .arrow {
+  margin: 0 8px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ac-text-3);
+}
+
+.quote-note {
+  margin-top: 2px;
+}
+
+/* ---- 历史列表 ---- */
+
+.history-count {
+  font-size: 12px;
+  color: var(--ac-text-3);
+  white-space: nowrap;
+}
+
+.history-tabs {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.history-tab {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--ac-button-radius);
+  border: 1px solid var(--ac-secondary-border);
+  background: transparent;
+  color: var(--ac-secondary-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.history-tab.active {
+  background: var(--ac-primary-bg);
+  border-color: var(--ac-primary-bg);
+  color: var(--ac-primary-text);
+}
+
+.history-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.history-list li + li {
+  border-top: 1px solid var(--ac-border);
+}
+
+.history-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+button.history-row {
+  cursor: pointer;
+}
+
+button.history-row:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.history-thumb {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+}
+
+.history-thumb img,
+.history-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.history-thumb-icon svg {
+  width: 20px;
+  height: 20px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.history-thumb-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.history-thumb-play svg {
+  width: 16px;
+  height: 16px;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
+}
+
+.history-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-chevron svg {
+  width: 16px;
+  height: 16px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.history-back {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ac-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#root.wide {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* ---- 上传卡 ---- */
+
+.upload-drop {
+  width: 100%;
+  margin-top: 12px;
+  padding: 22px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ac-surface);
+  color: var(--ac-text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.upload-drop:hover {
+  background: var(--ac-badge-bg);
+}
+
+.upload-drop:focus-visible,
+.upload-remove:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.upload-drop-icon svg {
+  width: 22px;
+  height: 22px;
+  color: var(--ac-text-2);
+  display: block;
+}
+
+.upload-drop-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.upload-drop-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.upload-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.upload-thumb {
+  flex: none;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  display: grid;
+  place-items: center;
+}
+
+/* 绝对定位铺满方框：以前是 100% 宽高放在 grid 里，竖图（1:3、2:3）会按自身比例把图片元素撑成
+   40×120 / 40×60，object-fit: contain 管的是元素内部，方框 overflow 一裁就只剩中间一块方形
+   （11-14 Jia：1:3 竖图缩略图被裁成方形，宽图没事因为它的元素高度本来就是 40）。 */
+.upload-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.upload-thumb img.upload-fit {
+  object-fit: contain;
+  background: var(--ac-badge-bg);
+}
+
+.upload-thumb-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.upload-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-row.bad .upload-sub {
+  color: var(--ac-danger-text);
+}
+
+.upload-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--ac-text-3);
+}
+
+.upload-mark svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.upload-mark.ok {
+  color: var(--ac-success-text);
+}
+
+.upload-remove {
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 悬停用深灰，不用红色：红色像警告（设计 11-07） */
+.upload-remove:hover:not(:disabled) {
+  color: var(--ac-text-2);
+}
+
+.upload-remove:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- 资产库卡（设计稿「全屏视图」：从资产库选取 / 资产库为空）---- */
+
+/* 对话里（非全屏）宿主按内容高度撑开卡片，页面自己不滚。方格是正方形，高度跟着宽度走：
+   一出滚动条宽度变窄、高度变矮，滚动条消失又变高，最后卡在「多一条滚动条」（10-28 本地测试宿主实测）。
+   全屏时宿主给的是固定高度，照常滚动。 */
+:root[data-view="assets"]:not([data-display="fullscreen"]) {
+  overflow: hidden;
+}
+
+.asset-query {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.asset-clear {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ac-text-2);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  display: inline;
+}
+
+.asset-grid {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#root.wide .asset-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+@media (max-width: 420px) {
+  .asset-grid,
+  #root.wide .asset-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.asset-tile {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ac-surface);
+  cursor: pointer;
+}
+
+.asset-tile:focus-visible {
+  outline: 2px solid var(--color-ring-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.asset-tile:disabled {
+  cursor: default;
+}
+
+/* 网格第一格「Upload a file」：和缩略图同尺寸，浅灰底，不画虚线（不做拖拽） */
+.asset-upload {
+  color: var(--ac-text-2);
+  font: inherit;
+}
+
+.asset-upload:hover:not(:disabled) {
+  background: var(--ac-badge-bg);
+}
+
+.asset-upload-body {
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.asset-upload-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  color: var(--ac-text-2);
+}
+
+.asset-upload-label {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--ac-text);
+}
+
+.asset-upload-sub {
+  margin-top: -4px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ac-text-3);
+}
+
+.asset-tile.selected {
+  box-shadow: 0 0 0 2px var(--ac-card-bg), 0 0 0 4px var(--ac-text);
+}
+
+.asset-media,
+.asset-media img,
+.asset-media video {
+  width: 100%;
+  height: 100%;
+}
+
+.asset-media img,
+.asset-media video {
+  object-fit: cover;
+}
+
+.asset-icon {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--ac-text-3);
+}
+
+.asset-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ac-text-2);
+}
+
+.asset-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.asset-play {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.asset-play svg {
+  width: 12px;
+  height: 12px;
+  color: #fff;
+}
+
+.asset-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  color: var(--ac-primary-bg);
+}
+
+.asset-check svg {
+  width: 20px;
+  height: 20px;
+  color: var(--ac-primary-bg);
+}
+
+/* 资产库分页（不能全屏的客户端，设计 11-10 第 9 项）：翻页条在网格下面，空格子撑住最后一页的高度。 */
+.asset-pager {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.asset-page-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ac-border);
+  border-radius: 8px;
+  background: var(--ac-surface);
+  color: var(--ac-text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.asset-page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.asset-page-label {
+  min-width: 64px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ac-text-2);
+}
+
+.asset-slot {
+  aspect-ratio: 1 / 1;
+  visibility: hidden;
+}
+
+.asset-foot {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ac-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 全屏：底栏吸在可见区域底部，并让开宿主压在上面的输入框（--ac-safe-bottom 由 main.ts 按宿主设置）。 */
+:root[data-display="fullscreen"] .asset-foot {
+  position: sticky;
+  bottom: var(--ac-safe-bottom, 0px);
+  z-index: 2;
+  background: var(--ac-card-bg);
+  padding-bottom: 12px;
+}
+
+:root[data-display="fullscreen"][data-view="assets"] body {
+  padding-bottom: var(--ac-safe-bottom, 0px);
+}
+
+.asset-count {
+  font-size: 13px;
+  color: var(--ac-text-2);
+}
+
+.asset-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.asset-empty {
+  padding: 40px 0 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.asset-empty-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--ac-surface);
+  color: var(--ac-text-2);
+  display: grid;
+  place-items: center;
+}
+
+.asset-empty-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ac-text-2);
+}
+
+.asset-empty-title {
+  margin: 12px 0 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ac-text);
+}
+
+.asset-empty .actions {
+  justify-content: center;
+}
+
+/* 报价卡：任务内容和输入素材（需求文档 6.1） */
+.quote-prompt {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ac-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.quote-inputs {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quote-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 200px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 8px;
+  background: var(--ac-surface);
+}
+
+.quote-input-thumb {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-3);
+  background: var(--ac-badge-bg);
+}
+
+.quote-input-thumb img,
+.quote-input-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.quote-input-thumb svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.quote-input-name {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quote-input-more {
+  align-self: center;
+  font-size: 12px;
+  color: var(--ac-text-3);
+}
+
+/* ---- 设计稿 v2（10-29）补的几样 ---- */
+
+/* 报价卡底部一行：Billed to … / Balance $… */
+.billing {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ac-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.billing strong {
+  font-weight: 600;
+  color: var(--ac-text);
+}
+
+.billing strong.danger {
+  color: var(--ac-danger-text);
+}
+
+.billing-to {
+  min-width: 0;
+  display: flex;
+  white-space: nowrap;
+}
+
+.billing-to strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.billing-prefix,
+.billing-kind {
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.billing-balance {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 报价卡素材：名字下面一行来源（Asset Library / Uploaded） */
+.quote-input-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.quote-input-source {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--ac-text-3);
+}
+
+/* 结果下面那行里的「Cost pending」 */
+.caption-badge {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+/* 3D 和其他看不了的文件 */
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--ac-surface);
+}
+
+.file-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--ac-text-2);
+  background: var(--ac-badge-bg);
+}
+
+.file-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.file-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 多张结果：第 4 格上的「+N」 */
+.tile-more {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* 全部结果：每格下面「Image 1」+ 下载 */
+.tile-bar {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.tile-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.tile-download {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--ac-secondary-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--ac-text-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.tile-download svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+/* 一行红字说明：上传卡「只收了前 10 个」 */
+.note.danger {
+  color: var(--ac-danger-text);
+}
+
+/* 资产库卡：空状态下的说明、全屏搜索框（设计稿 v2） */
+.asset-empty-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+}
+
+.asset-search {
+  margin-top: 12px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--ac-border);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-search-icon svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ac-text-3);
+  display: block;
+}
+
+.asset-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ac-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.asset-search:focus-within {
+  border-color: var(--ac-text-3);
+}
+
+/* 上传卡：文件多时收起的那一行「+ 9 more files」 */
+.upload-more-btn {
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-text-3);
+  cursor: pointer;
+}
+
+.upload-more-btn:hover {
+  color: var(--ac-text-2);
+}
+
+/* 报价卡「素材失效」：被删掉的那个素材红框、红字 */
+.quote-input.gone {
+  box-shadow: inset 0 0 0 1px var(--ac-danger-text);
+  background: var(--ac-danger-bg);
+}
+
+.quote-input.gone .quote-input-source {
+  color: var(--ac-danger-text);
+}
+
+/* 报价卡、进度卡的模型那一行（设计稿 v3）：厂商图标 + 模型名 + 灰色类型 */
+.model-line {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* 厂商 logo 有黑色透明底的（OpenAI），深色主题下会看不见：一律垫一块白底。 */
+.model-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  box-sizing: border-box;
+  padding: 2px;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  object-fit: contain;
+}
+
+.model-name {
+  color: var(--ac-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-kind {
+  flex: none;
+  color: var(--ac-text-3);
+}
+
+.quote-why {
+  margin-top: 4px;
+}
+
+/* 长宽比差得多的图（长条图、竖版海报、带字的横幅）铺满方格只剩中间一截，像半个字母（11-11 Claude E1）：
+   这种图整张放进格子里，四周留底色。接近方形的照旧铺满。 */
+.asset-media img.asset-fit {
+  object-fit: contain;
+  background: var(--ac-badge-bg);
+}

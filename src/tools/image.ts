@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import {
   prepareGeneration,
@@ -8,8 +10,10 @@ import {
   formatGenerationPricing,
   issueGenerationConfirmation,
   resolveConfirmedIdempotencyKey,
+  alreadySubmittedLine,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
+import { defaultRouteGuidance } from "../services/default-models.js";
 import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
@@ -29,10 +33,16 @@ import {
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
+  generationWhyThisModelSchema,
   generationStructuredContent,
-  idempotencyKeySchema,
+  generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
 
 export function registerImageTools(server: McpServer): void {
   server.registerTool(
@@ -43,15 +53,17 @@ export function registerImageTools(server: McpServer): void {
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Image". Do NOT guess model IDs.
+The "model" parameter takes an exact current model ID; atlas_list_models with type="Image" lists them, and an ID that is not in the catalog is rejected.
 
-You should also use atlas_get_model_info to understand what parameters a specific image model accepts before calling this tool.
+${defaultRouteGuidance("Image")}
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+atlas_get_model_info shows the parameters a specific image model accepts.
+
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model (string, required): The exact image model ID. Use atlas_list_models to find valid IDs.
@@ -60,9 +72,10 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
+        why_this_model: generationWhyThisModelSchema,
         model: z.string().min(1).describe("Image model ID"),
         params: z
           .record(z.unknown())
@@ -72,10 +85,16 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_image"),
+      ...generationToolCardMeta(),
     },
-    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
+    withGenerationCard(server, "atlas_generate_image", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        const preparation = await prepareGeneration(model, params, {
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+        const preparation = await prepareGeneration(model, inputs.params, {
           expectedType: "Image",
           endpoint: "/model/generateImage",
           typeLabel: "image",
@@ -89,7 +108,8 @@ Returns:
         const { prepared } = preparation;
         const confirmedRequest = {
           resolved_model: prepared.model.model,
-          request_body: prepared.body,
+          // 确认令牌按报价时的请求核对：换过的新地址先换回报价时的。
+          request_body: replaceUrls(prepared.body, inputs.original),
         };
 
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
@@ -99,18 +119,22 @@ Returns:
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_generate_image",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             prepared.model.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
               "image",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [
               {
@@ -119,8 +143,10 @@ Returns:
                   `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                   `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                   `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                  `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                  `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
+                  `${alreadySubmittedLine(confirmation)}` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                   `Show the user this model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
               },
@@ -134,13 +160,13 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_image", idempotency_key, confirmedRequest, prepared.model.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_generate_image",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {
@@ -160,7 +186,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "image"
+            "image",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },
@@ -191,6 +218,6 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 }

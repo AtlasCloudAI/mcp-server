@@ -139,3 +139,24 @@ test("production 发布同样拒绝独立 origin 的覆盖", () => {
     /must not override the Atlas API origin in a production release/
   );
 });
+
+test("atlas site URL: defaults to production, follows ATLASCLOUD_SITE_URL elsewhere, never in a production release", async () => {
+  const { DEFAULT_ATLAS_SITE_URL, resolveAtlasSiteUrl } = await import("../src/constants.js");
+  assert.equal(resolveAtlasSiteUrl({}), DEFAULT_ATLAS_SITE_URL);
+  // test 的卡片要打开 test 官网，末尾斜杠和路径都只取 origin。
+  assert.equal(resolveAtlasSiteUrl({ ATLASCLOUD_SITE_URL: "https://www.test.atlascloud.ai/" }), "https://www.test.atlascloud.ai");
+  assert.throws(() => resolveAtlasSiteUrl({ ATLASCLOUD_SITE_URL: "http://www.test.atlascloud.ai" }), /https/);
+  assert.throws(() => resolveAtlasSiteUrl({ ATLASCLOUD_SITE_URL: "not a url" }), /valid URL/);
+  assert.throws(
+    () => resolveAtlasSiteUrl({ ATLASCLOUD_SITE_URL: "https://www.test.atlascloud.ai", PLUGIN_RELEASE_TIER: "production" }),
+    /production release/
+  );
+  assert.equal(resolveAtlasSiteUrl({ ATLASCLOUD_SITE_URL: "https://www.atlascloud.ai/", PLUGIN_RELEASE_TIER: "production" }), DEFAULT_ATLAS_SITE_URL);
+});
+
+test("card top-up link follows the environment of the card's own link", async () => {
+  const { billingUrlFor } = await import("../ui/generation-card/card.js");
+  assert.equal(billingUrlFor("https://www.test.atlascloud.ai/models/x"), "https://www.test.atlascloud.ai/console/billing");
+  assert.equal(billingUrlFor(undefined), "https://www.atlascloud.ai/console/billing");
+  assert.equal(billingUrlFor("::"), "https://www.atlascloud.ai/console/billing");
+});

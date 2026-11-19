@@ -123,3 +123,42 @@ test("参数摘要对多选字段说明可以逗号多选", () => {
     `摘要应提示多选，实际: ${result.summary}`
   );
 });
+
+// bytedance/seedance-2.5/reference-to-video 这类「参考图、参考视频至少给一个」的形状：约束写在 anyOf 里。
+// 原来每个分支缺的字段各报一条，看起来像两个都必填。
+const referenceShape = {
+  components: {
+    schemas: {
+      Input: {
+        type: "object",
+        required: ["model", "prompt"],
+        properties: {
+          prompt: { type: "string" },
+          reference_images: { type: "array", items: { type: "string" } },
+          reference_videos: { type: "array", items: { type: "string" } },
+        },
+        anyOf: [{ required: ["reference_images"] }, { required: ["reference_videos"] }],
+      },
+    },
+  },
+};
+
+test("几选一的必填合成一句「至少给其中一个」", () => {
+  const result = validateModelParams(referenceShape, "bytedance/seedance-2.5/reference-to-video", { prompt: "x" });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, ["Provide at least one of `reference_images`, `reference_videos`."]);
+  const ok = validateModelParams(referenceShape, "bytedance/seedance-2.5/reference-to-video", {
+    prompt: "x",
+    reference_videos: ["https://cdn.example.com/a.mp4"],
+  });
+  assert.equal(ok.ok, true, ok.errors.join("; "));
+});
+
+test("几选一的分支里有别的错误时照旧逐条报", () => {
+  const result = validateModelParams(referenceShape, "bytedance/seedance-2.5/reference-to-video", {
+    prompt: "x",
+    reference_images: "not-an-array",
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes("reference_images") && e.includes("array")), result.errors.join("; "));
+});

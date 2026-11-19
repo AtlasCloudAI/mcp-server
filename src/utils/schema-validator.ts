@@ -47,6 +47,9 @@ export interface ValidationResult {
   errors: string[];
   // Allowed-parameter list (Markdown), returned with errors so the AI can fix
   summary: string;
+  // First failing parameter that the schema declares, for usage analytics.
+  // Unknown keys are left out: a name the caller made up may carry user text.
+  errorParam?: string;
 }
 
 // Pull the Input definition out of a full OpenAPI schema
@@ -87,8 +90,11 @@ function isMultiSelect(prop: SchemaProperty | undefined): prop is MultiSelectPro
   );
 }
 
-function multiSelectErrors(input: InputSchema, params: Record<string, unknown>): string[] {
-  const errors: string[] = [];
+function multiSelectErrors(
+  input: InputSchema,
+  params: Record<string, unknown>
+): Array<{ field: string; message: string }> {
+  const errors: Array<{ field: string; message: string }> = [];
   for (const [key, prop] of Object.entries(input.properties ?? {})) {
     const value = params[key];
     if (!isMultiSelect(prop) || typeof value !== "string") continue;
@@ -99,10 +105,12 @@ function multiSelectErrors(input: InputSchema, params: Record<string, unknown>):
     if (bad.length === 0) continue;
     const allowed = prop.enum.map((v) => JSON.stringify(v)).join(" | ");
     const got = bad.map((item) => (item ? JSON.stringify(item) : "an empty item")).join(", ");
-    errors.push(
-      `Parameter \`${key}\` takes one or more of: ${allowed}, joined with commas ` +
-        `(e.g. ${JSON.stringify(prop.enum.slice(0, 2).join(", "))}); ${got} is not one of them.`
-    );
+    errors.push({
+      field: key,
+      message:
+        `Parameter \`${key}\` takes one or more of: ${allowed}, joined with commas ` +
+        `(e.g. ${JSON.stringify(prop.enum.slice(0, 2).join(", "))}); ${got} is not one of them.`,
+    });
   }
   return errors;
 }
@@ -161,6 +169,14 @@ function validatorForSchema(
   return validate;
 }
 
+// The top-level parameter an ajv error is about, or undefined for unknown keys.
+function ajvErrorField(error: ErrorObject): string | undefined {
+  if (error.keyword === "required") return String(error.params.missingProperty ?? "");
+  if (error.keyword === "additionalProperties") return undefined;
+  const first = error.instancePath.split("/").filter(Boolean)[0];
+  return first === undefined ? undefined : decodeURIComponent(first);
+}
+
 function formatAjvError(error: ErrorObject): string {
   if (error.keyword === "required") {
     const missing = String(error.params.missingProperty ?? "unknown");
@@ -178,6 +194,29 @@ function formatAjvError(error: ErrorObject): string {
         .join(".")
     : "input";
   return `Parameter \`${path}\` ${error.message ?? "is invalid"}.`;
+}
+
+// anyOf / oneOf 的每个分支都只差一个必填字段时（比如「参考图、参考视频至少给一个」），Ajv 会把
+// 每个分支缺的字段各报一条，再加一条「must match a schema in anyOf」。照搬读起来像这几个字段
+// 全都必填，模型会去把它们都补上，所以合成一句「至少给其中一个」。分支里有别的错误时照旧逐条报。
+function formatAjvErrors(errors: ErrorObject[]): string[] {
+  const merged = new Map<ErrorObject, string>();
+  const absorbed = new Set<ErrorObject>();
+  for (const error of errors) {
+    if (error.keyword !== "anyOf" && error.keyword !== "oneOf") continue;
+    const prefix = `${error.schemaPath}/`;
+    const branches = errors.filter((e) => e !== error && e.schemaPath.startsWith(prefix));
+    if (
+      branches.length === 0 ||
+      !branches.every((e) => e.keyword === "required" && e.instancePath === error.instancePath)
+    ) {
+      continue;
+    }
+    const names = [...new Set(branches.map((e) => String(e.params.missingProperty ?? "unknown")))];
+    merged.set(error, `Provide at least one of ${names.map((name) => `\`${name}\``).join(", ")}.`);
+    for (const branch of branches) absorbed.add(branch);
+  }
+  return errors.filter((e) => !absorbed.has(e)).map((e) => merged.get(e) ?? formatAjvError(e));
 }
 
 // Keep only the first sentence of a description to keep error messages short
@@ -210,6 +249,49 @@ export function fillRequiredDefaults(
     if (out[key] !== undefined && out[key] !== null) continue;
     const def = properties[key]?.default;
     if (def !== undefined) out[key] = def;
+  }
+  return out;
+}
+
+/**
+ * 所有带默认值的字段都填上，不只是必填的。工作流（atlascloud/studio/*）后端要每个选项都给值：
+ * schema 里 ratio、resolution 有默认值但不算必填，只填必填的话报价能过，提交时 Coze 回
+ * 「Missing required parameters：'resolution'」（11-03 ChatGPT 验收）。官网表单也是把默认值全带上提交。
+ */
+export function fillAllDefaults(
+  schema: Record<string, unknown> | null | undefined,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  const extracted = extractInputSchema(schema);
+  if (!extracted) return { ...params };
+  const out: Record<string, unknown> = { ...params };
+  for (const [key, property] of Object.entries(extracted.input.properties || {})) {
+    if (key === "model") continue;
+    if (out[key] !== undefined && out[key] !== null) continue;
+    if (property?.default !== undefined) out[key] = property.default;
+  }
+  return out;
+}
+
+/**
+ * 把首选默认值（默认路由模型的产品默认参数）填进调用方没给的字段。只填 schema 里
+ * 有的字段，有枚举的必须在枚举里：默认值表和某个模型的 schema 对不上时宁可不填，
+ * 也不能把本来能过的请求弄成校验失败。
+ */
+export function fillPreferredDefaults(
+  schema: Record<string, unknown> | null | undefined,
+  params: Record<string, unknown>,
+  preferred: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...params };
+  const properties = extractInputSchema(schema)?.input.properties;
+  if (!properties) return out;
+  for (const [key, value] of Object.entries(preferred)) {
+    if (out[key] !== undefined && out[key] !== null) continue;
+    const prop = properties[key];
+    if (!prop) continue;
+    if (Array.isArray(prop.enum) && !prop.enum.includes(value)) continue;
+    out[key] = value;
   }
   return out;
 }
@@ -308,15 +390,19 @@ export function validateModelParams(
     };
   }
   const valid = validate({ model: modelId, ...params });
-  const errors = [
-    ...(valid ? [] : (validate.errors ?? []).map(formatAjvError)),
-    ...multiSelectErrors(input, params),
-  ];
+  const ajvErrors = valid ? [] : (validate.errors ?? []);
+  const multiSelect = multiSelectErrors(input, params);
+  const errors = [...formatAjvErrors(ajvErrors), ...multiSelect.map((e) => e.message)];
+  const declared = new Set(Object.keys(input.properties ?? {}));
+  const errorParam = [...ajvErrors.map(ajvErrorField), ...multiSelect.map((e) => e.field)].find(
+    (field): field is string => field !== undefined && declared.has(field)
+  );
 
   return {
     ok: errors.length === 0,
     errors,
     summary: summarizeInputSchema(input, modelId),
+    ...(errorParam ? { errorParam } : {}),
   };
 }
 

@@ -117,6 +117,21 @@
       "billable": false,
       "required_scope": "tasks:write"
     },
+    "atlas_import_chat_files": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Downloads files the user attached in the chat from the host's temporary links and stores them as Atlas generation inputs. It is not read-only: it stores new files in the user's Atlas account, but submits no generation job and bills nothing.",
+        "open_world_justification": "Downloads files from the chat host's temporary links, which are outside Atlas Cloud, and stores them on external object storage.",
+        "destructive_justification": "Deletes and overwrites nothing; each call only adds new stored files at no charge. A retry with the same idempotency key returns the earlier result instead of storing the files again."
+      },
+      "billable": false,
+      "required_scope": "tasks:write"
+    },
     "atlas_generate_audio": {
       "annotations": {
         "readOnlyHint": false,
@@ -308,8 +323,8 @@
   "source_snapshot": {
     "repository": "https://github.com/AtlasCloudAI/mcp-server",
     "branch": "combo/oauth-exchange-20260907",
-    "server_version": "2.9.6",
-    "remote_tool_count": 15,
+    "server_version": "2.9.7",
+    "remote_tool_count": 16,
     "note": "Tool count is the remote (production) profile. The stdio profile additionally registers atlas_upload_media, which is not exposed at the production URL; main branch is 1.7.0 and describes a different service.",
     "plugin_repository": "https://github.com/AtlasCloudAI/atlas-cloud-plugin",
     "plugin_version": "0.6.0",

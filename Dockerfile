@@ -8,6 +8,9 @@ RUN npm ci --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src ./src
+# 对话内卡片的前端源码和打包脚本：build 时打成 dist/ui/generation-card.html。
+COPY ui ./ui
+COPY scripts/build-ui.mjs ./scripts/build-ui.mjs
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 FROM node:24.14.0-alpine3.23@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS runtime

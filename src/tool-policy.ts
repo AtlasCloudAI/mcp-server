@@ -8,6 +8,7 @@ export type AtlasToolName =
   | "atlas_generate_video"
   | "atlas_upload_media"
   | "atlas_get_upload_url"
+  | "atlas_import_chat_files"
   | "atlas_generate_audio"
   | "atlas_transcribe_audio"
   | "atlas_chat"
@@ -16,7 +17,9 @@ export type AtlasToolName =
   | "atlas_get_balance"
   | "atlas_get_model_usage"
   | "atlas_get_model_costs"
-  | "atlas_quick_generate";
+  | "atlas_quick_generate"
+  | "atlas_search_assets"
+  | "atlas_use_assets";
 
 export interface ToolPolicy {
   /**
@@ -109,6 +112,19 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotationJustification:
       "Issues a short-lived, subject-bound upload URL; nothing is uploaded or billed until the client posts bytes to it.",
   },
+  atlas_import_chat_files: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    annotationJustification:
+      "Downloads files the user attached in the chat from the host's temporary links and stores them as Atlas generation inputs.",
+  },
   atlas_generate_audio: {
     scope: "tasks:write",
     remote: true,
@@ -181,6 +197,23 @@ export const TOOL_POLICIES: Record<AtlasToolName, ToolPolicy> = {
     annotationJustification:
       "Resolves exactly one model before creating a billable external task; a stable idempotency key prevents duplicates.",
   },
+  atlas_search_assets: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads a bounded page of the authenticated account's Asset Library without mutation.",
+  },
+  atlas_use_assets: {
+    // 和 uploadMedia 一样是生成链路的一步：换出来的地址只用来喂生成。kubedl 的白名单也按 tasks:write 放行。
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Issues short-lived signed links to the user's own library assets so a generation can read them; it changes and bills nothing (Atlas only logs the use).",
+  },
 };
 
 export const ALL_TOOL_NAMES = Object.keys(TOOL_POLICIES) as AtlasToolName[];
@@ -194,4 +227,77 @@ export function toolAnnotations(name: AtlasToolName): ToolAnnotations {
 
 export function isAtlasToolName(value: string): value is AtlasToolName {
   return Object.prototype.hasOwnProperty.call(TOOL_POLICIES, value);
+}
+
+// 对话内卡片自己调用的工具（MCP Apps 的 visibility: ["app"]，模型看不到）。
+// 只在 MCP_UI_CARDS 打开时注册，所以不进 TOOL_POLICIES：那张表是对外公示、
+// 契约测试逐个核对的 16 个工具。远端放行和 scope 检查仍然按这里的策略走。
+export type CardToolName =
+  | "atlas_card_status"
+  | "atlas_card_check_submission"
+  | "atlas_cancel_quote"
+  | "atlas_card_selftest"
+  | "atlas_open_upload_card"
+  | "atlas_card_upload_part";
+
+export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
+  atlas_card_status: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads one Atlas prediction so the generation card can refresh itself; changes nothing.",
+  },
+  atlas_card_check_submission: {
+    scope: "tasks:read",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Reads the card's own submission record and recent Atlas predictions to tell whether an unconfirmed submission started; submits nothing.",
+  },
+  // 模型在用户拒绝或改了需求时作废旧报价（11-13 Jia A12/A14）。只写本服务的幂等记录，不碰 Atlas 账户。
+  atlas_cancel_quote: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotationJustification:
+      "Marks an unconfirmed quote as withdrawn so its card can no longer submit it; nothing is submitted or billed.",
+  },
+  // 模型在拿不到文件字节时调它打开上传卡（Higgsfield 的 media_upload_widget 同理：兜底，不是默认）。
+  atlas_open_upload_card: {
+    scope: "tasks:write",
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Opens an upload card with a short-lived, subject-bound upload URL; nothing is uploaded or billed until the user adds files.",
+  },
+  atlas_card_upload_part: {
+    scope: "tasks:write",
+    remote: false,
+    billable: false,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotationJustification:
+      "Local (stdio) upload card only: receives a file the user picked in the card, in parts, and uploads it to their Atlas Asset Library. Uploading is free.",
+  },
+  atlas_card_selftest: {
+    scope: null,
+    remote: true,
+    billable: false,
+    annotations: firstPartyRead,
+    annotationJustification:
+      "Development only: renders the card with sample media and calls no Atlas API.",
+  },
+};
+
+/** 远端按工具名查策略：公开工具表优先，其次是卡片工具；都不是就不放行。 */
+export function remoteToolPolicy(name: string): ToolPolicy | undefined {
+  if (isAtlasToolName(name)) return TOOL_POLICIES[name];
+  if (Object.prototype.hasOwnProperty.call(CARD_TOOL_POLICIES, name)) {
+    return CARD_TOOL_POLICIES[name as CardToolName];
+  }
+  return undefined;
 }

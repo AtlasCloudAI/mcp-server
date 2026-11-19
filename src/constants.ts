@@ -99,8 +99,33 @@ export const PUBLIC_API_BASE = `${ATLAS_API_ORIGIN}/public/v1`;
 // Upload timeout (60s for larger files)
 export const UPLOAD_TIMEOUT_MS = 60000;
 
+export const DEFAULT_ATLAS_SITE_URL = "https://www.atlascloud.ai";
+
+/**
+ * 官网地址（ATLASCLOUD_SITE_URL，默认生产）。卡片上「View request」「Add balance」和模型页链接都从
+ * 这里拼：test 的插件要打开 www.test.atlascloud.ai，否则用户在 test 生成、点开却是生产官网，
+ * 那里没有这一单。和 API 地址一样，生产版本不许改。
+ */
+export function resolveAtlasSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.ATLASCLOUD_SITE_URL?.trim();
+  if (!raw) return DEFAULT_ATLAS_SITE_URL;
+  if (env.PLUGIN_RELEASE_TIER === "production" && raw.replace(/\/+$/, "") !== DEFAULT_ATLAS_SITE_URL) {
+    throw new Error("ATLASCLOUD_SITE_URL must not override the Atlas site in a production release");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("ATLASCLOUD_SITE_URL is not a valid URL");
+  }
+  if (parsed.protocol !== "https:") throw new Error("ATLASCLOUD_SITE_URL must use https");
+  return parsed.origin;
+}
+
+export const ATLAS_SITE_URL = resolveAtlasSiteUrl();
+
 // Billing page URL
-export const BILLING_URL = "https://www.atlascloud.ai/console/billing";
+export const BILLING_URL = `${ATLAS_SITE_URL}/console/billing`;
 
 // Response character limit
 export const CHARACTER_LIMIT = 25000;

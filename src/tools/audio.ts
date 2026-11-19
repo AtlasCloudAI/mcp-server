@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import {
   prepareGeneration,
@@ -8,6 +10,7 @@ import {
   formatGenerationPricing,
   issueGenerationConfirmation,
   resolveConfirmedIdempotencyKey,
+  alreadySubmittedLine,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
 import { handleError } from "../utils/error-handler.js";
@@ -29,10 +32,16 @@ import {
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
+  generationWhyThisModelSchema,
   generationStructuredContent,
-  idempotencyKeySchema,
+  generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
 
 export function registerAudioTools(server: McpServer): void {
   server.registerTool(
@@ -45,17 +54,17 @@ This covers both TTS/voice models and music/song models. The live catalog determ
 
 This tool submits the generation request and returns immediately with a prediction ID. Use atlas_get_prediction to check the result later.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current model ID. If you don't know it, first call atlas_list_models with type="Audio". Do NOT guess model IDs.
+The "model" parameter takes an exact current model ID; atlas_list_models with type="Audio" lists them, and an ID that is not in the catalog is rejected.
 
 NOTE: For speech-to-text (transcription / ASR), use atlas_transcribe_audio instead.
 
-You should also use atlas_get_model_info to see the full parameter list and schema for your chosen audio model before calling this tool. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
+atlas_get_model_info shows the full parameter list and schema of an audio model. Different models accept different params (voice/speaker IDs, format, sample rate, speed, lyrics, style tags, etc.).
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model (string, required): The exact audio model ID. Use atlas_list_models with type="Audio" to find valid IDs.
@@ -64,9 +73,10 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction. The output is an audio file URL.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
+        why_this_model: generationWhyThisModelSchema,
         model: z.string().min(1).describe("Audio model ID"),
         params: z
           .record(z.unknown())
@@ -76,10 +86,16 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_generate_audio"),
+      ...generationToolCardMeta(),
     },
-    async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
+    withGenerationCard(server, "atlas_generate_audio", async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        const preparation = await prepareGeneration(model, params, {
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+        const preparation = await prepareGeneration(model, inputs.params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "audio",
@@ -90,7 +106,8 @@ Returns:
         const { prepared } = preparation;
         const confirmedRequest = {
           resolved_model: prepared.model.model,
-          request_body: prepared.body,
+          // 确认令牌按报价时的请求核对：换过的新地址先换回报价时的。
+          request_body: replaceUrls(prepared.body, inputs.original),
         };
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
@@ -99,18 +116,22 @@ Returns:
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_generate_audio",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             prepared.model.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
               "audio",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [{
               type: "text",
@@ -118,8 +139,10 @@ Returns:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
+                  `${alreadySubmittedLine(confirmation)}` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
@@ -131,13 +154,13 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_generate_audio", idempotency_key, confirmedRequest, prepared.model.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_generate_audio",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {
@@ -157,7 +180,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "audio"
+            "audio",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },
@@ -188,7 +212,7 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 
   server.registerTool(
@@ -203,11 +227,11 @@ This tool submits the transcription request and returns immediately with a predi
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-IMPORTANT: The "model" parameter requires an exact current speech-to-text model ID. Speech-to-text models are Audio-type models — use atlas_list_models with type="Audio" to find them. Do NOT guess model IDs.
+The "model" parameter takes an exact current speech-to-text model ID. Speech-to-text models are Audio-type models; atlas_list_models with type="Audio" lists them, and an ID that is not in the catalog is rejected.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
   - model (string, required): The exact speech-to-text model ID.
@@ -216,9 +240,10 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction. The output is the transcribed text.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
+        why_this_model: generationWhyThisModelSchema,
         model: z.string().min(1).describe("Speech-to-text model ID"),
         params: z
           .record(z.unknown())
@@ -231,7 +256,12 @@ Returns:
     },
     async ({ idempotency_key, confirmation_token, confirmed, model, params }) => {
       try {
-        const preparation = await prepareGeneration(model, params, {
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(params, Boolean(confirmation_token || confirmed));
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+        const preparation = await prepareGeneration(model, inputs.params, {
           expectedType: "Audio",
           endpoint: "/model/generateAudio",
           typeLabel: "transcription",
@@ -242,7 +272,8 @@ Returns:
         const { prepared } = preparation;
         const confirmedRequest = {
           resolved_model: prepared.model.model,
-          request_body: prepared.body,
+          // 确认令牌按报价时的请求核对：换过的新地址先换回报价时的。
+          request_body: replaceUrls(prepared.body, inputs.original),
         };
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
         // 问过价了，再问一遍等于每次生成多一个来回。
@@ -251,18 +282,22 @@ Returns:
           spend = await evaluateSpend(prepared.body);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_transcribe_audio",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             prepared.model.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
             structuredContent: generationConfirmationStructuredContent(
               prepared.model,
               "transcription",
               confirmation,
-              costEstimate(spend)
+              costEstimate(spend),
+              prepared.body
             ),
             content: [{
               type: "text",
@@ -270,8 +305,10 @@ Returns:
                 `Confirmation required — no billable request was submitted and no credits were spent.\n\n` +
                 `- **Model**: ${prepared.model.displayName} (\`${prepared.model.model}\`)\n` +
                 `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
+                  `${alreadySubmittedLine(confirmation)}` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user the estimated cost above and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
@@ -283,13 +320,13 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_transcribe_audio", idempotency_key, confirmedRequest, prepared.model.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
         const result = await executeIdempotently(
           "atlas_transcribe_audio",
           { idempotency_key: submitKey, ...confirmedRequest },
           submitKey,
-          () => submitPreparedGeneration(prepared)
+          () => submitPreparedGeneration(prepared, submitKey)
         );
 
         if (!result.ok) {
@@ -309,7 +346,8 @@ Returns:
             ...generationStructuredContent(
             result.predictionId,
             result.model,
-            "transcription"
+            "transcription",
+            prepared.body
             ),
             ...(finished ? { status: "completed" as const, outputs: result.outputs } : {}),
           },

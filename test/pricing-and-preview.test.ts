@@ -102,4 +102,7 @@ test("模型文档：先给默认参数实算价，起步价标明不是单次�
   assert.ok(!text.includes("/request"), text);
   // 拿不到报价时仍给起步价说明
   assert.match(formatModelInfo(model, null), /Catalog unit price/);
+  // 验收问题 38：给用户的报价要走生成工具，不能拿这里的价格直接回答
+  assert.match(text, /Quoting the user\*\*: these prices are for choosing a model/);
+  assert.match(text, /without `confirmed`\. That call is free/);
 });

@@ -1,18 +1,30 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
 import { searchModels, getModels, getModelSchema } from "../services/doc-fetcher.js";
-import { api } from "../services/api-client.js";
+import { generationApi } from "../services/api-client.js";
+import { idempotencyHeaders, prepareWithSchema } from "../services/generation.js";
+import { withAssetLibraryReferences } from "../services/library-references.js";
 import { executeIdempotently } from "../services/idempotency.js";
+import { resolveDefaultModel, routeDefaultParams } from "../services/default-models.js";
 import {
   formatGenerationPricing,
   issueGenerationConfirmation,
   resolveConfirmedIdempotencyKey,
+  alreadySubmittedLine,
 } from "../services/generation-confirmation.js";
 import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
 } from "../services/media-preview.js";
 import { currentClientProfile } from "../services/client-profile.js";
+import {
+  annotateToolCall,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  taskHash,
+} from "../services/tool-call-telemetry.js";
 import {
   autoSubmitNotice,
   confirmationCostNotice,
@@ -22,10 +34,7 @@ import {
   confirmationReuseNotice,
   confirmationValidityNotice,
 } from "../services/spend-policy.js";
-import {
-  validateModelParams,
-  formatValidationError,
-} from "../utils/schema-validator.js";
+import { fillPreferredDefaults } from "../utils/schema-validator.js";
 import type { Model } from "../types.js";
 import type { PredictionResponse } from "../response-schemas.js";
 import {
@@ -33,11 +42,18 @@ import {
   generationConfirmationStructuredContent,
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
+  generationWhyThisModelSchema,
   generationStructuredContent,
-  idempotencyKeySchema,
+  generationIdempotencyKeySchema,
 } from "../tool-contracts.js";
 import { toolAnnotations } from "../tool-policy.js";
 import { predictionResponseSchema } from "../response-schemas.js";
+import {
+  generationToolCardMeta,
+  withGenerationCard,
+} from "../apps/generation-quote.js";
+import { libraryInputs, replaceUrls } from "./assets.js";
+import { inputImageSummaries, inputShapeNotice } from "./video.js";
 
 type GenType = "Image" | "Video" | "Audio";
 
@@ -139,20 +155,28 @@ export function buildQuickGenerateParams(
 
   // Set image URL if provided
   if (imageUrl) {
-    const imageField = Object.keys(properties).find((key) => {
-      const property = asRecord(properties[key]);
-      return (
-        key === "image_url" ||
-        key === "image" ||
-        key === "input_image" ||
-        key === "init_image" ||
-        key === "source_image" ||
-        schemaDescriptionIncludes(property, "image url") ||
-        schemaDescriptionIncludes(property, "input image")
-      );
-    });
+    // 常见字段名和描述都对不上时（工作流的 product_image、只写「商品图」），退到名字以 image 结尾或标了
+    // x-format: image 的字段，必填的优先。原来找不到就把图悄悄丢了（验收问题 29 那单的商品图）。
+    const looksLikeImage = (key: string): boolean =>
+      /(^|_)images?$/.test(key) || asRecord(properties[key])?.["x-format"] === "image";
+    const imageField =
+      Object.keys(properties).find((key) => {
+        const property = asRecord(properties[key]);
+        return (
+          key === "image_url" ||
+          key === "image" ||
+          key === "input_image" ||
+          key === "init_image" ||
+          key === "source_image" ||
+          schemaDescriptionIncludes(property, "image url") ||
+          schemaDescriptionIncludes(property, "input image")
+        );
+      }) ??
+      required.find(looksLikeImage) ??
+      Object.keys(properties).find(looksLikeImage);
     if (imageField) {
-      params[imageField] = imageUrl;
+      // 参考图生视频的 images 是数组：包一层，不然校验报类型不对。
+      params[imageField] = asRecord(properties[imageField])?.type === "array" ? [imageUrl] : imageUrl;
     }
   }
 
@@ -204,16 +228,16 @@ Covers all generation tasks: text-to-image, image editing, 3D (image/text-to-3D)
 
 Parameters are validated against the model's schema BEFORE submitting. If extra_params contains fields the model does not accept (or wrong values), the tool returns a precise error and does NOT spend credits.
 
-Billing: every request is quoted before anything runs. Choose the model and parameters yourself from the user's request and the live catalog — do not ask the user to pick a model or name a budget first unless they asked to choose. Then call once, omitting confirmation_token: the server returns the model, the live quote for these exact parameters and an opaque confirmation_token, and spends nothing. Show the user the model and that price in one short message and stop. Only after a new user message explicitly confirms may you call again with unchanged arguments, confirmed: true, the same idempotency_key, and confirmation_token (if the token was lost or mistyped, the server finds the quote from the unchanged arguments). The quote is an estimate: call it spent only once polling returns a successful result; a job that ends in status "failed" is not billed. (A deployment can set an auto-submit limit; calls under it run straight away and report the estimate instead of stopping.)
+Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
-IMPORTANT: If this tool fails to find a model, call atlas_list_models first to get the exact model list, then use atlas_generate_image / atlas_generate_video / atlas_generate_audio with the exact model ID instead. Do NOT invent extra_params - only pass parameters you know the model accepts (check atlas_get_model_info).
+When no single model matches the keyword, atlas_list_models gives exact model IDs for atlas_generate_image / atlas_generate_video / atlas_generate_audio. extra_params outside the model's schema are rejected; atlas_get_model_info lists the accepted ones.
 
 The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
-Input files: image, video and audio inputs must be public URLs. For a file on the user's machine, upload it first — with atlas_get_upload_url on a hosted connection (POST the bytes to the upload_url it returns and wait for that command to finish) or atlas_upload_media on a local one — then pass the returned url. Do not inline the file as base64 or a data: URI, and do not call the Atlas REST API yourself with curl: this connection already carries the user's credentials, and there is no API key to use.
+Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
-  - model_keyword (string, required): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword.
+  - model_keyword (string, optional): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword. When it is omitted for an image or video, the server applies the default route (described in atlas_generate_video / atlas_generate_image), with the image-to-video or edit variant when image_url is given. Whenever the model is not one the user named (including when model_keyword is omitted), pass why_this_model with one short reason; it is shown on the quote card.
   - type (string, required): Generation type: "Image", "Video", or "Audio"
   - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description)
   - image_url (string, optional): Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models
@@ -223,13 +247,17 @@ Args:
 Returns:
   A prediction ID to check the result with atlas_get_prediction.`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        idempotency_key: generationIdempotencyKeySchema,
         confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
+        why_this_model: generationWhyThisModelSchema,
         model_keyword: z
           .string()
           .min(1)
-          .describe("Exact current model ID or a distinctive display-name keyword"),
+          .optional()
+          .describe(
+            "Exact current model ID or a distinctive display-name keyword. When omitted for an image or video, the default route applies."
+          ),
         type: z
           .enum(["Image", "Video", "Audio"])
           .describe("Generation type: Image, Video, or Audio"),
@@ -239,10 +267,15 @@ Returns:
           .describe("Text description of what to generate"),
         image_url: z
           .string()
-          .url()
-          .refine((value) => new URL(value).protocol === "https:", "image_url must use HTTPS")
+          .refine(
+            // 资产库的图可以写 asset://asset_…，服务端换成地址（libraryInputs）。
+            (value) => /^asset:\/\/asset_[A-Za-z0-9_-]{8,58}$/.test(value) || /^https:\/\/\S+$/i.test(value),
+            "image_url must be an HTTPS URL or asset://<asset ID>"
+          )
           .optional()
-          .describe("Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models"),
+          .describe(
+            "Source image for image-to-video, image editing, image-to-3D, or talking-avatar models: an HTTPS URL, or asset://<asset ID> for an Asset Library file"
+          ),
         audio_url: z
           .string()
           .url()
@@ -258,8 +291,9 @@ Returns:
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_quick_generate"),
+      ...generationToolCardMeta(),
     },
-    async ({
+    withGenerationCard(server, "atlas_quick_generate", async ({
       idempotency_key,
       confirmation_token,
       confirmed,
@@ -272,9 +306,14 @@ Returns:
     }) => {
       try {
         // Step 1: Resolve model
-        const resolved = await resolveModel(model_keyword, type);
+        annotateToolCall({ stage: "prepare" });
+        const resolved = model_keyword
+          ? await resolveModel(model_keyword, type)
+          : await resolveDefaultModel(type, { hasImage: Boolean(image_url) });
 
         if ("error" in resolved) {
+          // 有候选是关键词太宽（调用方得改成确切 ID），没候选才是真找不到。
+          recordToolCallError({ code: "candidates" in resolved && resolved.candidates ? "invalid_param" : "model_not_found" });
           return {
             isError: true,
             content: [{ type: "text", text: resolved.error }],
@@ -282,10 +321,13 @@ Returns:
         }
 
         const { model: foundModel } = resolved;
+        annotateToolCall({ model: foundModel.model });
 
         // Step 2: Fetch schema
+        annotateToolCall({ stage: "schema" });
         const schema = await getModelSchema(foundModel);
         if (!schema) {
+          recordToolCallError({ code: "model_schema_unavailable" });
           return {
             isError: true,
             content: [
@@ -300,34 +342,19 @@ Returns:
         }
 
         // Step 3: Build params
-        const requestBody = buildQuickGenerateParams(
+        // 默认路由模型的默认参数在 extra_params 之后补：用户要的值优先。
+        const { model: _model, ...builtParams } = fillPreferredDefaults(
           schema,
-          foundModel.model,
-          prompt,
-          image_url,
-          audio_url,
-          extra_params
+          buildQuickGenerateParams(
+            schema,
+            foundModel.model,
+            prompt,
+            image_url,
+            audio_url,
+            extra_params
+          ),
+          routeDefaultParams(foundModel.model)
         );
-
-        // Step 3b: Validate the built params against the schema before submitting,
-        // so invented/invalid extra_params fail fast without spending credits.
-        const { model: _model, ...paramsToValidate } = requestBody;
-        const validation = validateModelParams(
-          schema,
-          foundModel.model,
-          paramsToValidate
-        );
-        if (!validation.ok) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: formatValidationError(foundModel.model, validation),
-              },
-            ],
-          };
-        }
 
         const kind =
           type === "Image"
@@ -335,11 +362,33 @@ Returns:
             : type === "Video"
               ? "video"
               : "audio";
+        // 参数里的资产编号换成地址；确认那次资产库素材再换新地址、查有没有被删（libraryInputs）。
+        const inputs = await libraryInputs(builtParams, Boolean(confirmation_token || confirmed));
+        if (!inputs.ok) {
+          return { isError: true, content: [{ type: "text", text: inputs.message }] };
+        }
+
+        // Step 3b: 和 atlas_generate_image/video/audio 同一套：补默认值（工作流全补）、按 schema 校验、
+        // 查素材链接、读输入图片的横竖。校验不过就不花钱。
+        const preparation = await prepareWithSchema(foundModel, schema, inputs.params, {
+          expectedType: type,
+          endpoint: ENDPOINTS[type],
+          typeLabel: kind,
+          readInputShapes: true,
+        });
+        if (!preparation.ok) {
+          return { isError: true, content: [{ type: "text", text: preparation.message }] };
+        }
+        const { prepared } = preparation;
+        const requestBody = prepared.body;
+        const inputImages = prepared.inputImages ? { input_images: inputImageSummaries(prepared.inputImages) } : {};
+        // 令牌按模型传的参数核对（换过的地址先换回去），提交的是换好地址的这一份。
         const confirmedRequest = {
           type,
           resolved_model: foundModel.model,
-          request_body: requestBody,
+          request_body: replaceUrls(requestBody, inputs.original),
         };
+        const submitBody = requestBody;
 
         // Step 4: Quote without submitting, or verify the prior quote.
         // 报价只在第一次调用时取：带着 confirmation_token 进来的那次已经
@@ -349,27 +398,37 @@ Returns:
           spend = await evaluateSpend(requestBody);
         }
         if (spend && !spend.autoSubmit) {
+          // 余额和报价记录并行取：读余额最多 1.5 秒，失败就不显示这一行。
+          const balanceLinePromise = quoteBalanceNotice(costEstimate(spend).usd);
           const confirmation = await issueGenerationConfirmation(
             "atlas_quick_generate",
-            idempotency_key,
+            idempotency_key ?? randomUUID(),
             confirmedRequest,
             foundModel.price
           );
+          const balanceLine = await balanceLinePromise;
           return {
-            structuredContent: generationConfirmationStructuredContent(
-              foundModel,
-              kind,
-              confirmation,
-              costEstimate(spend)
-            ),
+            structuredContent: {
+              ...generationConfirmationStructuredContent(
+                foundModel,
+                kind,
+                confirmation,
+                costEstimate(spend),
+                requestBody
+              ),
+              ...inputImages,
+            },
             content: [{
               type: "text",
               text:
                 `Confirmation required — exactly one model was resolved, but no billable request was submitted and no credits were spent.\n\n` +
                 `- **Resolved model**: ${foundModel.displayName} (\`${foundModel.model}\`)\n` +
+                `${type === "Video" ? inputShapeNotice(prepared.inputImages, requestBody) : ""}` +
                 `${confirmationCostNotice(spend)}\n` +
+                  `${balanceLine ? `${balanceLine}\n` : ""}` +
                 `- **Catalog unit price**: ${formatGenerationPricing(confirmation.pricing)}\n` +
-                `${confirmationReuseNotice(confirmation.idempotencyKey)}\n` +
+                `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
+                  `${alreadySubmittedLine(confirmation)}` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
                 `Show the user this resolved model and the estimated cost above, then stop. Do not call this or any generation tool again until the user explicitly confirms in a new message. After confirmation, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.`,
             }],
@@ -381,7 +440,7 @@ Returns:
         const confirmedKey =
           confirmation_token || confirmed
             ? await resolveConfirmedIdempotencyKey(confirmation_token, "atlas_quick_generate", idempotency_key, confirmedRequest, foundModel.price)
-            : { idempotencyKey: idempotency_key };
+            : { idempotencyKey: idempotency_key ?? randomUUID() };
         const submitKey = confirmedKey.idempotencyKey;
 
         // Step 5: Submit generation exactly once after confirmation.
@@ -393,16 +452,22 @@ Returns:
             ...confirmedRequest,
           },
           submitKey,
-          () =>
-            api<PredictionResponse>(endpoint, {
+          // 和 atlas_generate_image/video/audio 一样直接提交给生成网关：直连 kubedl 时
+          // （test 的 ATLASCLOUD_API_BASE_URL）/model/generate* 不放行插件令牌，只有
+          // 生产网关会把它转给 aiproxy。
+          async () =>
+            generationApi<PredictionResponse>(endpoint, {
               method: "POST",
-              body: requestBody,
+              // 资产库素材交 assetd:// 引用，和网站一样（library-references.ts）。
+              body: await withAssetLibraryReferences(submitBody),
               responseSchema: predictionResponseSchema,
+              ...idempotencyHeaders(submitKey),
             })
         );
 
         const predictionId = response.data?.id;
         if (!predictionId) {
+          recordToolCallError({ code: "submission_unknown" });
           return {
             isError: true,
             content: [
@@ -425,6 +490,11 @@ Returns:
         // 同步完成的模型结果就在提交响应里，别再让模型去轮询一个已经结束的任务。
         const settled = response.data?.outputs ?? response.data?.output;
         const outputs = Array.isArray(settled) ? settled : settled ? [settled] : [];
+        annotateToolCall({
+          generation_status:
+            outputs.length > 0 ? "completed" : normalizeGenerationStatus(response.data?.status),
+          task_hash: taskHash(predictionId),
+        });
         const finished =
           outputs.length > 0 ? await completedOutputContent(outputs, { profile: currentClientProfile() }) : null;
 
@@ -451,8 +521,9 @@ Returns:
 
         return {
           structuredContent: {
-            ...generationStructuredContent(predictionId, foundModel, kind),
+            ...generationStructuredContent(predictionId, foundModel, kind, requestBody),
             ...(finished ? { status: "completed" as const, outputs } : {}),
+            ...inputImages,
           },
           content: [
             { type: "text", text: lines.join("\n") },
@@ -466,6 +537,6 @@ Returns:
           content: [{ type: "text", text: handleError(error) }],
         };
       }
-    }
+    })
   );
 }

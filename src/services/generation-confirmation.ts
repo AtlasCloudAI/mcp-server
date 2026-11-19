@@ -43,6 +43,11 @@ export interface GenerationConfirmationQuote {
    * 不会再建一单、再扣一次（11-18 上线前审查 M5）。
    */
   alreadySubmitted?: AlreadySubmitted;
+  /**
+   * 同样的请求刚跑完（成功、失败、取消）：这份报价是再跑一次，确认就新建一单、再扣一次费（11-19 S2）。
+   * 确认时必须带这份报价的令牌或幂等键；旧令牌、旧键、什么都不带都不会落到这份报价上。
+   */
+  repeatOf?: AlreadySubmitted;
 }
 
 export interface AlreadySubmitted {
@@ -125,7 +130,7 @@ export async function issueGenerationConfirmation(
   const expiresAt = Date.now() + ttlSeconds * 1000;
   await rememberQuote(
     quoteKey(subjectHash(subject), toolName, requestFingerprint, pricingFingerprint),
-    { idempotencyKey, expiresAt },
+    { idempotencyKey, expiresAt, ...(chosen.repeatOfKey ? { repeatOf: chosen.repeatOfKey } : {}) },
     ttlSeconds
   );
   return {
@@ -144,6 +149,7 @@ export async function issueGenerationConfirmation(
     pricing,
     idempotencyKey,
     ...(chosen.alreadySubmitted ? { alreadySubmitted: chosen.alreadySubmitted } : {}),
+    ...(chosen.repeatOf ? { repeatOf: chosen.repeatOf } : {}),
   };
 }
 
@@ -165,7 +171,7 @@ async function unusedIdempotencyKey(
   toolName: string,
   idempotencyKey: string,
   request: Record<string, unknown>
-): Promise<{ idempotencyKey: string; alreadySubmitted?: AlreadySubmitted }> {
+): Promise<ChosenKey> {
   const fingerprint = idempotencyFingerprint(request);
   // 两样并行查：报价记录存储挂住时（Redis 断线）报价最多多等一次超时。
   const [record, recent] = await Promise.all([
@@ -174,11 +180,34 @@ async function unusedIdempotencyKey(
   ]);
   if (record && record.fingerprint === fingerprint) {
     const submitted = alreadySubmittedOf(record);
-    if (submitted) return { idempotencyKey, alreadySubmitted: submitted };
+    if (submitted) {
+      // 同一个键、那一单已经跑完：这是再跑一次，换新键（S2，模型常沿用上一次的键）。
+      if (await jobFinished(submitted)) return { idempotencyKey: randomUUID(), repeatOf: submitted, repeatOfKey: idempotencyKey };
+      return { idempotencyKey, alreadySubmitted: submitted };
+    }
   }
   const usable = !record || (record.fingerprint === fingerprint && record.state !== "rejected" && record.state !== "canceled");
-  if (recent && recent.idempotencyKey !== idempotencyKey) return recent;
-  return { idempotencyKey: usable ? idempotencyKey : randomUUID() };
+  const chosenKey = usable ? idempotencyKey : randomUUID();
+  if (recent && recent.idempotencyKey !== idempotencyKey) {
+    if (await jobFinished(recent.alreadySubmitted)) {
+      return { idempotencyKey: chosenKey, repeatOf: recent.alreadySubmitted, repeatOfKey: recent.idempotencyKey };
+    }
+    return { idempotencyKey: recent.idempotencyKey, alreadySubmitted: recent.alreadySubmitted };
+  }
+  return { idempotencyKey: chosenKey };
+}
+
+interface ChosenKey {
+  idempotencyKey: string;
+  alreadySubmitted?: AlreadySubmitted;
+  /** 上一单已经跑完，这份报价是再跑一次：上一单的情况和它的幂等键。 */
+  repeatOf?: AlreadySubmitted;
+  repeatOfKey?: string;
+}
+
+/** 那一单确定已经跑完。没有任务号（还在提交、结果不确定）一律不算。 */
+async function jobFinished(submitted: AlreadySubmitted): Promise<boolean> {
+  return submitted.status === "submitted" && submitted.predictionId !== undefined && predictionFinished(submitted.predictionId);
 }
 
 function alreadySubmittedOf(record: StoredRecord<unknown>): AlreadySubmitted | undefined {
@@ -232,10 +261,7 @@ async function recentSubmission(
     const record = await peekIdempotent(toolName, key);
     if (!record || record.fingerprint !== requestFingerprint) return undefined;
     const alreadySubmitted = alreadySubmittedOf(record);
-    if (!alreadySubmitted) return undefined;
-    // 有任务号、而且那一单已经结束：这是一次新的运行，不沿用（S2）。
-    if (alreadySubmitted.predictionId && (await predictionFinished(alreadySubmitted.predictionId))) return undefined;
-    return { idempotencyKey: key, alreadySubmitted };
+    return alreadySubmitted ? { idempotencyKey: key, alreadySubmitted } : undefined;
   } catch (error) {
     console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -288,9 +314,20 @@ async function predictionFinished(predictionId: string): Promise<boolean> {
 }
 
 /** 接在报价文字里幂等键那几行后面：没提交过就是空串。 */
-export function alreadySubmittedLine(confirmation: { alreadySubmitted?: AlreadySubmitted }): string {
-  const notice = alreadySubmittedNotice(confirmation.alreadySubmitted);
+export function alreadySubmittedLine(confirmation: { alreadySubmitted?: AlreadySubmitted; repeatOf?: AlreadySubmitted }): string {
+  const notice = alreadySubmittedNotice(confirmation.alreadySubmitted) || repeatNotice(confirmation.repeatOf);
   return notice ? `${notice}\n` : "";
+}
+
+/** 报价结果里那一行：同样的请求刚跑完，这份报价是再跑一次，确认会再扣一次费（S2）。 */
+export function repeatNotice(previous: AlreadySubmitted | undefined): string {
+  if (!previous) return "";
+  return (
+    `- **Runs again**: the same request (same model and parameters) already ran at ${previous.submittedAt} as ` +
+    `prediction ${previous.predictionId ?? "(unknown)"}, and that job has finished. Confirming this quote starts a new ` +
+    `job and is charged again. Tell the user, and confirm only if they want another run; to see the earlier result, ` +
+    `use atlas_get_prediction instead.`
+  );
 }
 
 /** 报价结果里那一行：同样的请求已经提交过，确认会拿回那一单。 */
@@ -401,6 +438,8 @@ function quoteKey(
 interface QuoteRecord {
   idempotencyKey: string;
   expiresAt: number;
+  /** 这份报价是再跑一次已经跑完的请求：上一单的幂等键（S2）。 */
+  repeatOf?: string;
 }
 
 // node-redis 断线重连期间命令会排队、不报错，await 会一直挂着；报价本身不该被它拖住。
@@ -485,6 +524,33 @@ export async function resolveConfirmedIdempotencyKey(
           "to get a new quote, show it to the user, and wait for their confirmation. No billable request was submitted."
       );
     }
+    // 最新这份报价是「再跑一次已经跑完的请求」（S2）：只认明确指向这份报价的确认（它的幂等键或令牌）。
+    // 旧报价的令牌、旧键、什么都不带的确认，都不能落到这份会另扣一次费的报价上；指向旧报价的拿回旧单。
+    if (record.repeatOf) {
+      const confirmsThisQuote =
+        record.idempotencyKey === idempotencyKey ||
+        (token !== undefined && tokenFits(token, toolName, record.idempotencyKey, request, modelPrice));
+      if (!confirmsThisQuote) {
+        const meansEarlier =
+          record.repeatOf === idempotencyKey ||
+          (token !== undefined && tokenFits(token, toolName, record.repeatOf, request, modelPrice));
+        if (meansEarlier) {
+          return {
+            idempotencyKey: record.repeatOf,
+            notice:
+              `Note: this confirmation belongs to the earlier quote for these exact arguments, which already ran, ` +
+              `so that job is returned and nothing new was generated or charged. A newer quote (idempotency_key ` +
+              `${record.idempotencyKey}) runs the request again and is charged again; confirm it with that key or ` +
+              `its confirmation_token only if the user wants another run.`,
+          };
+        }
+        throw new GenerationConfirmationError(
+          `The latest quote for these exact arguments runs a request that already ran, so confirming it starts ` +
+            `and bills a new job. Confirm it with that quote's idempotency_key (${record.idempotencyKey}) or its ` +
+            `confirmation_token, and only after the user agrees to another run. No billable request was submitted.`
+        );
+      }
+    }
     // 不等它写完：记不下来只是少一层防重，不能拖住确认（内存和 Redis 的写都在调用时就发出了）。
     void rememberSubmission(toolName, requestFingerprint, record.idempotencyKey);
     // 幂等键现在可以不传（服务端在报价时生成）：没带就用报价记录里那个，不算「换了一单」。
@@ -510,6 +576,22 @@ export async function resolveConfirmedIdempotencyKey(
       "confirmed or confirmation_token to get a quote, show it to the user, and wait for their " +
       "confirmation. No billable request was submitted."
   );
+}
+
+/** 令牌是不是给这个幂等键、这组参数、这个价格签的（不抛错，只回是否）。 */
+function tokenFits(
+  token: string,
+  toolName: string,
+  idempotencyKey: string,
+  request: Record<string, unknown>,
+  modelPrice: ModelPrice | undefined
+): boolean {
+  try {
+    verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function verifyGenerationConfirmation(

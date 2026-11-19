@@ -4,8 +4,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  GenerationConfirmationError,
   alreadySubmittedNotice,
   issueGenerationConfirmation,
+  repeatNotice,
   resolveConfirmedIdempotencyKey,
   setPredictionStatusLookupForTests,
 } from "../src/services/generation-confirmation.js";
@@ -13,7 +15,8 @@ import { InMemoryIdempotencyStore, executeIdempotently } from "../src/services/i
 import { inputLimitProblems, inputLinks, localInputValues } from "../src/services/input-link-check.js";
 import { runWithRequestContext, type AtlasRequestContext } from "../src/services/request-context.js";
 import { InMemoryUploadTicketStore } from "../src/services/upload-ticket-store.js";
-import type { ModelPrice } from "../src/types.js";
+import { generationConfirmationStructuredContent } from "../src/tool-contracts.js";
+import type { Model, ModelPrice } from "../src/types.js";
 
 process.env.ATLASCLOUD_API_KEY ??= "test-atlas-key";
 
@@ -127,6 +130,8 @@ test("S2: once that job has finished, the same request is a new run with its own
       assert.equal(again.idempotencyKey, newKey, status);
       assert.notEqual(again.idempotencyKey, first, status);
       assert.equal(again.alreadySubmitted, undefined, status);
+      assert.equal(again.repeatOf?.predictionId, `pred-done-${i}`, status);
+      assert.match(repeatNotice(again.repeatOf), /charged again/, status);
 
       // 用户确认这份新报价：真的提交一单新的。
       const confirmed = await resolveConfirmedIdempotencyKey(again.confirmationToken, TOOL, again.idempotencyKey, req, PRICE);
@@ -183,4 +188,102 @@ test("S2: a submission with no job ID yet (in progress or unconfirmed) is kept w
     assert.equal(again.alreadySubmitted?.status, "unconfirmed");
   });
   assert.equal(asked, 0);
+});
+
+// ---------- S2：再跑一次的报价只认明确指向它的确认（第一轮复审：旧令牌落到新报价上会另扣一次） ----------
+
+const MODEL = { model: "m/a", displayName: "Model A", type: "Image" } as unknown as Model;
+
+async function quoteConfirmSubmit(req: Record<string, unknown>, key: string, predictionId: string) {
+  const quote = await issueGenerationConfirmation(TOOL, key, req, PRICE);
+  const confirmed = await resolveConfirmedIdempotencyKey(quote.confirmationToken, TOOL, quote.idempotencyKey, req, PRICE);
+  await submit(confirmed.idempotencyKey, req, async () => ({ ok: true, predictionId }));
+  return { quote, key: confirmed.idempotencyKey };
+}
+
+test("S2: after a re-run quote, the earlier quote's token, its key, or a bare confirm never start the new run", async (t) => {
+  setPredictionStatusLookupForTests(async () => "completed");
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("s2-stale"), async () => {
+    const req = request1("s2 stale confirm");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000601", "pred-first");
+    const rerun = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000602", req, PRICE);
+    assert.equal(rerun.repeatOf?.predictionId, "pred-first");
+    const structured = generationConfirmationStructuredContent(MODEL, "image", rerun) as Record<string, unknown>;
+    assert.equal((structured.repeat_of as Record<string, unknown>).prediction_id, "pred-first");
+    assert.match(String((structured.repeat_of as Record<string, unknown>).note), /charged again/);
+
+    // 旧报价的令牌 + 旧键：拿回旧单，不新建。
+    const viaOldToken = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, first.key, req, PRICE);
+    assert.equal(viaOldToken.idempotencyKey, first.key);
+    assert.match(viaOldToken.notice ?? "", /already ran/);
+    // 只带旧令牌、不带键：同样拿回旧单。
+    const viaOldTokenOnly = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, undefined, req, PRICE);
+    assert.equal(viaOldTokenOnly.idempotencyKey, first.key);
+    // 只带旧键：同样拿回旧单。
+    const viaOldKey = await resolveConfirmedIdempotencyKey(undefined, TOOL, first.key, req, PRICE);
+    assert.equal(viaOldKey.idempotencyKey, first.key);
+    let calls = 0;
+    const result = await submit(viaOldKey.idempotencyKey, req, async () => {
+      calls += 1;
+      return { ok: true, predictionId: "pred-should-not-run" };
+    });
+    assert.equal(calls, 0);
+    assert.deepEqual(result, { ok: true, predictionId: "pred-first" });
+
+    // 什么都不带的确认：拒绝，什么都不提交。
+    await assert.rejects(
+      resolveConfirmedIdempotencyKey(undefined, TOOL, undefined, req, PRICE),
+      (error: unknown) => error instanceof GenerationConfirmationError && /runs a request that already ran/.test(String(error))
+    );
+    // 别的键（模型自己编的）也不行。
+    await assert.rejects(
+      resolveConfirmedIdempotencyKey(undefined, TOOL, "5d000000-0000-4000-8000-000000000699", req, PRICE),
+      GenerationConfirmationError
+    );
+
+    // 明确指向新报价（它的令牌或键）：才真的再跑一次。
+    const viaNewToken = await resolveConfirmedIdempotencyKey(rerun.confirmationToken, TOOL, first.key, req, PRICE);
+    assert.equal(viaNewToken.idempotencyKey, rerun.idempotencyKey);
+    const viaNewKey = await resolveConfirmedIdempotencyKey(undefined, TOOL, rerun.idempotencyKey, req, PRICE);
+    assert.equal(viaNewKey.idempotencyKey, rerun.idempotencyKey);
+  });
+});
+
+test("S2: quoting again with the finished job's own key gets a new key (models often reuse the last key)", async (t) => {
+  setPredictionStatusLookupForTests(async () => "failed");
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("s2-same-key"), async () => {
+    const req = request1("s2 same key");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000701", "pred-failed");
+    const again = await issueGenerationConfirmation(TOOL, first.key, req, PRICE);
+    assert.notEqual(again.idempotencyKey, first.key);
+    assert.equal(again.alreadySubmitted, undefined);
+    assert.equal(again.repeatOf?.predictionId, "pred-failed");
+    // 模型确认时还带着旧键、没带令牌：拿回失败的旧单，不新建。
+    const viaOldKey = await resolveConfirmedIdempotencyKey(undefined, TOOL, first.key, req, PRICE);
+    assert.equal(viaOldKey.idempotencyKey, first.key);
+    // 带着新报价的令牌（卡片的 Retry 就是这样）：新建一单。
+    const viaToken = await resolveConfirmedIdempotencyKey(again.confirmationToken, TOOL, first.key, req, PRICE);
+    assert.equal(viaToken.idempotencyKey, again.idempotencyKey);
+    let calls = 0;
+    await submit(viaToken.idempotencyKey, req, async () => {
+      calls += 1;
+      return { ok: true, predictionId: "pred-retry" };
+    });
+    assert.equal(calls, 1);
+  });
+});
+
+test("S2: a job still running is never treated as a re-run, even with its own key", async (t) => {
+  setPredictionStatusLookupForTests(async () => "processing");
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("s2-same-key-running"), async () => {
+    const req = request1("s2 same key running");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000801", "pred-running-2");
+    const again = await issueGenerationConfirmation(TOOL, first.key, req, PRICE);
+    assert.equal(again.idempotencyKey, first.key);
+    assert.equal(again.repeatOf, undefined);
+    assert.equal(again.alreadySubmitted?.predictionId, "pred-running-2");
+  });
 });

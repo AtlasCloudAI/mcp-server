@@ -96,6 +96,9 @@ export interface ToolCallError {
   param?: string;
 }
 
+/** 与查结果接口的 charge_status 同值（aiproxy#1074）。pending 表示还没结算，金额未知。 */
+export type TelemetryChargeStatus = "charged" | "partially_charged" | "pending" | "not_charged" | "refunded";
+
 export interface ToolCallFields {
   model?: string;
   execution_mode?: ExecutionMode;
@@ -103,6 +106,40 @@ export interface ToolCallFields {
   stage?: ToolCallStage;
   wait_outcome?: WaitOutcome;
   task_hash?: string;
+  /**
+   * 报价时平台给的这一单预估总价（美元）。只在 estimate 那次调用上，和报价卡上给用户看的是同一个数。
+   * CLI 没有这个字段（它只报余额是零还是正数）；这里报的是一单的价格，不是账户余额。
+   */
+  estimated_cost_usd?: number;
+  /** estimated_cost_usd 只是下限：有的部分按用量结算，报价时算不全。 */
+  estimate_partial?: boolean;
+  /** 查结果时平台记的结算状态。 */
+  charge_status?: TelemetryChargeStatus;
+  /**
+   * 查结果时平台记下的这一单实扣金额（美元）：charged / partially_charged 是结算金额，
+   * not_charged / refunded 是 0，pending 不报。同一个任务会被查好几次，看板按 task_hash 去重取值。
+   */
+  charged_usd?: number;
+}
+
+/** 美元金额只报有限、非负的数，按微美元取整，免得浮点尾数进看板。 */
+export function telemetryUsd(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.round(value * 1e6) / 1e6;
+}
+
+/**
+ * 查结果接口的结算状态 → charge_status 和 charged_usd 两个字段。金额只在已结算时给：
+ * pending 和价格读不出时只报状态，不把未知说成 0。
+ */
+export function chargeTelemetry(
+  status: TelemetryChargeStatus | undefined,
+  priceUsd: number | undefined
+): Pick<ToolCallFields, "charge_status" | "charged_usd"> {
+  if (!status) return {};
+  if (status === "not_charged" || status === "refunded") return { charge_status: status, charged_usd: 0 };
+  const charged = status === "pending" ? undefined : telemetryUsd(priceUsd);
+  return { charge_status: status, ...(charged !== undefined ? { charged_usd: charged } : {}) };
 }
 
 // 与目录里的模型 ID 同形（tools/predictions.ts 的 modelIdPattern）。不同形的一律不报，

@@ -29,7 +29,7 @@ import {
 } from "./services/upload-ticket-store.js";
 import { createAtlasCloudServer } from "./server.js";
 import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
-import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration } from "./services/card-clients.js";
+import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration, uiDeclaration } from "./services/card-clients.js";
 import { clientProfile } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
@@ -241,16 +241,22 @@ export function createHttpApp(
       }
 
       // 认不出的客户端：initialize 时记下它声明没声明 MCP Apps，并打一行日志（名字、版本、声明）。
-      // 不据此拿掉卡片工具：WorkBuddy（CodeBuddy 引擎）显示卡片却不声明这个扩展（11-13 查安装包），
-      // 按声明拦会把它的卡片弄坏。GrokBot 怎么认，等日志里看到它 initialize 报了什么再定。
+      // 明确没声明的只给文字版（noCards）：WorkBuddy（CodeBuddy 引擎，clientInfo 报的是用户给服务起的名字、
+      // capabilities 为空）会照工具上的模板画卡片，但宿主弹回卡片消息、拦卡片发起的调用，按钮点不动；
+      // GrokBot 自报「Cursor」却不显示卡片。Cursor 声明了，照旧给卡片。没有记录（没 initialize 过、Redis 查不到）
+      // 照旧给卡片，不比以前差。
+      let noCards = false;
       if (generationCardEnabled() && clientProfile(req.auth?.clientId) === "other") {
         const declared = declaresMcpApps(req.body);
         if (declared !== undefined) {
           await rememberUiDeclaration(req.auth?.clientId, declared, quoteStore);
           console.log(`[initialize] ${initializeSummary(req.body, declared)}`);
+          noCards = !declared;
+        } else {
+          noCards = (await uiDeclaration(req.auth?.clientId, quoteStore)) === false;
         }
       }
-      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId });
+      const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId, noCards });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
@@ -258,7 +264,8 @@ export function createHttpApp(
       const toolCall = toolCallOf(res);
       const transport = new OpenAIToolMetadataTransport(
         baseTransport,
-        toolCall ? (message) => toolCall.observeResponse(message) : undefined
+        toolCall ? (message) => toolCall.observeResponse(message) : undefined,
+        noCards
       );
       let closed = false;
       const close = (): void => {
@@ -273,7 +280,7 @@ export function createHttpApp(
         await server.connect(transport);
         // 自行注册的客户端（Cursor）认不出会不会显示卡片，查一下它以前调没调过卡片专用工具。
         const knownCardClient =
-          generationCardEnabled() && clientProfile(req.auth?.clientId) === "other"
+          generationCardEnabled() && !noCards && clientProfile(req.auth?.clientId) === "other"
             ? await isKnownCardClient(req.auth?.clientId, quoteStore)
             : false;
         await runWithRequestContext(

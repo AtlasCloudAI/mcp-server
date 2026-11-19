@@ -386,8 +386,8 @@ const URL_PREFIX = /^<\s*url\s*:|^url\s*:/i;
 // 非素材字段里的 //host：IP（点分、十进制、方括号 IPv6）照算；别的主机名后面要跟路径、端口或 ?#，
 // 这样 //localhost/x、//intranet/x 拦得住，"//bass.drop"、"//minimal" 这样的风格写法不误拒（第四轮复审）。
 const PROTOCOL_RELATIVE_HOST =
-  /^[\\/]{2}(?:(?:\d{1,3}(?:\.\d{1,3}){3}|\d{8,10}|\[[0-9a-f:.]+\])(?::\d+)?(?:[\\/?#]|$)|[^\s\\/?#:]+(?::\d+(?:[\\/?#]|$)|[\\/?#]))/i;
-const LINKISH = /^<?\s*([a-z][a-z0-9+.-]*)\s*:\s*(?:[\\/.~]|[a-z][a-z0-9+.-]*\s*:)/i;
+  /^[\\/]{2}(?:(?:\d+(?:\.\d+){1,3}|\d{8,10}|0x[0-9a-f]+(?:\.[0-9a-fx]+)*|\[[0-9a-f:.]+\])(?::\d+)?(?:[\\/?#]|$)|[^\s\\/?#:]+(?::\d+(?:[\\/?#]|$)|[\\/?#]))/i;
+const LINKISH = /^<?\s*([a-z][a-z0-9+.-]*)\s*:\s*(?:[\\/]|~[\\/]|\.{1,2}[\\/]|[a-z][a-z0-9+.-]*:\S)/i;
 const URL_PREFIX_LINK = /^<?\s*url\s*:\s*\S+?\s*>?$/i;
 // 别的非文字字段里也不该出现的系统路径。
 const SENSITIVE_PATH = /^\/(?:etc|proc|sys|dev|root|home|var|usr|tmp|private|Users|opt|run|mnt|srv|boot|lib|bin|sbin)(?:\/|$)/;
@@ -409,8 +409,9 @@ function schemeProblem(cleaned: string, _source: boolean): boolean {
   if (linkish) {
     const scheme = linkish[1]!.toLowerCase();
     if (scheme === "url" || DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
+    // 白名单以外的「协议://」只在整段不含空白时算：「mood: //minimal」「lo-fi: // tape hiss」是文字（第五轮复审）。
     const afterColon = cleaned.slice(cleaned.indexOf(":") + 1);
-    if (/^\s*[\\/]{2}/.test(afterColon) && !ALLOWED_SOURCE_SCHEMES.has(scheme)) return true;
+    if (!/\s/.test(cleaned) && /^[\\/]{2}/.test(afterColon) && !ALLOWED_SOURCE_SCHEMES.has(scheme)) return true;
   }
   // 别的含空白的是文字（素材字段里也有，比如 TTS 的 input），不是链接或协议写法。
   if (/\s/.test(cleaned)) return false;
@@ -426,7 +427,9 @@ function schemeProblem(cleaned: string, _source: boolean): boolean {
  * 这个值是不是本机路径。素材字段沿用 LOCAL_PATH；别的非文字字段里不含空白的路径写法也算：
  * 相对路径（../、./、~/）、任何以 / 开头的绝对路径（/app/.env、/data/…，不只是系统目录）、Windows 路径。
  */
-function pathProblem(cleaned: string, source: boolean): boolean {
+function pathProblem(cleaned: string, source: boolean, field: string): boolean {
+  // 图片、视频、音频字段：本机路径一律算，单段的 /.env、/flag 也算（第五轮复审）。
+  if (expectedKind(field) !== undefined) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
   if (source && /\s/.test(cleaned)) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
   if (/\s/.test(cleaned)) return false;
   if (SENSITIVE_PATH.test(cleaned)) return true;
@@ -575,7 +578,7 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
       const malformed = malformedLinkReason(value, field);
       if (schemeProblem(cleaned, source)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if (pathProblem(cleaned, source)) {
+      } else if (pathProblem(cleaned, source, field)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
       } else if (malformed) {
         out.push({ field, url: trimmed, reason: malformed });

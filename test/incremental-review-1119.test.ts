@@ -503,3 +503,16 @@ test("round 4: asset values written with spaces around a scheme are still refuse
     assert.equal(localInputValues({ face: value }).length, 1, value);
   }
 });
+
+// ---------- 第五轮复审 ----------
+
+test("round 5: single-segment absolute paths are refused in image, video and audio fields", () => {
+  for (const [field, value] of [["image_url", "/.env"], ["video_url", "/config.yaml"], ["audio_url", "/flag"], ["image", "/secrets.json"]] as const) {
+    assert.equal(localInputValues({ [field]: value }).length, 1, `${field}: ${value}`);
+  }
+  assert.equal(localInputValues({ face: "//127.1/x" }).length, 1);
+  assert.equal(localInputValues({ face: "//0x7f000001" }).length, 1);
+  for (const value of ["Crypto: ~vaporwave~", "Cache: .5 sec echo", "mood: //minimal", "lo-fi: // tape hiss", "R+B: ...late night"]) {
+    assert.deepEqual(localInputValues({ style: value }), [], value);
+  }
+});

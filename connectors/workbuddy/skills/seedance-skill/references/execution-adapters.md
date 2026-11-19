@@ -104,7 +104,11 @@ Spend and safety limits in the runner:
   `CONFIRM_SPEND_PLAN=<plan id> CONFIRM_SPEND_IMAGES=<images> CONFIRM_SPEND_SECONDS=<seconds>`
   only after they approve it. An approval is spent before the first submission
   and works once: running the same plan again needs a new yes. Any change to the
-  job config (prompts included) or its output folder gives a new plan id. Cached outputs
+  job config (prompts included), its output folder, its local input files or
+  the Atlas key/endpoint gives a new plan id. The id printed by the run includes
+  a one-time code kept in `.spend-approvals/` next to the config; an approval
+  works for one run within 24 hours, and if that folder is moved or cleaned
+  the old approval no longer works. Cached outputs
   and resumed prediction IDs are not counted, because they bill nothing new.
 - The runner accepts only the modes `grid`, `shot-pairs`, `reference` and
   `chain`, and every duration must be a positive whole number of seconds; any

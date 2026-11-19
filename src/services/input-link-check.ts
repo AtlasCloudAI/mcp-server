@@ -383,7 +383,11 @@ const DANGEROUS_SCHEMES = new Set([
 const ANY_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 const FFMPEG_PROTOCOL = /^(?:subfile|concat|concatf|crypto|cache|async|pipe|fd)\s*[,:]/i;
 const URL_PREFIX = /^<\s*url\s*:|^url\s*:/i;
-const PROTOCOL_RELATIVE_HOST = /^[\\/]{2}(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.]+\]|[a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(?:[\\/?#]|$)/i;
+// 非素材字段里的 //host：IP（点分、十进制、方括号 IPv6）照算；别的主机名后面要跟路径、端口或 ?#，
+// 这样 //localhost/x、//intranet/x 拦得住，"//bass.drop"、"//minimal" 这样的风格写法不误拒（第四轮复审）。
+const PROTOCOL_RELATIVE_HOST =
+  /^[\\/]{2}(?:(?:\d{1,3}(?:\.\d{1,3}){3}|\d{8,10}|\[[0-9a-f:.]+\])(?::\d+)?(?:[\\/?#]|$)|[^\s\\/?#:]+(?::\d+(?:[\\/?#]|$)|[\\/?#]))/i;
+const LINKISH = /^<?\s*([a-z][a-z0-9+.-]*)\s*:\s*(?:[\\/.~]|[a-z][a-z0-9+.-]*\s*:)/i;
 const URL_PREFIX_LINK = /^<?\s*url\s*:\s*\S+?\s*>?$/i;
 // 别的非文字字段里也不该出现的系统路径。
 const SENSITIVE_PATH = /^\/(?:etc|proc|sys|dev|root|home|var|usr|tmp|private|Users|opt|run|mnt|srv|boot|lib|bin|sbin)(?:\/|$)/;
@@ -399,7 +403,16 @@ function schemeProblem(cleaned: string, _source: boolean): boolean {
   // Python urllib 的 unwrap 会去掉 <URL:…> 和 URL: 前缀再去空白，"URL: http://…" 照样是链接：
   // 前缀后面只剩一段不含空白的内容就退回（"URL: what it means" 是普通文字）。
   if (URL_PREFIX_LINK.test(cleaned)) return true;
-  // 含空白的是文字（素材字段里也有，比如 TTS 的 input），不是链接或协议写法。
+  // 「协议:」后面紧跟（可隔空白）/ \ . ~ 或另一个「协议:」，就是协议写法，哪怕中间或后面有空白：
+  // "concat: /etc/passwd"、"file:/// etc/passwd"、"URL: http://… x"（第四轮复审）。"Concat: the two scenes" 不算。
+  const linkish = LINKISH.exec(cleaned);
+  if (linkish) {
+    const scheme = linkish[1]!.toLowerCase();
+    if (scheme === "url" || DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
+    const afterColon = cleaned.slice(cleaned.indexOf(":") + 1);
+    if (/^\s*[\\/]{2}/.test(afterColon) && !ALLOWED_SOURCE_SCHEMES.has(scheme)) return true;
+  }
+  // 别的含空白的是文字（素材字段里也有，比如 TTS 的 input），不是链接或协议写法。
   if (/\s/.test(cleaned)) return false;
   if (URL_PREFIX.test(cleaned) || FFMPEG_PROTOCOL.test(cleaned)) return true;
   const scheme = ANY_SCHEME.exec(cleaned)?.[1]?.toLowerCase();
@@ -414,9 +427,13 @@ function schemeProblem(cleaned: string, _source: boolean): boolean {
  * 相对路径（../、./、~/）、任何以 / 开头的绝对路径（/app/.env、/data/…，不只是系统目录）、Windows 路径。
  */
 function pathProblem(cleaned: string, source: boolean): boolean {
-  if (source) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
+  if (source && /\s/.test(cleaned)) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
   if (/\s/.test(cleaned)) return false;
-  return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
+  if (SENSITIVE_PATH.test(cleaned)) return true;
+  if (!LOCAL_PATH.test(cleaned)) return false;
+  // 单段的 /imagine、/ootd、/ 是指令或标签写法，不当路径（第四轮复审）；相对路径、~/、Windows 路径、
+  // 两段以上的绝对路径（/app/.env、/data/x.png）照算。
+  return !cleaned.startsWith("/") || /^\/[^/]+\/./.test(cleaned);
 }
 // 本机路径：~/、./、../、Windows 盘符、UNC、以及像路径的绝对路径。base64 的 JPEG 以 "/9j/" 开头，
 // base64 的 MP3 可能以 "//" 开头，都不是路径，所以绝对路径只认「/ 后面跟路径字符」且不太长的串。

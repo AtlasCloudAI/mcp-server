@@ -467,3 +467,39 @@ test("round 3: ASCII-only whitespace around a link is left as is (request finger
   assert.equal(trimLinkPadding({ image_url: "https://example.com/a.png \n" }).image_url, "https://example.com/a.png \n");
   assert.equal(trimLinkPadding({ image_url: "https://example.com/a.png\u200b" }).image_url, "https://example.com/a.png");
 });
+
+// ---------- 第四轮复审 ----------
+
+test("round 4: rejected re-runs don't push the job that ran out of the submission history", async (t) => {
+  setPredictionStatusLookupForTests(async () => "completed");
+  t.after(() => setPredictionStatusLookupForTests());
+  await runWithRequestContext(context("r4-many-rejected"), async () => {
+    const req = request1("r4 many rejected");
+    const first = await quoteConfirmSubmit(req, "5d000000-0000-4000-8000-000000000d01", "pred-r4-first");
+    for (let i = 0; i < 7; i += 1) {
+      const rerun = await issueGenerationConfirmation(TOOL, `5d000000-0000-4000-8000-000000000d1${i}`, req, PRICE);
+      assert.equal(rerun.repeatOf?.predictionId, "pred-r4-first", `attempt ${i}`);
+      const confirmed = await resolveConfirmedIdempotencyKey(rerun.confirmationToken, TOOL, rerun.idempotencyKey, req, PRICE);
+      await submit(confirmed.idempotencyKey, req, async () => {
+        throw new ApiRequestError("insufficient balance", 402);
+      }).catch(() => undefined);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const last = await issueGenerationConfirmation(TOOL, "5d000000-0000-4000-8000-000000000d99", req, PRICE);
+    assert.equal(last.repeatOf?.predictionId, "pred-r4-first");
+    const stale = await resolveConfirmedIdempotencyKey(first.quote.confirmationToken, TOOL, first.key, req, PRICE);
+    assert.equal(stale.idempotencyKey, first.key);
+  });
+});
+
+test("round 4: asset values written with spaces around a scheme are still refused; prose is not", () => {
+  for (const value of ["concat: /etc/passwd", "concat:  /etc/passwd|/etc/hosts", "file:/// etc/passwd", "gopher://169.254.169.254/ x", "URL: http://169.254.169.254/ x"]) {
+    assert.equal(localInputValues({ image_url: value }).length, 1, value);
+  }
+  for (const [field, value] of [["input", "/imagine"], ["caption", "/imagine"], ["tags", "/fashion"], ["style", "//bass.drop"], ["input", "Concat: the two scenes"]] as const) {
+    assert.deepEqual(localInputValues({ [field]: value }), [], `${field}: ${value}`);
+  }
+  for (const value of ["//localhost/x", "//intranet/x", "//2130706433/x", "//localhost:8080"]) {
+    assert.equal(localInputValues({ face: value }).length, 1, value);
+  }
+});

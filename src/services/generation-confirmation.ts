@@ -254,18 +254,26 @@ async function rememberSubmission(toolName: string, requestFingerprint: string, 
   if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return;
   const { subject } = runtime();
   try {
+    const writes: Array<Promise<unknown>> = [
+      quoteStore().put(submissionIndexKey(subject, toolName, requestFingerprint), idempotencyKey, SAME_JOB_WINDOW_SECONDS),
+    ];
+    // 读不出原来的列表（超时、内容坏了）就不写列表：只写一个新键会把真正跑过的那一单冲掉（第四轮复审）。
     const earlier = await submissionEntries(toolName, requestFingerprint);
-    const entries = [{ key: idempotencyKey, at: Date.now() }, ...earlier.filter((entry) => entry.key !== idempotencyKey)].slice(
-      0,
-      SUBMISSION_HISTORY
-    );
-    await withTimeout(
-      Promise.all([
-        quoteStore().put(submissionListKey(subject, toolName, requestFingerprint), JSON.stringify(entries), submissionRetentionSeconds()),
-        quoteStore().put(submissionIndexKey(subject, toolName, requestFingerprint), idempotencyKey, SAME_JOB_WINDOW_SECONDS),
-      ]),
-      QUOTE_STORE_TIMEOUT_MS
-    );
+    if (earlier !== undefined) {
+      // 被拒收、作废的键不占位置：连着几次被拒，不能把已经跑过的那一单挤出列表（第四轮复审）。
+      const kept: Array<{ key: string; at: number }> = [];
+      for (const entry of earlier) {
+        if (entry.key === idempotencyKey) continue;
+        const state = (await peekIdempotent(toolName, entry.key).catch(() => undefined))?.state;
+        if (state === "rejected" || state === "canceled") continue;
+        kept.push(entry);
+      }
+      const entries = [{ key: idempotencyKey, at: Date.now() }, ...kept].slice(0, SUBMISSION_HISTORY);
+      writes.push(
+        quoteStore().put(submissionListKey(subject, toolName, requestFingerprint), JSON.stringify(entries), submissionRetentionSeconds())
+      );
+    }
+    await withTimeout(Promise.all(writes), QUOTE_STORE_TIMEOUT_MS);
   } catch (error) {
     console.error(`[quote-store] submission put failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -276,7 +284,7 @@ async function recentSubmission(
   requestFingerprint: string
 ): Promise<{ idempotencyKey: string; alreadySubmitted: AlreadySubmitted; ageMs: number } | undefined> {
   // 最近一次真正提交过的那一单：被拒收、作废、还没提交的键跳过。
-  for (const entry of await submissionEntries(toolName, requestFingerprint)) {
+  for (const entry of (await submissionEntries(toolName, requestFingerprint)) ?? []) {
     try {
       const record = await peekIdempotent(toolName, entry.key);
       if (!record || record.fingerprint !== requestFingerprint) continue;
@@ -290,8 +298,24 @@ async function recentSubmission(
   return undefined;
 }
 
-/** 同一用户、工具、参数最近几次确认用的键和时间，最新在前。只有旧格式（单个纯文本键）时按刚记下处理。 */
-async function submissionEntries(toolName: string, requestFingerprint: string): Promise<Array<{ key: string; at: number }>> {
+function legacyEntryKey(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as { key?: unknown };
+      return typeof parsed.key === "string" ? parsed.key : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return raw;
+}
+
+/**
+ * 同一用户、工具、参数最近几次确认用的键和时间，最新在前。只有旧格式（单个键）时按刚记下处理。
+ * 读不出来（超时、内容不是列表）返回 undefined：调用方据此不覆盖原来的列表。
+ */
+async function submissionEntries(toolName: string, requestFingerprint: string): Promise<Array<{ key: string; at: number }> | undefined> {
   if (SAME_JOB_EXEMPT_TOOLS.has(toolName)) return [];
   const { subject } = runtime();
   try {
@@ -304,25 +328,26 @@ async function submissionEntries(toolName: string, requestFingerprint: string): 
     );
     let entries: Array<{ key: string; at: number }> = [];
     if (list) {
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(list) as unknown;
-        if (Array.isArray(parsed)) {
-          entries = parsed.filter(
-            (entry): entry is { key: string; at: number } =>
-              !!entry && typeof entry === "object" && typeof (entry as { key?: unknown }).key === "string" &&
-              typeof (entry as { at?: unknown }).at === "number"
-          );
-        }
+        parsed = JSON.parse(list);
       } catch {
-        entries = [];
+        return undefined;
       }
+      if (!Array.isArray(parsed)) return undefined;
+      entries = parsed.filter(
+        (entry): entry is { key: string; at: number } =>
+          !!entry && typeof entry === "object" && typeof (entry as { key?: unknown }).key === "string" &&
+          typeof (entry as { at?: unknown }).at === "number"
+      );
     }
-    // 旧版本写的（或旧版本刚写、新格式还没有的）纯文本键：并进来，按刚记下处理。
-    if (legacy && !entries.some((entry) => entry.key === legacy)) entries = [{ key: legacy, at: Date.now() }, ...entries];
+    // 旧键 submitted: 的值：之前的版本写纯文本键；兼容 {"key","at"} 写法。并进来，按刚记下处理。
+    const legacyKey = legacyEntryKey(legacy);
+    if (legacyKey && !entries.some((entry) => entry.key === legacyKey)) entries = [{ key: legacyKey, at: Date.now() }, ...entries];
     return entries;
   } catch (error) {
     console.error(`[quote-store] submission get failed: ${error instanceof Error ? error.message : String(error)}`);
-    return [];
+    return undefined;
   }
 }
 
@@ -658,7 +683,7 @@ async function earlierSubmission(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<{ key: string; predictionId?: string } | "missing" | undefined> {
-  const indexed = (await submissionEntries(toolName, requestFingerprint)).map((entry) => entry.key);
+  const indexed = ((await submissionEntries(toolName, requestFingerprint)) ?? []).map((entry) => entry.key);
   const candidates = [...new Set([idempotencyKey, record.repeatOf, ...indexed])].filter(
     (key): key is string => typeof key === "string" && key !== record.idempotencyKey
   );

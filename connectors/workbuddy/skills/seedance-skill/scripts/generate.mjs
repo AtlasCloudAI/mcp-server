@@ -21,12 +21,16 @@
 // A video task is never resubmitted automatically: a failed or silent result
 // stops the run and leaves the retry decision to the user.
 // Requires Node 18+, ffmpeg, and ffprobe. Execution adapters live in scripts/providers/.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, renameSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, renameSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { createExecutor, resolveModelProfile } from "./providers/index.mjs";
 import { insideRoot, readAudioFile } from "./providers/guards.mjs";
+
+// The skill's own folder (examples point at its assets/).
+const SKILL_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CFG_PATH = resolve(process.argv[2] || "./config.json");
 const CFG = JSON.parse(readFileSync(CFG_PATH, "utf8"));
@@ -276,6 +280,19 @@ function approvedAmount(envName, fallback) {
 const APPROVALS_DIR = resolve(ROOT, ".spend-approvals");
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
+// A local reference image must be a real image inside the job directory or the
+// skill's own folder (its bundled examples). Symlinks are resolved first, so a
+// link can't point the runner at a private file elsewhere on the machine.
+function localReferenceImage(file, what) {
+  const path = resolve(ROOT, file);
+  if (!existsSync(path)) throw new Error(`${what} file not found: ${path}`);
+  const real = realpathSync(path);
+  const allowed = [ROOT, SKILL_DIR].some(root => { try { return insideRoot(realpathSync(root), real); } catch { return false; } });
+  if (!allowed) throw new Error(`${what} must be a file inside the job directory ${ROOT} (or the skill folder), got ${real}`);
+  imageMime(readFileSync(real), real);   // PNG, JPEG or WebP, by its bytes
+  return real;
+}
+
 function fileDigest(path) {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
@@ -434,7 +451,7 @@ function validateJob() {
     CFG.refs.forEach((ref, i) => {
       if (!ref || typeof ref !== "object") fail(`refs[${i}] must be an object with file or prompt`);
       if (ref.file) {
-        if (!existsSync(resolve(ROOT, ref.file))) fail(`ref${i + 1} file not found: ${resolve(ROOT, ref.file)}`);
+        try { localReferenceImage(ref.file, `ref${i + 1}`); } catch (error) { fail(error.message); }
       } else if (typeof ref.prompt !== "string" && !existsSync(`${DIR}/ref_${pad(i + 1)}.png`) && !resumePredictionIdFor(`ref${i + 1}`, ref.resumePredictionId)) {
         fail(`refs[${i}] needs file or prompt`);
       }
@@ -518,8 +535,7 @@ async function genRefs(b) {
     const f = `${b}/ref_${pad(i + 1)}.png`;
     if (existsSync(f)) { console.log(`[ref${i + 1}] cached — skip`); continue; }
     if (CFG.refs[i].file) {
-      const source = resolve(ROOT, CFG.refs[i].file);
-      if (!existsSync(source)) throw new Error(`ref${i + 1} file not found: ${source}`);
+      const source = localReferenceImage(CFG.refs[i].file, `ref${i + 1}`);
       copyFileSync(source, f);
       console.log(`[ref${i + 1}] copied local file`);
       continue;

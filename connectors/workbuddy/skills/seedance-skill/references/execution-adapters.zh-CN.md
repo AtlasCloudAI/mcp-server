@@ -71,7 +71,7 @@ export ATLASCLOUD_API_KEY="<your-key>"
 - Seedance 2.5 图生视频的画幅跟随输入图（`ratio` 只接受 `adaptive`），所以脚本对它固定发 `adaptive`；拼接时仍按 `video.ratio` 缩放。
 - 视频任务绝不会自动重新提交。已完成但没有原生音轨的视频已经扣过费：脚本把它保存为 `<阶段>.no-audio.mp4` 并停下，要不要再花钱重做由用户决定。`audio.outputRetries` 不再支持。
 - 任务配置不能修改 API 主机（确实需要别的主机时，在环境变量里设 `ATLASCLOUD_API_BASE`）；`apiKeyEnv` 只能是 `ATLASCLOUD_*` 变量；可执行文件只从环境变量读取（`FFMPEG_PATH`、`FFPROBE_PATH`、`ATLAS_CLI_COMMAND`）。
-- `outDir` 和本地参考音频必须在任务目录内，参考音频必须真的是 WAV、MP3、AAC、M4A、OGG 或 FLAC。
+- `outDir`、本地参考音频和本地参考图必须在任务目录内（参考图也可以放在 skill 自己的目录里；符号链接按实际指向判断），参考音频必须真的是 WAV、MP3、AAC、M4A、OGG 或 FLAC，参考图必须真的是 PNG、JPEG 或 WebP。
 
 只有明确选择 CLI 时才设置 `adapter` 为 `atlas-cli`。`atlas-skill` 和 `atlas-mcp` 会被 Node 脚本明确拒绝，让智能体直接执行，避免错误报告执行通道。
 

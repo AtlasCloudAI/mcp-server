@@ -124,8 +124,10 @@ Spend and safety limits in the runner:
   environment if you really need another one), `apiKeyEnv` must name an
   `ATLASCLOUD_*` variable, and executables come only from the environment
   (`FFMPEG_PATH`, `FFPROBE_PATH`, `ATLAS_CLI_COMMAND`).
-- `outDir` and local audio references must stay inside the job directory, and
-  an audio reference must really be WAV, MP3, AAC, M4A, OGG or FLAC.
+- `outDir`, local audio references and local reference images must stay inside
+  the job directory (reference images may also sit in the skill's own folder;
+  symlinks are judged by where they point). An audio reference must really be
+  WAV, MP3, AAC, M4A, OGG or FLAC, and a reference image PNG, JPEG or WebP.
 
 Set `adapter` to `atlas-cli` only when the CLI route was explicitly selected.
 `atlas-skill` and `atlas-mcp` are intentionally rejected by the Node runner so

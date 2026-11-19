@@ -6,6 +6,8 @@ import {
   formatInputLinkProblems,
   inputImageShapes,
   inputLinkCheckEnabled,
+  inputLinkProblemCause,
+  inputLinkProblemParam,
   type InputImageShape, trimLinkPadding } from "./input-link-check.js";
 import {
   fillAllDefaults,
@@ -138,6 +140,12 @@ export async function prepareWithSchema(
       opts.readInputShapes ? inputImageShapes(finalParams) : Promise.resolve([]),
     ]);
     if (problems.length > 0) {
+      // 不记的话埋点只看到工具返回了错误，落到 upstream_failure，看板上像是服务出了故障（11-19 生产 9 次）。
+      recordToolCallError({
+        code: "invalid_param",
+        param: inputLinkProblemParam(problems[0].field),
+        cause: inputLinkProblemCause(problems[0].reason),
+      });
       return { ok: false, message: formatInputLinkProblems(problems) };
     }
     inputImages = shapes;
@@ -160,6 +168,7 @@ export async function submitPreparedGeneration(
   prepared: PreparedGeneration,
   idempotencyKey?: string
 ): Promise<SubmitResult> {
+  annotateToolCall({ stage: "submit" });
   const response = await generationApi<PredictionResponse>(prepared.endpoint, {
     method: "POST",
     // 资产库素材交 assetd:// 引用，和网站一样（library-references.ts）。

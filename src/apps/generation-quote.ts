@@ -128,6 +128,7 @@ export function generationResultCard(
         ...(estimate !== undefined ? { estimated_usd: estimate } : {}),
         ...(content.estimate_partial === true ? { partial: true } : {}),
         ...(content.estimate_reason === ESTIMATE_SETTLES_ON_USAGE ? { settles_on_usage: true } : {}),
+        ...submissionNotes(content),
         ...(missing.length > 0 ? { estimate_missing: missing.map(estimateMissingLabel) } : {}),
         settings: settingsChips(
           params,
@@ -419,4 +420,22 @@ export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
 /** 生成工具定义上要挂的元数据（卡片关着时为空）。 */
 export function generationToolCardMeta(): { _meta?: Record<string, unknown> } {
   return generationCardEnabled() ? { _meta: generationCardToolMeta() } : {};
+}
+
+/** 报价里「已经提交过」「是再跑一次」两条说明，原样带给卡片（卡片据此写一句提示）。 */
+export function submissionNotes(content: Record<string, unknown>): {
+  already_submitted?: { prediction_id?: string; status?: string };
+  repeat_of?: { prediction_id?: string };
+} {
+  const pick = (value: unknown) => {
+    const note = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+    if (!note) return undefined;
+    return {
+      ...(typeof note.prediction_id === "string" ? { prediction_id: note.prediction_id } : {}),
+      ...(typeof note.status === "string" ? { status: note.status } : {}),
+    };
+  };
+  const already = pick(content.already_submitted);
+  const repeat = pick(content.repeat_of);
+  return { ...(already ? { already_submitted: already } : {}), ...(repeat ? { repeat_of: repeat } : {}) };
 }

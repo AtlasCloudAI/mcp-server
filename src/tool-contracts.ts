@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Model, SubmitKind } from "./types.js";
 import { confirmationValidSeconds, formatUsd } from "./services/spend-policy.js";
 import { brandIconUrl } from "./services/brand-logo.js";
-import { type AlreadySubmitted, alreadySubmittedNotice } from "./services/generation-confirmation.js";
+import { type AlreadySubmitted, alreadySubmittedNotice, repeatNotice } from "./services/generation-confirmation.js";
 
 export const idempotencyKeySchema = z
   .string()
@@ -212,6 +212,14 @@ export const generationOutputSchema = {
       note: z.string(),
     })
     .optional(),
+  // 同样的请求刚跑完（11-19 S2）：这份报价是再跑一次，确认会新建一单、再扣一次费。
+  repeat_of: z
+    .object({
+      prediction_id: z.string().optional(),
+      submitted_at: z.string(),
+      note: z.string(),
+    })
+    .optional(),
   // 客户端会渲染卡片时的一句话：卡片就是确认这一步，别自己再画报价卡（只走结构化结果的 ChatGPT 路径也能看到）
   card_note: z.string().optional(),
   // 扣费账户（需求文档 6.1）：查不到就不给
@@ -314,6 +322,7 @@ export function generationConfirmationStructuredContent(
     idempotencyKey: string;
     pricing: z.infer<typeof generationPricingSchema>;
     alreadySubmitted?: AlreadySubmitted;
+    repeatOf?: AlreadySubmitted;
   },
   estimate?: { usd: number | null; partial: boolean; reason?: string; missing?: string[] },
   body?: Record<string, unknown>
@@ -336,6 +345,15 @@ export function generationConfirmationStructuredContent(
             submitted_at: confirmation.alreadySubmitted.submittedAt,
             ...(confirmation.alreadySubmitted.predictionId ? { prediction_id: confirmation.alreadySubmitted.predictionId } : {}),
             note: alreadySubmittedNotice(confirmation.alreadySubmitted).replace(/^- \*\*Already submitted\*\*: /, ""),
+          },
+        }
+      : {}),
+    ...(confirmation.repeatOf
+      ? {
+          repeat_of: {
+            ...(confirmation.repeatOf.predictionId ? { prediction_id: confirmation.repeatOf.predictionId } : {}),
+            submitted_at: confirmation.repeatOf.submittedAt,
+            note: repeatNotice(confirmation.repeatOf).replace(/^- \*\*Runs again\*\*: /, ""),
           },
         }
       : {}),

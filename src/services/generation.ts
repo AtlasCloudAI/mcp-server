@@ -6,8 +6,7 @@ import {
   formatInputLinkProblems,
   inputImageShapes,
   inputLinkCheckEnabled,
-  type InputImageShape,
-} from "./input-link-check.js";
+  type InputImageShape, trimLinkPadding } from "./input-link-check.js";
 import {
   fillAllDefaults,
   fillPreferredDefaults,
@@ -119,9 +118,9 @@ export async function prepareWithSchema(
 ): Promise<PrepareResult> {
   // 工作流每个选项都要给值，默认值全填；普通模型只填必填的，其余交给上游自己的默认。
   const fillDefaults = isWorkflowModelId(found.model) ? fillAllDefaults : fillRequiredDefaults;
-  const finalParams = fillDefaults(
-    schema,
-    fillPreferredDefaults(schema, params, routeDefaultParams(found.model))
+  // 素材链接首尾粘贴带来的空白先去掉，校验、报价、提交用的都是同一个干净的值。
+  const finalParams = trimLinkPadding(
+    fillDefaults(schema, fillPreferredDefaults(schema, params, routeDefaultParams(found.model)))
   );
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {

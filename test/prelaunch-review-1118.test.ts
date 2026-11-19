@@ -9,6 +9,7 @@ import {
   alreadySubmittedNotice,
   issueGenerationConfirmation,
   resolveConfirmedIdempotencyKey,
+  setPredictionStatusLookupForTests,
 } from "../src/services/generation-confirmation.js";
 import {
   UnconfirmedRequestError,
@@ -215,7 +216,10 @@ test("M4: confirming a quote whose key was rejected asks for a new quote instead
 
 const MODEL = { model: "m/a", displayName: "Model A", type: "Image" } as unknown as Model;
 
-test("M5: re-quoting a request that was just submitted keeps its key and says so; confirming returns that job", async () => {
+test("M5: re-quoting a request that was just submitted keeps its key and says so; confirming returns that job", async (t) => {
+  // 那一单还在跑（11-19 S2：跑完了才算新的一次运行）。
+  setPredictionStatusLookupForTests(async () => "processing");
+  t.after(() => setPredictionStatusLookupForTests());
   await runWithRequestContext(context("m5-user"), async () => {
     const req = request1("m5 same job");
     const quote = await issueGenerationConfirmation(TOOL, "5c000000-0000-4000-8000-000000000001", req, PRICE);

@@ -52,7 +52,7 @@ export function inputLinks(
   const visit = (field: string, value: unknown, depth: number): void => {
     if (out.length >= maxLinks || depth > maxDepth) return;
     if (typeof value === "string") {
-      const trimmed = value.trim();
+      const trimmed = urlPreprocess(value);
       // 按「字段 + 链接」去重：同一个链接放在图片和视频两个字段里，两边的要求不一样，都要判。
       if (/^https?:\/\//i.test(trimmed) && !out.some((l) => l.url === trimmed && l.field === field)) out.push({ field, url: trimmed });
     } else if (Array.isArray(value)) {
@@ -285,7 +285,8 @@ export function inputLimitProblems(params: Record<string, unknown>): InputLinkPr
   const visit = (field: string, value: unknown, depth: number): void => {
     if (tooDeep !== undefined || links.size > MAX_GUARDED_LINKS) return;
     if (typeof value === "string") {
-      if (/^https?:/i.test(urlPreprocess(value))) links.add(`${field}\0${value.trim()}`);
+      const link = urlPreprocess(value);
+      if (/^https?:/i.test(link)) links.add(`${field}\0${link}`);
       return;
     }
     if (value === null || typeof value !== "object") return;
@@ -369,8 +370,74 @@ async function privateLinksBeyondProbe(params: Record<string, unknown>, timeoutM
 // ---------- 不是网址的素材值 ----------
 
 // 网关和下载器认得、但服务端绝不该替用户去读的写法：本机文件和各种非 http 协议。
-// data:（内联）、assetd:// 和 asset://（资产库、上游资产引用）是正常写法，不在这里。
-const LOCAL_SCHEMES = /^(?:file|gopher|ftp|ftps|sftp|tftp|dict|ldap|ldaps|smb|jar|netdoc|unix|phar|php|expect|glob|ws|wss):/i;
+// 素材字段只放行白名单里的协议：http(s)、data:（内联）、asset:// 和 assetd://（资产库、上游资产引用）。
+// 原来是黑名单，tcp://、rtsp://、concat:、hls+http://、s3://、URL:http://… 都漏过去了（11-19 第二轮复审）。
+const ALLOWED_SOURCE_SCHEMES = new Set(["http", "https", "data", "asset", "assetd"]);
+// 别的非文字字段（字段名看不出是素材的）：明确危险的协议、带 + 的组合协议、URL: 前缀、ffmpeg 的协议写法一律退回。
+const DANGEROUS_SCHEMES = new Set([
+  "file", "gopher", "ftp", "ftps", "sftp", "tftp", "dict", "ldap", "ldaps", "smb", "jar", "netdoc", "unix", "phar",
+  "php", "expect", "glob", "ws", "wss", "tcp", "udp", "rtsp", "rtsps", "rtmp", "rtmps", "rtmpt", "rtmpe", "rtp",
+  "srtp", "srt", "mms", "mmsh", "mmst", "concat", "concatf", "subfile", "hls", "crypto", "cache", "async", "pipe",
+  "fd", "s3", "gs", "gcs", "hdfs", "url", "jdbc", "redis", "mongodb", "mysql", "postgres", "ssh", "telnet", "nfs",
+]);
+const ANY_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+const FFMPEG_PROTOCOL = /^(?:subfile|concat|concatf|crypto|cache|async|pipe|fd)\s*[,:]/i;
+const URL_PREFIX = /^<\s*url\s*:|^url\s*:/i;
+// 非素材字段里的 //host：IP（点分、十进制、方括号 IPv6）照算；别的主机名后面要跟路径、端口或 ?#，
+// 这样 //localhost/x、//intranet/x 拦得住，"//bass.drop"、"//minimal" 这样的风格写法不误拒（第四轮复审）。
+const PROTOCOL_RELATIVE_HOST =
+  /^[\\/]{2}(?:(?:\d+(?:\.\d+){1,3}|\d{8,10}|0x[0-9a-f]+(?:\.[0-9a-fx]+)*|\[[0-9a-f:.]+\])(?::\d+)?(?:[\\/?#]|$)|[^\s\\/?#:]+(?::\d+(?:[\\/?#]|$)|[\\/?#]))/i;
+const LINKISH = /^<?\s*([a-z][a-z0-9+.-]*)\s*:\s*(?:[\\/]|~[\\/]|\.{1,2}[\\/]|[a-z][a-z0-9+.-]*:\S)/i;
+const URL_PREFIX_LINK = /^<?\s*url\s*:\s*\S+?\s*>?$/i;
+// 别的非文字字段里也不该出现的系统路径。
+const SENSITIVE_PATH = /^\/(?:etc|proc|sys|dev|root|home|var|usr|tmp|private|Users|opt|run|mnt|srv|boot|lib|bin|sbin)(?:\/|$)/;
+
+/**
+ * 这个值是不是指向某个协议或位置、而不是普通取值。
+ * - 素材字段：URL: 前缀、ffmpeg 协议写法、危险协议、带 + 的组合协议，以及白名单以外的「协议://」。
+ * - 别的非文字字段（字段名看不出是素材，比如 face、garment、target）：同样的判断，但只看不含空白的值。
+ *   链接和路径不含空白；「Crypto: neon」「R+B: smooth」「Async, glitchy」这样的风格、标签、台词是普通文字，
+ *   原来会被当成协议误拒（11-19 第三轮复审）。这类字段里白名单以外的「协议://」也一律退回。
+ */
+function schemeProblem(cleaned: string, _source: boolean): boolean {
+  // Python urllib 的 unwrap 会去掉 <URL:…> 和 URL: 前缀再去空白，"URL: http://…" 照样是链接：
+  // 前缀后面只剩一段不含空白的内容就退回（"URL: what it means" 是普通文字）。
+  if (URL_PREFIX_LINK.test(cleaned)) return true;
+  // 「协议:」后面紧跟（可隔空白）/ \ . ~ 或另一个「协议:」，就是协议写法，哪怕中间或后面有空白：
+  // "concat: /etc/passwd"、"file:/// etc/passwd"、"URL: http://… x"（第四轮复审）。"Concat: the two scenes" 不算。
+  const linkish = LINKISH.exec(cleaned);
+  if (linkish) {
+    const scheme = linkish[1]!.toLowerCase();
+    if (scheme === "url" || DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
+    // 白名单以外的「协议://」只在整段不含空白时算：「mood: //minimal」「lo-fi: // tape hiss」是文字（第五轮复审）。
+    const afterColon = cleaned.slice(cleaned.indexOf(":") + 1);
+    if (!/\s/.test(cleaned) && /^[\\/]{2}/.test(afterColon) && !ALLOWED_SOURCE_SCHEMES.has(scheme)) return true;
+  }
+  // 别的含空白的是文字（素材字段里也有，比如 TTS 的 input），不是链接或协议写法。
+  if (/\s/.test(cleaned)) return false;
+  if (URL_PREFIX.test(cleaned) || FFMPEG_PROTOCOL.test(cleaned)) return true;
+  const scheme = ANY_SCHEME.exec(cleaned)?.[1]?.toLowerCase();
+  if (scheme === undefined) return false;
+  if (DANGEROUS_SCHEMES.has(scheme) || scheme.includes("+")) return true;
+  // 白名单只管「协议://」这种写法：素材字段里也有 en-US:Neural 这样的普通取值（音色编号）。
+  return cleaned.slice(scheme.length + 1).startsWith("//") && !ALLOWED_SOURCE_SCHEMES.has(scheme);
+}
+
+/**
+ * 这个值是不是本机路径。素材字段沿用 LOCAL_PATH；别的非文字字段里不含空白的路径写法也算：
+ * 相对路径（../、./、~/）、任何以 / 开头的绝对路径（/app/.env、/data/…，不只是系统目录）、Windows 路径。
+ */
+function pathProblem(cleaned: string, source: boolean, field: string): boolean {
+  // 图片、视频、音频字段：本机路径一律算，单段的 /.env、/flag 也算（第五轮复审）。
+  if (expectedKind(field) !== undefined) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
+  if (source && /\s/.test(cleaned)) return LOCAL_PATH.test(cleaned) || SENSITIVE_PATH.test(cleaned);
+  if (/\s/.test(cleaned)) return false;
+  if (SENSITIVE_PATH.test(cleaned)) return true;
+  if (!LOCAL_PATH.test(cleaned)) return false;
+  // 单段的 /imagine、/ootd、/ 是指令或标签写法，不当路径（第四轮复审）；相对路径、~/、Windows 路径、
+  // 两段以上的绝对路径（/app/.env、/data/x.png）照算。
+  return !cleaned.startsWith("/") || /^\/[^/]+\/./.test(cleaned);
+}
 // 本机路径：~/、./、../、Windows 盘符、UNC、以及像路径的绝对路径。base64 的 JPEG 以 "/9j/" 开头，
 // base64 的 MP3 可能以 "//" 开头，都不是路径，所以绝对路径只认「/ 后面跟路径字符」且不太长的串。
 const LOCAL_PATH = /^(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\)|^\/(?!9j\/|\/)[\w.\-~/%@]{0,511}$/;
@@ -388,9 +455,54 @@ function isSourceField(field: string): boolean {
 // h<tab>ttp://…、//169.254.169.254 在那边都是内网地址，在这边却不算链接，原样送到网关（11-17 实测）。
 const MALFORMED_LINK_REASON = "it is not a complete link; write it as https://… with two forward slashes";
 
-/** 按 WHATWG URL 解析前的预处理：去掉首尾 C0 控制字符和空格，删掉所有 tab、换行。 */
+// 首尾要去掉的字符：WHATWG URL 解析器去的 C0 控制字符和空格，加上各家下载器 trim 时会去的 Unicode 空白
+// （不换行空格、BOM、全角空格、零宽字符等；Go 的 strings.TrimSpace、JS 的 trim 都去其中大部分）。
+// 「是不是链接」「链接上限」「内网检查」三处必须用同一个判断：原来上限检查只去 C0、链接收集用 trim()，
+// 开头加一个不换行空格的内网链接两边都漏掉（11-19 增量审查 S1）。
+const LINK_PADDING = "\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
+const LINK_PADDING_EDGES = new RegExp(`^[${LINK_PADDING}]+|[${LINK_PADDING}]+$`, "g");
+const HAS_LINK_PADDING = new RegExp(`^[${LINK_PADDING}]|[${LINK_PADDING}]$`);
+// 只有空白和零宽字符（不含控制字符）：粘贴来的链接首尾常带全角空格、不换行空格，直接去掉照常用。
+const LINK_WHITESPACE = "\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u3000\\ufeff";
+const LINK_WHITESPACE_EDGES = new RegExp(`^[${LINK_WHITESPACE}]+|[${LINK_WHITESPACE}]+$`, "g");
+const LINK_WHITESPACE_LEAD = new RegExp(`^[${LINK_WHITESPACE}]+`);
+const LINK_WHITESPACE_TRAIL = new RegExp(`[${LINK_WHITESPACE}]+$`);
+
+/**
+ * 素材链接首尾只多了空白或零宽字符（中文输入法、网页粘贴常见）：去掉后交给后面的检查和网关，
+ * 网关拿到的就是检查过的那个值（11-19 第二轮复审：原来直接退回，用户看不出哪里错了）。
+ * 夹着控制字符的不动，交给 localInputValues 退回。文字字段不碰。
+ */
+export function trimLinkPadding<T extends Record<string, unknown>>(params: T): T {
+  const clean = (value: unknown, depth: number): unknown => {
+    if (depth > MAX_GUARDED_DEPTH) return value;
+    if (typeof value === "string") {
+      const stripped = value.replace(LINK_WHITESPACE_EDGES, "");
+      if (stripped === value || !/^https?:\/\//i.test(stripped) || HAS_LINK_PADDING.test(stripped)) return value;
+      // 首尾只有普通 ASCII 空白时不动：之前的版本照原样收下、按原样算请求指纹，改了会让发布前的报价、
+      // 已提交记录对不上（11-19 第三轮复审）。只有带了全角空格、不换行空格这类字符才去掉。
+      const padding = (LINK_WHITESPACE_LEAD.exec(value)?.[0] ?? "") + (LINK_WHITESPACE_TRAIL.exec(value)?.[0] ?? "");
+      return /[^\x00-\x7f]/.test(padding) ? stripped : value;
+    }
+    if (Array.isArray(value)) return value.map((item) => clean(item, depth + 1));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item, depth + 1)]));
+    }
+    return value;
+  };
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [key, key === "model" || TEXT_FIELDS.has(key) ? value : clean(value, 0)])
+  ) as T;
+}
+
+/** 当作链接判断前的预处理：去掉首尾控制字符和各种空白，删掉所有 tab、换行。 */
 function urlPreprocess(value: string): string {
-  return value.replace(/^[\u0000- ]+|[\u0000- ]+$/g, "").replace(/[\t\n\r]/g, "");
+  return value.replace(LINK_PADDING_EDGES, "").replace(/[\t\n\r]/g, "");
+}
+
+/** 去掉首尾普通空白（空格、tab、换行）后的原值：用来判断写法是否规整。 */
+function plainTrim(value: string): string {
+  return value.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, "");
 }
 
 const BASE64_ONLY = /^[A-Za-z0-9+/=_-]+$/;
@@ -415,16 +527,35 @@ function looksLikeBase64Mp3(value: string): boolean {
   return version !== 0b01 && layer !== 0b00 && bitrate !== 0b1111 && sampleRate !== 0b11;
 }
 
-/** 这个值是不是「写得不规整的网址」：http:/x、http:\x、中间夹 tab 换行、没写协议的 //x。 */
-function malformedLinkValue(raw: string, field: string): boolean {
-  const trimmed = raw.trim();
+const PADDED_LINK_REASON =
+  "it has an invisible character (a control character, no-break space or zero-width space) at its start or end; " +
+  "send the plain https:// link without it";
+const BACKSLASH_LINK_REASON =
+  "it contains a backslash, which link parsers read differently; use forward slashes only (write a literal backslash as %5C)";
+
+/**
+ * 这个值是不是「写得不规整的网址」，是的话为什么：http:/x、http:\\x、中间夹 tab 换行、没写协议的 //x；
+ * 首尾夹着不可见字符（11-19 S1）；带反斜杠（Python urllib 把 http://a\\@b 的主机读成 b，
+ * WHATWG 读成 a，两边对「访问的是哪台主机」理解不一样，11-19 第一轮复审）。
+ */
+function malformedLinkReason(raw: string, field: string): string | undefined {
+  // 只去普通空白：首尾夹着控制字符、不换行空格、零宽字符的链接整条退回，
+  // 免得网关和这里对「这是不是链接」理解不一样（11-19 S1）。
+  const trimmed = plainTrim(raw);
   const cleaned = urlPreprocess(raw);
-  if (/^https?:/i.test(cleaned)) return !/^https?:\/\//i.test(trimmed);
-  // 没写协议的写法只在素材字段里判：别的字段里的 "//…" 多半是普通文字。
-  if (!isSourceField(field) || !/^[\\/]{2}/.test(cleaned)) return false;
+  if (/^https?:/i.test(cleaned)) {
+    if (HAS_LINK_PADDING.test(trimmed)) return PADDED_LINK_REASON;
+    if (!/^https?:\/\//i.test(trimmed)) return MALFORMED_LINK_REASON;
+    if (cleaned.includes("\\")) return BACKSLASH_LINK_REASON;
+    return undefined;
+  }
+  // 没写协议的写法（//host/…）：素材字段里一律算；别的非文字字段只看不含空白的值（"// TODO" 是普通文字）。
+  if (!/^[\\/]{2}/.test(cleaned)) return undefined;
+  // 别的非文字字段：只有 // 后面跟着 IP 或带点的域名才算（"//minimal" 这类风格写法是普通取值）。
+  if (!isSourceField(field) && !PROTOCOL_RELATIVE_HOST.test(cleaned)) return undefined;
   // base64 的 MP3 只会出现在音频字段；单段主机名（//backend/…）解码后也可能碰巧像帧头，
   // 所以别的素材字段不放这个口子。
-  return !(expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned));
+  return expectedKind(field) === "audio" && looksLikeBase64Mp3(cleaned) ? undefined : MALFORMED_LINK_REASON;
 }
 
 /**
@@ -440,13 +571,17 @@ export function localInputValues(params: Record<string, unknown>): InputLinkProb
     if (out.length >= MAX_GUARDED_LINKS || depth > MAX_GUARDED_DEPTH) return;
     if (typeof value === "string") {
       const trimmed = value.trim();
+      // 协议和路径按和链接一样的规则去首尾（控制字符、Unicode 空白）：原来用 trim()，
+      // "\x01file:///etc/passwd" 不算本机协议，Python、WHATWG 解析器去掉控制字符后却是 file:（11-19 复审）。
+      const cleaned = urlPreprocess(value);
       const source = isSourceField(field);
-      if (source && LOCAL_SCHEMES.test(trimmed)) {
+      const malformed = malformedLinkReason(value, field);
+      if (schemeProblem(cleaned, source)) {
         out.push({ field, url: trimmed, reason: "only http and https links can be used" });
-      } else if (source && LOCAL_PATH.test(trimmed)) {
+      } else if (pathProblem(cleaned, source, field)) {
         out.push({ field, url: trimmed, reason: "it is a file path, not a link; upload the file first" });
-      } else if (malformedLinkValue(value, field)) {
-        out.push({ field, url: trimmed, reason: MALFORMED_LINK_REASON });
+      } else if (malformed) {
+        out.push({ field, url: trimmed, reason: malformed });
       }
     } else if (Array.isArray(value)) {
       for (const item of value) visit(field, item, depth + 1);

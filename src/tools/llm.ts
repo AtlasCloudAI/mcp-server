@@ -51,6 +51,7 @@ import {
 } from "../apps/generation-card.js";
 import {
   annotateToolCall,
+  chargeTelemetry,
   normalizeGenerationStatus,
   recordToolCallError,
   sanitizeModel,
@@ -480,6 +481,8 @@ Examples:
         const data = result.data as Record<string, unknown> | undefined;
         const priceUsd = priceOf(data?.price);
         const chargeStatus = chargeStatusOf(data?.charge_status);
+        // 实扣金额进埋点（同一任务查几次就报几次，看板按 task_hash 去重）。
+        annotateToolCall(chargeTelemetry(chargeStatus, priceUsd));
         const charge = chargeLine(chargeStatus, priceUsd);
         if (charge) lines.push(`${charge}\n`);
         // 11-18 ChatGPT 回归：模板单按 ID 查，回答写「实扣：没有报告」，列表里其实记着 $0.1408。

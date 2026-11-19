@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
 import { getRequestContext } from "./request-context.js";
-import { annotateToolCall } from "./tool-call-telemetry.js";
+import { annotateToolCall, telemetryUsd } from "./tool-call-telemetry.js";
 import { InMemoryUploadTicketStore } from "./upload-ticket-store.js";
 import { schemaDefaults } from "../utils/schema-validator.js";
 import type { Model, PromptThresholdPrice } from "../types.js";
@@ -159,6 +159,13 @@ export function autoSubmitThresholdUsd(): number {
  * that this costs less than the threshold" is not the same as "it is cheap", and
  * the whole point of the gate is the expensive case.
  */
+/** 报价金额进本次工具调用的埋点（只在生成报价这条路上；目录页的默认参数估价不算）。 */
+function annotateQuote(quote: Quote | null): void {
+  const usd = telemetryUsd(quote?.usd);
+  if (usd === undefined) return;
+  annotateToolCall({ estimated_cost_usd: usd, ...(quote?.partial ? { estimate_partial: true } : {}) });
+}
+
 export async function evaluateSpend(
   requestBody: unknown,
   options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
@@ -175,6 +182,7 @@ export async function evaluateSpend(
     } catch {
       quote = null;
     }
+    annotateQuote(quote);
     return {
       autoSubmit: false,
       quotedUsd: quote?.usd ?? null,
@@ -197,6 +205,7 @@ export async function evaluateSpend(
     };
   }
 
+  annotateQuote(quote);
   const quotedUsd = quote.usd;
   if (quotedUsd === null) {
     return {

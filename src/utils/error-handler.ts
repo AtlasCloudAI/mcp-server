@@ -61,6 +61,10 @@ export function classifyToolError(error: unknown): ToolCallError {
     if (error instanceof TypeError && error.message.includes("fetch failed")) {
       return { code: "network_error" };
     }
+    // 认不出的异常只带类名（TypeError、SyntaxError…），不带错误原文：原文可能含链接或参数。
+    // 这样看板上兜底的 upstream_failure 至少能分出是哪一类异常。
+    const name = error.name || error.constructor?.name;
+    if (name && name !== "Error" && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(name)) return { code: "upstream_failure", cause: name };
   }
   return { code: "upstream_failure" };
 }

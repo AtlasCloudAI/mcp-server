@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ApiRequestError, api } from "../services/api-client.js";
 import { rememberAssetNames, rememberAssetUrls, rememberedMedia } from "../services/media-names.js";
 import { handleError } from "../utils/error-handler.js";
+import { recordToolCallError } from "../services/tool-call-telemetry.js";
 import { describeImageShape, type ImageShape } from "../services/image-size.js";
 import { inputLinkCheckEnabled, readImageShapes } from "../services/input-link-check.js";
 import { toolAnnotations } from "../tool-policy.js";
@@ -283,6 +284,7 @@ export async function refreshLibraryInputs(params: Record<string, unknown>): Pro
     return unchanged;
   }
   if (missing.length > 0) {
+    recordToolCallError({ code: "resource_not_found", cause: "asset_deleted" });
     const names = fromLibrary.filter((input) => missing.includes(input.assetId)).map((input) => input.name);
     const one = names.length === 1;
     return {
@@ -337,6 +339,7 @@ export async function resolveAssetReferences(params: Record<string, unknown>): P
     ({ resolved, missing } = await resolveAssets([...new Set(refs.values())]));
   } catch (error) {
     console.error(`[assets] couldn't resolve asset references in params: ${error instanceof Error ? error.message : String(error)}`);
+    recordToolCallError({ code: "upstream_failure", cause: "asset_lookup_failed" });
     return {
       ok: false,
       message:
@@ -345,6 +348,7 @@ export async function resolveAssetReferences(params: Record<string, unknown>): P
     };
   }
   if (missing.length > 0) {
+    recordToolCallError({ code: "resource_not_found", cause: "asset_not_in_library" });
     return {
       ok: false,
       message:

@@ -590,6 +590,8 @@ export async function resolveConfirmedIdempotencyKey(
   request: Record<string, unknown>,
   modelPrice: ModelPrice | undefined
 ): Promise<ConfirmedKey> {
+  // 确认那次：核对令牌、找回幂等键，接着就提交，都算 submit 阶段。
+  annotateToolCall({ stage: "submit" });
   const pricing = currentPricing(modelPrice);
   const { subject } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(request, pricing);

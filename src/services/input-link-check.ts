@@ -23,6 +23,53 @@ export interface InputLinkProblem {
   reason: string;
 }
 
+/**
+ * 链接问题的埋点原因（error_cause）。只报这个固定枚举，链接本身和原因原文都不进埋点。
+ * 按 reason 文案归类，文案都在本文件里；新加一种原因时在这里补一条，漏了会落到 other。
+ */
+export type InputLinkCause =
+  | "not_public"
+  | "not_found"
+  | "unreachable"
+  | "timeout"
+  | "unresolved_host"
+  | "private_address"
+  | "web_page"
+  | "wrong_media_type"
+  | "too_many_redirects"
+  | "bad_scheme"
+  | "local_path"
+  | "malformed_link"
+  | "too_many_links"
+  | "other";
+
+const CAUSE_BY_REASON: ReadonlyArray<readonly [RegExp, InputLinkCause]> = [
+  [/not publicly accessible/, "not_public"],
+  [/not there anymore/, "not_found"],
+  [/did not respond in time/, "timeout"],
+  [/host name could not be found/, "unresolved_host"],
+  [/private or local address/, "private_address"],
+  [/is a web page/, "web_page"],
+  [/ file, but /, "wrong_media_type"],
+  [/redirects too many times/, "too_many_redirects"],
+  [/only http and https/, "bad_scheme"],
+  [/file path, not a link/, "local_path"],
+  [/not a valid link|not a complete link|invisible character|backslash/, "malformed_link"],
+  [/nested more than|input links, which can't all be checked/, "too_many_links"],
+  [/could not be opened/, "unreachable"],
+];
+
+export function inputLinkProblemCause(reason: string): InputLinkCause {
+  for (const [pattern, cause] of CAUSE_BY_REASON) if (pattern.test(reason)) return cause;
+  return "other";
+}
+
+/** 埋点里的 error_param：只报顶层字段名（images.0.url → images），不像字段名的不报。 */
+export function inputLinkProblemParam(field: string): string | undefined {
+  const top = field.split(".")[0];
+  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(top) ? top : undefined;
+}
+
 export interface InputLinkCheckOptions {
   /** 只给测试用：允许本机和内网地址（测试的假服务起在 127.0.0.1）。 */
   allowPrivateAddresses?: boolean;

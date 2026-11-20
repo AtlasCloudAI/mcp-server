@@ -13,7 +13,8 @@ import {
   alreadySubmittedLine,
 } from "../services/generation-confirmation.js";
 import { executeIdempotently } from "../services/idempotency.js";
-import { defaultRouteGuidance } from "../services/default-models.js";
+import { defaultRouteGuidance, leanModelGuidance } from "../services/default-models.js";
+import type { ToolTextOptions } from "../services/chatgpt-lean.js";
 import { handleError } from "../utils/error-handler.js";
 import {
   completedOutputContent,
@@ -67,7 +68,7 @@ export function inputShapeNotice(images: InputImageShape[] | undefined, body: Re
     : `- **Input image**: ${shapes}. The video takes this shape. If the user asked for another shape (for example vertical 9:16), tell them before they confirm.\n`;
 }
 
-export function registerVideoTools(server: McpServer): void {
+export function registerVideoTools(server: McpServer, options: ToolTextOptions = {}): void {
   server.registerTool(
     "atlas_generate_video",
     {
@@ -80,11 +81,11 @@ Pricing: a call without confirmed: true only prices the request. It returns the 
 
 Parameters are validated against the model's schema BEFORE the request is submitted: if a parameter is missing, has the wrong type, or is not accepted, the tool returns a precise error and does NOT spend credits.
 
-The "model" parameter takes an exact current model ID; atlas_list_models with type="Video" lists them, and an ID that is not in the catalog is rejected.
+${options.lean ? leanModelGuidance("Video") : `The "model" parameter takes an exact current model ID; atlas_list_models with type="Video" lists them, and an ID that is not in the catalog is rejected.
 
 ${defaultRouteGuidance("Video")}
 
-atlas_get_model_info shows the full parameter list and schema of a video model.
+atlas_get_model_info shows the full parameter list and schema of a video model.`}
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 

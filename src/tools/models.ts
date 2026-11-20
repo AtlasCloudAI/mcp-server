@@ -1,4 +1,5 @@
 import { quoteAtDefaults } from "../services/spend-policy.js";
+import type { ToolTextOptions } from "../services/chatgpt-lean.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getModels, findModel, getModelSchema } from "../services/doc-fetcher.js";
@@ -17,7 +18,7 @@ import {
 import { toolAnnotations } from "../tool-policy.js";
 import { formatWorkflowList, getWorkflowTemplates } from "../services/workflow-catalog.js";
 
-export function registerModelTools(server: McpServer): void {
+export function registerModelTools(server: McpServer, options: ToolTextOptions = {}): void {
   // List all available models
   server.registerTool(
     "atlas_list_models",
@@ -26,29 +27,32 @@ export function registerModelTools(server: McpServer): void {
       description: `List available models on Atlas Cloud, optionally filtered by type, in bounded pages.
 
 Args:
-  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio", "Workflow"
+  - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio"${options.lean ? "" : `, "Workflow"`}
   - limit (integer, optional): Models per page, 1-100 (default 50)
   - offset (integer, optional): Zero-based result offset (default 0)
 
 Returns:
   Markdown-formatted list of models grouped by type, including model ID, description, provider, and pricing.
 
-type="Workflow" lists Atlas Cloud's ready-made marketing workflows (product ad images, UGC ads, brand TVC, virtual try-on, listing image sets, A+ content, apparel photos, food motion, and cloning a reference image or video with your own product) with each one's model ID, category, required inputs and options. They run with atlas_generate_image or atlas_generate_video like any other model.
+${options.lean ? "" : `type="Workflow" lists Atlas Cloud's ready-made marketing workflows (product ad images, UGC ads, brand TVC, virtual try-on, listing image sets, A+ content, apparel photos, food motion, and cloning a reference image or video with your own product) with each one's model ID, category, required inputs and options. They run with atlas_generate_image or atlas_generate_video like any other model.
 
-Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Audio-type models (filter with type="Audio") include text-to-speech / TTS, music generation (e.g., Suno, MiniMax Music), and speech-to-text / ASR (e.g., Seed ASR). Lipsync / talking-avatar models are Video-type models.
+`}Note: image-to-3D and text-to-3D models are Image-type models (filter with type="Image"). Audio-type models (filter with type="Audio") include text-to-speech / TTS, music generation (e.g., Suno, MiniMax Music), and speech-to-text / ASR (e.g., Seed ASR). Lipsync / talking-avatar models are Video-type models.
 
 Examples:
   - No params -> list all models
   - type="Image" -> list only image generation models (includes 3D)
   - type="Video" -> list only video generation models (includes lipsync / talking-avatar)
   - type="Text" -> list only LLM/text models
-  - type="Audio" -> list only audio models (TTS, music generation, speech-to-text/ASR)
-  - type="Workflow" -> list ready-made marketing workflows (ads, UGC, try-on, e-commerce images)`,
+  - type="Audio" -> list only audio models (TTS, music generation, speech-to-text/ASR)${options.lean ? "" : `
+  - type="Workflow" -> list ready-made marketing workflows (ads, UGC, try-on, e-commerce images)`}`,
       inputSchema: {
-        type: z
-          .enum(["Text", "Image", "Video", "Audio", "Workflow"])
-          .optional()
-          .describe("Filter by model type: Text, Image, Video, Audio, or Workflow (ready-made marketing workflows)"),
+        // ChatGPT 精简版恢复成 OpenAI 审核过的旧版（不列 Workflow），见 services/chatgpt-lean.ts。
+        type: options.lean
+          ? z.enum(["Text", "Image", "Video", "Audio"]).optional().describe("Filter by model type: Text, Image, Video, or Audio")
+          : z
+              .enum(["Text", "Image", "Video", "Audio", "Workflow"])
+              .optional()
+              .describe("Filter by model type: Text, Image, Video, Audio, or Workflow (ready-made marketing workflows)"),
         limit: modelPageLimitSchema,
         offset: modelPageOffsetSchema,
       },

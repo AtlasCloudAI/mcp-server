@@ -54,9 +54,9 @@ function fakeUpload(): UploadFetcher & { received: Array<{ name: string; size: n
 }
 
 const png = () =>
-  new Response(new Uint8Array([137, 80, 78, 71, 1, 2, 3]), {
+  new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]), {
     status: 200,
-    headers: { "content-type": "image/png", "content-length": "7" },
+    headers: { "content-type": "image/png", "content-length": "12" },
   });
 
 function options(overrides: Partial<ChatFileImportOptions> = {}): ChatFileImportOptions {
@@ -79,7 +79,7 @@ test("附件下载后转存，文件名保留原名和扩展名", async () => {
   assert.equal(result.imported.length, 1);
   assert.equal(result.imported[0]!.url, STORED);
   assert.equal(result.imported[0]!.media_type, "image");
-  assert.deepEqual(upload.received, [{ name: "sneaker.png", size: 7 }]);
+  assert.deepEqual(upload.received, [{ name: "sneaker.png", size: 12 }]);
 });
 
 test("没给名字和类型时，按下载响应的 Content-Type 补扩展名", async () => {
@@ -271,6 +271,21 @@ test("HEIC 照片不转存，提示换成 JPEG/PNG；声明了就不下载，没
     options({ downloadFetcher: download, uploadFetcher: upload })
   );
   assert.match(sniffed.failed[0]!.reason, /HEIC\/HEIF/);
+  assert.deepEqual(upload.received, []);
+});
+
+test("文件内容不是图片视频音频（文字文件改名成 .png）时不转存，说明原因", async () => {
+  const download = fakeDownload({
+    [ATTACHMENT]: () =>
+      new Response("just some text, not a picture", { status: 200, headers: { "content-type": "image/png" } }),
+  });
+  const upload = fakeUpload();
+  const result = await importChatFiles(
+    [{ download_url: ATTACHMENT, file_id: "file_t", file_name: "fake.png" }],
+    options({ downloadFetcher: download, uploadFetcher: upload })
+  );
+  assert.deepEqual(result.imported, []);
+  assert.match(result.failed[0]!.reason, /not an image, video or audio file/);
   assert.deepEqual(upload.received, []);
 });
 

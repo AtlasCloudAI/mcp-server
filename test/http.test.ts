@@ -414,9 +414,55 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     }
   });
 
+  await t.test("ChatGPT before its tool copy has the card templates: tools/list keeps the templates, replies stay text-only", async () => {
+    const saved = { cards: process.env.MCP_UI_CARDS, chatgpt: process.env.MCP_UI_CARDS_CHATGPT };
+    process.env.MCP_UI_CARDS = "1";
+    delete process.env.MCP_UI_CARDS_CHATGPT;
+    const connect = async (token: string) => {
+      const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+        requestInit: { headers: { Authorization: `Bearer ${token}`, Origin: "https://chatgpt.com" } },
+      });
+      const client = new Client(
+        { name: "chatgpt-cards-switch-test", version: "1.0.0" },
+        { capabilities: { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } } }
+      );
+      await client.connect(transport);
+      return client;
+    };
+    const chatgpt = await connect("all");
+    const claude = await connect("claude-all");
+    try {
+      // OpenAI 同步工具副本时要拿得到模板：生成工具和卡片专用工具照旧挂在 ChatGPT 的工具列表上。
+      const { tools } = await chatgpt.listTools();
+      const generate = tools.find((entry) => entry.name === "atlas_generate_image");
+      assert.match(String((generate?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri), /^ui:\/\/atlascloud\/generation-card-/);
+      assert.ok(tools.some((entry) => entry.name === "atlas_card_status"));
+
+      // 但给模型的话按文字版：上传卡工具不说「卡片在传」，照旧给 curl。
+      const opened = await chatgpt.callTool({ name: "atlas_open_upload_card", arguments: {} });
+      const text = (opened.content as Array<{ text?: string }>)[0]?.text ?? "";
+      assert.doesNotMatch(text, /upload card/i);
+      assert.match(text, /curl/);
+
+      // Claude 网页版不受这个开关影响，照旧按卡片说。
+      const claudeOpened = await claude.callTool({ name: "atlas_open_upload_card", arguments: {} });
+      assert.match((claudeOpened.content as Array<{ text?: string }>)[0]?.text ?? "", /upload card/i);
+    } finally {
+      await chatgpt.close();
+      await claude.close();
+      if (saved.cards === undefined) delete process.env.MCP_UI_CARDS;
+      else process.env.MCP_UI_CARDS = saved.cards;
+      if (saved.chatgpt === undefined) delete process.env.MCP_UI_CARDS_CHATGPT;
+      else process.env.MCP_UI_CARDS_CHATGPT = saved.chatgpt;
+    }
+  });
+
   await t.test("upload card: cards on → the tool opens the card, the card may reach the relay, any origin can upload", async () => {
     const saved = process.env.MCP_UI_CARDS;
+    const savedChatGpt = process.env.MCP_UI_CARDS_CHATGPT;
     process.env.MCP_UI_CARDS = "1";
+    // 这里的令牌是 ChatGPT 的客户端：测的是卡片话术，要把 ChatGPT 的卡片话术也打开。
+    process.env.MCP_UI_CARDS_CHATGPT = "1";
     const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: { headers: { Authorization: "Bearer all", Origin: "https://chatgpt.com" } },
     });
@@ -462,6 +508,8 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       await client.close();
       if (saved === undefined) delete process.env.MCP_UI_CARDS;
       else process.env.MCP_UI_CARDS = saved;
+      if (savedChatGpt === undefined) delete process.env.MCP_UI_CARDS_CHATGPT;
+      else process.env.MCP_UI_CARDS_CHATGPT = savedChatGpt;
     }
 
     // 卡片沙箱的来源列不完：上传中转对任何来源放行（凭据在票据里），其余路径照旧只认白名单。

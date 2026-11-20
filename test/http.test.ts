@@ -14,6 +14,11 @@ import { isExactAllowedHost } from "../src/http/host-validation.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
 import { REMOTE_TOOL_NAMES, TOOL_POLICIES } from "../src/tool-policy.js";
 
+// 普通上传现在按文件头认格式（D9），假字节要带上真的文件头。
+const FAKE_PNG = () => Buffer.from("\x89PNG\r\n\x1a\npng-byte", "latin1");
+const FAKE_JPG = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("jpg-byte")]);
+const FAKE_MP4 = () => Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypisomvideo")]);
+
 // 令牌前缀决定客户端：claude* 是 Claude 网页版的元数据文档客户端，其余是 ChatGPT 的。
 // *models 只有只读 scope。两类客户端看到的工具清单一样。
 const CHATGPT_CLIENT_ID = "https://chatgpt.com/oauth/client.json";
@@ -303,7 +308,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const accepted = await fetch(`${baseUrl}${uploadPath}`, {
       method: "POST",
       headers: { "content-type": "application/octet-stream", "x-atlas-filename": "cat.png" },
-      body: Buffer.from("png-bytes"),
+      body: FAKE_PNG(),
     });
     assert.equal(accepted.status, 200);
     assert.deepEqual(await accepted.json(), {
@@ -317,15 +322,27 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     // 转投时带的是这个 subject 换来的凭据，不是任何服务端 key。
     assert.equal(uploads[0]!.authorization, "Bearer test-atlas-key");
     assert.equal(uploads[0]!.filename, "cat.png");
-    assert.equal(uploads[0]!.size, 9);
+    assert.equal(uploads[0]!.size, 16);
 
     // 文件名从 query 走时 UTF-8 原样到达；Content-Type 不限定（curl 默认发的不是 octet-stream）。
     const viaQuery = await fetch(
       `${baseUrl}${uploadPath}?filename=${encodeURIComponent("产品图.jpg")}`,
-      { method: "POST", body: Buffer.from("jpg") }
+      { method: "POST", body: FAKE_JPG() }
     );
     assert.equal(viaQuery.status, 200);
     assert.equal(uploads[1]!.filename, "产品图.jpg");
+
+    // D9：文字文件改名成 .png，普通上传也按文件头拦下，回 415，不转投上游。
+    const before = uploads.length;
+    const renamedText = await fetch(`${baseUrl}${uploadPath}?filename=fake.png`, {
+      method: "POST",
+      body: Buffer.from("this is just a text file pretending to be a picture"),
+    });
+    assert.equal(renamedText.status, 415);
+    const rejected = (await renamedText.json()) as { error: string; message: string };
+    assert.equal(rejected.error, "unsupported_media_type");
+    assert.match(rejected.message, /JPG, PNG/);
+    assert.equal(uploads.length, before);
 
     // 同一张票在有效期内可重复使用——两次都成了，正是这个意思。
 
@@ -357,7 +374,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
       const rejected = await fetch(`${baseUrl}${uploadPath}`, {
         method: "POST",
         headers: { "x-atlas-filename": "a.png" },
-        body: Buffer.from("x"),
+        body: FAKE_PNG(),
       });
       assert.equal(rejected.status, 401);
       assert.equal(((await rejected.json()) as { error: string }).error, "credential_rejected");
@@ -402,7 +419,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
         const response = await fetch(`${failing.baseUrl}${failingPath}`, {
           method: "POST",
           headers: { "x-atlas-filename": "clip.mp4" },
-          body: Buffer.from("video-bytes"),
+          body: FAKE_MP4(),
         });
         assert.equal(response.status, status);
         const body = (await response.json()) as { error: string; message: string };
@@ -524,7 +541,7 @@ test("real HTTP MCP surface enforces protocol, auth and security boundaries", as
     const posted = await fetch(`${baseUrl}${uploadPath}?filename=ref.png`, {
       method: "POST",
       headers: { Origin: sandbox, "content-type": "image/png" },
-      body: Buffer.from("png"),
+      body: FAKE_PNG(),
     });
     assert.equal(posted.status, 200);
     assert.equal(posted.headers.get("access-control-allow-origin"), "*");

@@ -87,6 +87,9 @@ function safeResponseShape(value: unknown): string {
   return JSON.stringify(shape).slice(0, 1000);
 }
 
+/** 文件内容（文件头）认不出是图片、视频、音频或 GLB。 */
+export const UNRECOGNISED_MEDIA_MESSAGE = "The file's contents are not a recognised image, video, audio or GLB file";
+
 // Custom error class that preserves HTTP status code
 export class ApiRequestError extends Error {
   constructor(
@@ -383,7 +386,7 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const apiKey = getApiKey();
   const fileBuffer = await readFile(resolvedFile);
   if (!looksLikeMedia(fileBuffer)) {
-    throw new ApiRequestError("The file's contents are not a recognised image, video, audio or GLB file");
+    throw new ApiRequestError(UNRECOGNISED_MEDIA_MESSAGE);
   }
   return uploadMediaBuffer(fileBuffer, fileName, apiKey);
 }
@@ -402,6 +405,11 @@ export async function uploadMediaBuffer(
   options: UploadBufferOptions = {}
 ): Promise<UploadResponse> {
   const { fetcher = fetch } = options;
+  // /model/uploadMedia 什么都收，只看扩展名的话，改名成 .png 的文字文件也会存成一张「图片」（11-20 Jia D9）。
+  // 资产库那条路由 AssetD 按内容认；这里补上同一道检查，远程上传中转、本地上传卡、聊天附件导入都经过这里。
+  if (!looksLikeMedia(fileBuffer)) {
+    throw new ApiRequestError(UNRECOGNISED_MEDIA_MESSAGE, 415);
+  }
   const formData = new FormData();
   formData.append("file", new Blob([fileBuffer]), fileName);
 

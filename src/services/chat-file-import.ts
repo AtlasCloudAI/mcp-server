@@ -407,6 +407,7 @@ function failureReason(error: unknown): string {
       return "Atlas Cloud rejected the sign-in while storing the file. Reconnect Atlas Cloud and try again.";
     }
     if (error.statusCode === 413) return "Atlas Cloud rejected the file as too large.";
+    if (error.statusCode === 415) return "The file's contents are not an image, video or audio file, so it can't be used as a generation input.";
     return `Storing the file in Atlas Cloud failed: ${error.message}`;
   }
   if (error instanceof Error && error.name === "AbortError") {

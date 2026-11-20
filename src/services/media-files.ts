@@ -42,6 +42,8 @@ export function sniffExtension(bytes: Uint8Array): string | undefined {
     if (brand === "M4A ") return "m4a";
     return "mp4";
   }
+  // 老的 QuickTime（.mov）没有 ftyp，直接以 moov/mdat/wide/free/skip/pnot 原子开头。
+  if (["moov", "mdat", "wide", "free", "skip", "pnot"].includes(ascii(bytes, 4, 4))) return "mov";
   if (ascii(bytes, 0, 4) === "OggS") return "ogg";
   if (ascii(bytes, 0, 4) === "fLaC") return "flac";
   if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";

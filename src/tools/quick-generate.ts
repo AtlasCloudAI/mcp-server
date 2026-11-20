@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ToolTextOptions } from "../services/chatgpt-lean.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { quoteBalanceNotice } from "../services/quote-balance.js";
 import { z } from "zod";
@@ -217,7 +218,7 @@ export function buildQuickGenerateParams(
   return params;
 }
 
-export function registerQuickGenerateTools(server: McpServer): void {
+export function registerQuickGenerateTools(server: McpServer, options: ToolTextOptions = {}): void {
   server.registerTool(
     "atlas_quick_generate",
     {
@@ -230,14 +231,14 @@ Parameters are validated against the model's schema BEFORE submitting. If extra_
 
 Pricing: a call without confirmed: true only prices the request. It returns the model, an estimated cost, the current balance when it can be read, and a confirmation_token, and it starts nothing, so nothing is billed. The job starts on a later call with confirmed: true, the same arguments and idempotency_key, and that confirmation_token; if the token was lost, the server matches the quote from the unchanged arguments. What a job was actually charged is in charge_status (atlas_get_prediction) and charged_usd (atlas_list_predictions): a failed job is usually not billed, but some are partly billed (a workflow that fails partway can be charged for the steps that ran). A deployment may set an auto-submit limit; calls under it start right away and report the estimate.
 
-When no single model matches the keyword, atlas_list_models gives exact model IDs for atlas_generate_image / atlas_generate_video / atlas_generate_audio. extra_params outside the model's schema are rejected; atlas_get_model_info lists the accepted ones.
+${options.lean ? "" : `When no single model matches the keyword, atlas_list_models gives exact model IDs for atlas_generate_image / atlas_generate_video / atlas_generate_audio. extra_params outside the model's schema are rejected; atlas_get_model_info lists the accepted ones.
 
-The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
+`}The tool searches for models by keyword matching against model ID, display name, and tags. After getting the prediction ID, use atlas_get_prediction to check the result.
 
 Input files: image, video and audio inputs are public URLs. A file on the user's machine is uploaded first with atlas_get_upload_url on a hosted connection or atlas_upload_media on a local one, and the returned url goes into params. A file in the user's Atlas Asset Library can go in as asset://<asset ID> (from atlas_search_assets or the Asset Library card); the server swaps in a fresh file URL. Base64 and data: URIs are not accepted. This connection already carries the user's Atlas credentials, so no API key is involved.
 
 Args:
-  - model_keyword (string, optional): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword. When it is omitted for an image or video, the server applies the default route (described in atlas_generate_video / atlas_generate_image), with the image-to-video or edit variant when image_url is given. Whenever the model is not one the user named (including when model_keyword is omitted), pass why_this_model with one short reason; it is shown on the quote card.
+${options.lean ? `  - model_keyword (string, optional): An exact model ID or a distinctive display-name keyword. When it is omitted for an image or video, the server uses Atlas Cloud's default model for the task (the image-to-video or edit variant when image_url is given). When the model is not one the user named, why_this_model carries one short reason, shown on the quote card.` : `  - model_keyword (string, optional): Prefer an exact current model ID returned by atlas_list_models; otherwise use a distinctive display-name keyword. When it is omitted for an image or video, the server applies the default route (described in atlas_generate_video / atlas_generate_image), with the image-to-video or edit variant when image_url is given. Whenever the model is not one the user named (including when model_keyword is omitted), pass why_this_model with one short reason; it is shown on the quote card.`}
   - type (string, required): Generation type: "Image", "Video", or "Audio"
   - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description)
   - image_url (string, optional): Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models
@@ -256,7 +257,9 @@ Returns:
           .min(1)
           .optional()
           .describe(
-            "Exact current model ID or a distinctive display-name keyword. When omitted for an image or video, the default route applies."
+            options.lean
+              ? "Exact model ID or a distinctive display-name keyword. When omitted for an image or video, Atlas Cloud's default model is used."
+              : "Exact current model ID or a distinctive display-name keyword. When omitted for an image or video, the default route applies."
           ),
         type: z
           .enum(["Image", "Video", "Audio"])

@@ -23,6 +23,7 @@ import { registerCardSelftestTool } from "./apps/card-selftest.js";
 import { registerCancelQuoteTool, registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
+import { usesLeanDescriptions } from "./services/chatgpt-lean.js";
 import { registerCardUploadPartTool } from "./tools/card-upload.js";
 
 export type ServerProfile = "stdio" | "remote";
@@ -44,6 +45,8 @@ export function createAtlasCloudServer(
   profile: ServerProfile = "stdio",
   client: ServerClient = {}
 ): McpServer {
+  // ChatGPT 拿精简版描述（开关 MCP_CHATGPT_LEAN_DESCRIPTIONS，见 services/chatgpt-lean.ts）。
+  const lean = profile === "remote" && usesLeanDescriptions(client.clientId);
   const server = new McpServer(
     {
       name: "atlascloud-ai-media",
@@ -56,7 +59,10 @@ export function createAtlasCloudServer(
     {
       instructions:
         "Use model discovery before generation when the model ID or parameters are uncertain. " +
-        "For marketing content such as product ads, UGC videos, try-on or e-commerce listing images, check atlas_list_models with type \"Workflow\" first: those ready-made workflows usually fit better than assembling base models. " +
+        // ChatGPT 精简版的 atlas_list_models 不列 Workflow（services/chatgpt-lean.ts），这句不给它。
+        (lean
+          ? ""
+          : "For marketing content such as product ads, UGC videos, try-on or e-commerce listing images, check atlas_list_models with type \"Workflow\" first: those ready-made workflows usually fit better than assembling base models. ") +
         "Pick the model and parameters yourself from the user's request and the live catalog; ask only when something material is genuinely ambiguous. " +
         "When the user refers to a file they already have on Atlas Cloud (an earlier upload or result), find it with atlas_search_assets and turn it into an input URL with atlas_use_assets instead of asking them to upload it again. " +
         "Generation tools quote before anything runs. Call once without confirmation_token. If the result is confirmation_required, nothing was spent: show the user that exact model and cost and stop. " +
@@ -74,12 +80,12 @@ export function createAtlasCloudServer(
   );
 
   registerDocsTools(server);
-  registerModelTools(server);
-  registerImageTools(server);
-  registerVideoTools(server);
+  registerModelTools(server, { lean });
+  registerImageTools(server, { lean });
+  registerVideoTools(server, { lean });
   registerAudioTools(server);
   registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote });
-  registerQuickGenerateTools(server);
+  registerQuickGenerateTools(server, { lean });
   registerAccountTools(server);
   registerPredictionTools(server);
   registerAssetTools(server);

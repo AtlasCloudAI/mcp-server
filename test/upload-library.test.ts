@@ -10,6 +10,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
+// 普通上传现在按文件头认格式（D9），假字节要带上真的文件头。
+const FAKE_PNG = () => Buffer.from("\x89PNG\r\n\x1a\npng-byte", "latin1");
+
 let fake: Server;
 /** 打开后资产库接口回 AssetD 的 403 asset_library_not_activated（充值后才能用）。 */
 let notActivated = false;
@@ -280,7 +283,7 @@ test("资产库没开通：签普通的票，照旧转投 /model/uploadMedia，�
     assert.equal(structured.saves_to_asset_library, false);
     assert.equal(structured.max_bytes, 33_554_432);
     assert.equal(structured.max_video_bytes, undefined);
-    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: FAKE_PNG() });
     assert.equal(response.status, 200);
     const body = (await response.json()) as Record<string, unknown>;
     assert.equal(body.url, "https://atlas-img.example.test/images/x.png");
@@ -300,7 +303,7 @@ test("签票后资产库变得不能用：回 401 让卡片换票（换到的是
   try {
     const { path } = await mint(relay.baseUrl);
     notActivated = true;
-    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: FAKE_PNG() });
     assert.equal(response.status, 401);
     assert.equal(((await response.json()) as { error: string }).error, "asset_library_not_activated");
   } finally {
@@ -327,7 +330,7 @@ test("上传空间满了：回 413 并另给一张普通上传的地址，文件
   const relay = await startRelay();
   try {
     const { path } = await mint(relay.baseUrl);
-    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    const response = await fetch(`${relay.baseUrl}${path}?filename=cat.png`, { method: "POST", body: FAKE_PNG() });
     assert.equal(response.status, 413);
     const body = (await response.json()) as Record<string, unknown>;
     assert.equal(body.error, "upload_quota_exceeded");
@@ -338,7 +341,7 @@ test("上传空间满了：回 413 并另给一张普通上传的地址，文件
 
     const before = media.length;
     const fallbackPath = new URL(String(body.fallback_upload_url)).pathname;
-    const retried = await fetch(`${relay.baseUrl}${fallbackPath}?filename=cat.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    const retried = await fetch(`${relay.baseUrl}${fallbackPath}?filename=cat.png`, { method: "POST", body: FAKE_PNG() });
     assert.equal(retried.status, 200);
     const done = (await retried.json()) as Record<string, unknown>;
     assert.equal(done.url, "https://atlas-img.example.test/images/x.png");
@@ -356,7 +359,7 @@ test("超像素的图片：回 422 image_too_large，带尺寸和上限，不再
   const relay = await startRelay();
   try {
     const { path } = await mint(relay.baseUrl);
-    const response = await fetch(`${relay.baseUrl}${path}?filename=hero.png`, { method: "POST", body: Buffer.from("png-bytes") });
+    const response = await fetch(`${relay.baseUrl}${path}?filename=hero.png`, { method: "POST", body: FAKE_PNG() });
     assert.equal(response.status, 422);
     const body = (await response.json()) as Record<string, unknown>;
     assert.equal(body.error, "image_too_large");
@@ -376,7 +379,7 @@ test("AssetD 没解析出文件（400 file field is required）：报上传失�
   const relay = await startRelay();
   try {
     const { path } = await mint(relay.baseUrl);
-    const response = await fetch(`${relay.baseUrl}${path}?filename=${encodeURIComponent("photo (1).png")}`, { method: "POST", body: Buffer.from("png-bytes") });
+    const response = await fetch(`${relay.baseUrl}${path}?filename=${encodeURIComponent("photo (1).png")}`, { method: "POST", body: FAKE_PNG() });
     assert.equal(response.status, 502);
     const body = (await response.json()) as Record<string, unknown>;
     assert.equal(body.error, "upstream_upload_failed");
@@ -396,7 +399,7 @@ test("带括号的文件名照常存进资产库，原名不变", async () => {
     const response = await fetch(`${relay.baseUrl}${path}?filename=${encodeURIComponent("photo (1).png")}`, {
       method: "POST",
       headers: { "content-type": "image/png" },
-      body: Buffer.from("png-bytes"),
+      body: FAKE_PNG(),
     });
     assert.equal(response.status, 200);
     const head = received.at(-1)!.body.toString("utf8");

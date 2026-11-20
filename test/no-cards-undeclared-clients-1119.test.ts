@@ -155,6 +155,25 @@ test("卡片打开时：没声明 MCP Apps 的动态注册客户端只给文字�
     const tools = await listToolsAs(baseUrl, "chatgpt", {});
     assert.match(String(cardTemplate(tools.find((tool) => tool.name === "atlas_generate_image"))), /^ui:\/\/atlascloud\/generation-card/);
   });
+
+  // 11-20 生产：Codex 桌面版声明了 MCP Apps、照模板画卡片，卡片刷新调没注册的 atlas_card_status，每次都报错。
+  // 按设计不显示卡片的客户端，声明了也一样只给文字版：不挂模板，不注册卡片专用工具。
+  for (const [label, clientId] of [
+    ["Codex", "https://chatgpt.com/oauth/codex/client.json"],
+    ["Claude Code", "https://claude.ai/oauth/claude-code-client-metadata"],
+  ] as const) {
+    await t.test(`${label}（声明了 MCP Apps 也一样）：工具上没有卡片模板，也没有卡片专用工具`, async () => {
+      const tools = await listToolsAs(baseUrl, clientId, MCP_APPS);
+      const names = tools.map((tool) => tool.name);
+      for (const name of CARD_ONLY_TOOLS) assert.equal(names.includes(name), false, name);
+      for (const tool of tools) {
+        assert.equal(cardTemplate(tool), undefined, `${tool.name} 还挂着卡片模板`);
+        assert.equal(tool._meta?.["openai/widgetAccessible"], undefined, tool.name);
+      }
+      assert.ok(names.includes("atlas_generate_image"));
+      assert.ok(names.includes("atlas_get_prediction"));
+    });
+  }
 });
 
 test("withoutCards：只去掉卡片的键，别的元数据和结果内容原样保留", () => {

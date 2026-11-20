@@ -262,9 +262,11 @@ export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
     scope: "tasks:write",
     remote: true,
     billable: false,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // 作废不能撤销：作废后那份报价再也不能确认，只能重新报价。OpenAI 自动检查 11-20 按这条拦下了它
+    // （destructiveHint: false 却会造成难以撤销的改变）。
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     annotationJustification:
-      "Marks an unconfirmed quote as withdrawn so its card can no longer submit it; nothing is submitted or billed.",
+      "Withdraws an unconfirmed quote, which cannot be undone: the withdrawn quote can never be confirmed again and a new quote is needed. Nothing is submitted or billed.",
   },
   // 模型在拿不到文件字节时调它打开上传卡（Higgsfield 的 media_upload_widget 同理：兜底，不是默认）。
   atlas_open_upload_card: {

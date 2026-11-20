@@ -30,7 +30,7 @@ import {
   predictionResponseSchema,
   type PredictionResponse,
 } from "../response-schemas.js";
-import { currentClientProfile } from "../services/client-profile.js";
+import { currentClientIsChatGpt, currentClientProfile } from "../services/client-profile.js";
 import { getRequestContext } from "../services/request-context.js";
 import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
@@ -95,6 +95,22 @@ export function generationCardEnabled(): boolean {
 }
 
 /**
+ * 给 ChatGPT 的话术按卡片走（默认关）。
+ *
+ * ChatGPT 上架的应用不读实时的 tools/list，用的是 OpenAI 定期同步的一份工具副本。副本要是在卡片
+ * 打开之前同步的，就没有卡片模板，ChatGPT 画不出卡片；这时还说「点卡片上的按钮」「卡片会自己刷新，
+ * 别再查」，用户既看不到卡片，也拿不到结果（2026-11-20 生产：MCP_UI_CARDS 02:45 UTC 打开，副本停在
+ * 11-19 11:41 UTC，18 个工具都没有 ui.resourceUri；之后一小时里有 6 个提交没人再去查）。
+ *
+ * 服务端看不到副本里有没有模板，所以单独开关：关着时 ChatGPT 按文字版走（照常报价、确认、自己查结果），
+ * 工具列表和结果里的卡片数据照旧给，OpenAI 下次同步就能带上模板。确认 ChatGPT 画得出卡片之后
+ * （connectors/<app_id>/actions 里生成工具带 ui.resourceUri）再设 MCP_UI_CARDS_CHATGPT=1。
+ */
+export function chatGptCardsEnabled(): boolean {
+  return boolEnv("MCP_UI_CARDS_CHATGPT", false);
+}
+
+/**
  * 客户端会渲染 MCP Apps 卡片。只有这时才改给模型的指引：卡片会自己刷新到出结果、
  * 报价在卡里确认、文件在卡里传，模型再查一次就会在对话里多出一张卡。
  *
@@ -105,6 +121,7 @@ export function generationCardEnabled(): boolean {
  */
 export function clientRendersCards(server: McpServer): boolean {
   if (!generationCardEnabled()) return false;
+  if (currentClientIsChatGpt() && !chatGptCardsEnabled()) return false;
   const capabilities = server.server.getClientCapabilities() as Parameters<
     typeof getUiCapability
   >[0];

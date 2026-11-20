@@ -127,7 +127,9 @@ function contextFor(clientId: string) {
 
 test("ChatGPT 里的报价说明：打字确认要带 @应用名，别的客户端不加这句", async () => {
   const saved = process.env.MCP_UI_CARDS;
+  const savedChatGpt = process.env.MCP_UI_CARDS_CHATGPT;
   process.env.MCP_UI_CARDS = "1";
+  process.env.MCP_UI_CARDS_CHATGPT = "1";
   try {
     const quote = async () => ({
       structuredContent: {
@@ -161,5 +163,7 @@ test("ChatGPT 里的报价说明：打字确认要带 @应用名，别的客户�
   } finally {
     if (saved === undefined) delete process.env.MCP_UI_CARDS;
     else process.env.MCP_UI_CARDS = saved;
+    if (savedChatGpt === undefined) delete process.env.MCP_UI_CARDS_CHATGPT;
+    else process.env.MCP_UI_CARDS_CHATGPT = savedChatGpt;
   }
 });

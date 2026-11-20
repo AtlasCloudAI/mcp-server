@@ -33,10 +33,10 @@
 - 🎬 **動画** (250) — Seedance 2.5 Flash · Seedance 2.5 · Bach 1.0 Pro · MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash
 - 🎨 **画像** (160) — MiniMax H3-Image Highspeed · MiniMax H3-Image · GPT Image 2.6 Sunburst · GPT Image 2.6 Flare
 - 🧊 **3D** (14) — Seed3D 2.0 · Tripo H3.1 · Hunyuan 3D Rapid · Hunyuan 3D Pro
-- 💬 **LLM** (92) — Hy4 · Gemini 4 Hydrogen · Gemini 4 Carbon · DeepSeek V4.1 Flash 1017
+- 💬 **LLM** (96) — Hy4 · Gemini 4 Neon · Gemini 4 Hydrogen · Gemini 4 Carbon
 - 🔊 **音声 (TTS · 音楽 · 音声認識)** (22) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **さらに探す** — [全 572 モデル »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **さらに探す** — [全 576 モデル »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **最新の動画モデル** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3。

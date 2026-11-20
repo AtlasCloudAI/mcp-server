@@ -9,6 +9,7 @@ import { chatGptCardsEnabled, clientRendersCards } from "../src/apps/generation-
 import { withGenerationCard } from "../src/apps/generation-quote.js";
 import { InMemoryIdempotencyStore } from "../src/services/idempotency.js";
 import { runWithRequestContext } from "../src/services/request-context.js";
+import { CARD_TOOL_POLICIES } from "../src/tool-policy.js";
 
 const CHATGPT = "https://chatgpt.com/oauth/client.json";
 const CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata";
@@ -150,4 +151,10 @@ test("ChatGPT 开关关着：报价不叫用户点卡片，提交后不说「卡
   } finally {
     restore();
   }
+});
+
+test("atlas_cancel_quote 标成 destructive：作废后那份报价不能再确认（OpenAI 自动检查 11-20 拦下的那条）", () => {
+  const annotations = CARD_TOOL_POLICIES.atlas_cancel_quote.annotations;
+  assert.equal(annotations.destructiveHint, true);
+  assert.equal(annotations.readOnlyHint, false);
 });

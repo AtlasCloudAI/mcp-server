@@ -30,7 +30,7 @@ import {
 import { createAtlasCloudServer } from "./server.js";
 import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
 import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration, uiDeclaration } from "./services/card-clients.js";
-import { clientProfile } from "./services/client-profile.js";
+import { clientProfile, rendersCards } from "./services/client-profile.js";
 import {
   fetchAndValidateAuthorizationServerMetadataWithRetry,
   JwtAccessTokenVerifier,
@@ -245,7 +245,10 @@ export function createHttpApp(
       // capabilities 为空）会照工具上的模板画卡片，但宿主弹回卡片消息、拦卡片发起的调用，按钮点不动；
       // GrokBot 自报「Cursor」却不显示卡片。Cursor 声明了，照旧给卡片。没有记录（没 initialize 过、Redis 查不到）
       // 照旧给卡片，不比以前差。
-      let noCards = false;
+      // 认得出、按设计不显示卡片的客户端（Codex、Claude Code、Hermes）也去掉卡片模板：卡片专用工具本来就不给它们
+      // 注册，模板却照挂。Codex 桌面版（ChatGPT.app 26.1111）已经会照模板画卡片，卡片刷新时调没注册的
+      // atlas_card_status，每次都报错、每分钟几十次（2026-11-20 生产，两位用户共 326 次）。
+      let noCards = generationCardEnabled() && !rendersCards(req.auth?.clientId);
       if (generationCardEnabled() && clientProfile(req.auth?.clientId) === "other") {
         const declared = declaresMcpApps(req.body);
         if (declared !== undefined) {

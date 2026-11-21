@@ -113,6 +113,8 @@ export interface HttpServerConfig {
   trustProxy: number | boolean;
   preAuthRequestsPerMinute: number;
   subjectRequestsPerMinute: number;
+  /** 卡片刷新工具单独的每分钟额度（不占 subjectRequestsPerMinute）。 */
+  cardRequestsPerMinute: number;
   challengeToken?: string;
   resourceDocumentation?: URL;
   credentialMode: CredentialMode;
@@ -176,6 +178,10 @@ const envSchema = z.object({
   MCP_TRUST_PROXY: z.string().default("0"),
   MCP_PREAUTH_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(10000).default(120),
   MCP_SUBJECT_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(10000).default(60),
+  // 卡片自己刷新（atlas_card_status、atlas_card_check_submission）单独计额度。每张进行中的卡片约 3 秒查一次，
+  // 同时开三四张就把每分钟 60 次的总额度用完，连真正的生成请求都被挡（11-21 生产：一位用户卡片被限流 773 次，
+  // 其中 11 次生成音频也被挡）。卡片只读任务状态、不提交不扣费，给它自己的额度。
+  MCP_CARD_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(10000).default(240),
   // 挑战值按原文回给 OpenAI，多一个换行都算不匹配。运维多半是从门户复制粘贴到
   // Secret 里的，YAML 块标量和复制操作都容易带上尾随空白，所以在入口就裁掉。
   OPENAI_APPS_CHALLENGE_TOKEN: z
@@ -575,6 +581,7 @@ export function loadHttpServerConfig(
     trustProxy: parseTrustProxy(env.MCP_TRUST_PROXY),
     preAuthRequestsPerMinute: env.MCP_PREAUTH_REQUESTS_PER_MINUTE,
     subjectRequestsPerMinute: env.MCP_SUBJECT_REQUESTS_PER_MINUTE,
+    cardRequestsPerMinute: env.MCP_CARD_REQUESTS_PER_MINUTE,
     challengeToken: env.OPENAI_APPS_CHALLENGE_TOKEN,
     resourceDocumentation: env.MCP_RESOURCE_DOCUMENTATION
       ? new URL(env.MCP_RESOURCE_DOCUMENTATION)

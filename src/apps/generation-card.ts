@@ -36,6 +36,13 @@ import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { ATLAS_SITE_URL } from "../constants.js";
 import { handleError } from "../utils/error-handler.js";
+import {
+  annotateToolCall,
+  chargeTelemetry,
+  normalizeGenerationStatus,
+  sanitizeModel,
+  taskHash,
+} from "../services/tool-call-telemetry.js";
 import type { HistoryItem } from "../response-schemas.js";
 
 // 对话内的「生成卡」（MCP Apps 标准）：同一张卡按 state 显示进度、作品、失败等样子，
@@ -600,6 +607,9 @@ export function registerCardStatusTool(server: McpServer): void {
     },
     async ({ prediction_id }) => {
       void rememberCardClient();
+      // 埋点和 atlas_get_prediction 一样记任务、模型、状态和实扣：用户经卡片拿结果时，看板原来只看到
+      // command=unknown，核不了这些任务扣没扣费（11-21 生产巡检）。
+      annotateToolCall({ execution_mode: "wait", stage: "wait", task_hash: taskHash(prediction_id) });
       try {
         const { result } = await waitForPrediction((budget) =>
           generationApi<PredictionResponse>(
@@ -613,7 +623,14 @@ export function registerCardStatusTool(server: McpServer): void {
           )
         );
         // 工作流单查结果接口不给扣费：到历史账单里补，结果卡才有实扣（11-18 WorkBuddy H10）。
-        const card = await predictionCardData(prediction_id, await withRecordedCharge(prediction_id, result));
+        const charged = await withRecordedCharge(prediction_id, result);
+        const data = charged.data as Record<string, unknown> | undefined;
+        annotateToolCall({
+          model: sanitizeModel(data?.model),
+          generation_status: normalizeGenerationStatus(charged.data?.status),
+          ...chargeTelemetry(chargeStatusOf(data?.charge_status), priceOf(data?.price)),
+        });
+        const card = await predictionCardData(prediction_id, charged);
         return {
           _meta: { [CARD_META_KEY]: card },
           structuredContent: { card },

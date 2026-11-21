@@ -318,6 +318,47 @@ test("刷新工具只回卡片数据：没有图片块，放了两天且打不�
   }
 });
 
+test("刷新工具也记埋点：任务、模型、状态和实扣，和查结果一样（11-21 生产巡检）", async () => {
+  // 用户经卡片拿结果时，埋点原来只记 command=unknown，看板核不了这些任务扣没扣费。
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  const { client, close } = await connect({ rendersCards: true });
+  const { runWithRequestContext } = await import("../src/services/request-context.js");
+  const { ToolCallTelemetry } = await import("../src/services/tool-call-telemetry.js");
+  const { InMemoryIdempotencyStore } = await import("../src/services/idempotency.js");
+  const refresh = async (predictionId: string) => {
+    const toolCall = new ToolCallTelemetry("atlas_card_status");
+    await runWithRequestContext(
+      {
+        authInfo: { token: "t", clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata", scopes: ["tasks:read"] },
+        subject: "42",
+        atlasApiKey: "test-atlas-key",
+        idempotencyStore: new InMemoryIdempotencyStore(),
+        idempotencyTtlSeconds: 60,
+        generationConfirmationSecret: "s".repeat(32),
+        generationConfirmationTtlSeconds: 600,
+        toolCall,
+      },
+      () => client.callTool({ name: "atlas_card_status", arguments: { prediction_id: predictionId } })
+    );
+    return toolCall.properties({}, 200);
+  };
+  try {
+    const done = await refresh("done");
+    assert.equal(done.command, "atlas_card_status");
+    assert.equal(done.model, "black-forest-labs/flux-schnell");
+    assert.equal(done.generation_status, "completed");
+    assert.match(String(done.task_hash), /^[0-9a-f]{16}$/);
+    assert.equal(JSON.stringify(done).includes("done"), false, "不带原始任务 ID");
+
+    const unsettled = await refresh("unsettled");
+    assert.equal(unsettled.charge_status, "pending");
+    assert.equal("charged_usd" in unsettled, false, "还没结算时不报金额");
+  } finally {
+    await close();
+    restore();
+  }
+});
+
 test("测试卡片：两个开关都开才注册，不调接口，结果标成示例", async () => {
   const restore = withEnv({ MCP_UI_CARDS: "1", MCP_UI_SELFTEST: "1" });
   const { client, close } = await connect({ rendersCards: true });

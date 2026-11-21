@@ -167,6 +167,26 @@ export function createPreAuthRateLimiter(
   });
 }
 
+function subjectKey(req: Request): string {
+  const subject = req.auth?.extra?.sub;
+  return typeof subject === "string" && subject !== ""
+    ? `sub:${subject}`
+    : `client:${req.auth?.clientId ?? "unknown"}`;
+}
+
+/** 卡片自己刷新用的工具：只读任务状态，不提交、不扣费。 */
+const CARD_REFRESH_TOOLS: ReadonlySet<string> = new Set(["atlas_card_status", "atlas_card_check_submission"]);
+
+/** 这个请求里的工具调用全是卡片刷新（没有工具调用的请求不算）。 */
+export function isCardRefreshRequest(req: Request): boolean {
+  const names = calledToolNames(req);
+  return names.length > 0 && names.every((name) => CARD_REFRESH_TOOLS.has(name));
+}
+
+/**
+ * 每个用户每分钟的总额度。卡片刷新不算在里面（见 createCardRateLimiter）：同时开几张进行中的卡片，
+ * 它们的刷新就能把额度用完，用户真正要做的生成反而被挡（11-21 生产）。
+ */
 export function createSubjectRateLimiter(
   config: HttpServerConfig
 ): RequestHandler {
@@ -175,12 +195,23 @@ export function createSubjectRateLimiter(
     limit: config.subjectRequestsPerMinute,
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    keyGenerator: (req) => {
-      const subject = req.auth?.extra?.sub;
-      return typeof subject === "string" && subject !== ""
-        ? `sub:${subject}`
-        : `client:${req.auth?.clientId ?? "unknown"}`;
-    },
+    keyGenerator: subjectKey,
+    skip: isCardRefreshRequest,
+    message: { error: "rate_limit_exceeded" },
+  });
+}
+
+/** 卡片刷新单独的每分钟额度，同样按用户计。 */
+export function createCardRateLimiter(
+  config: HttpServerConfig
+): RequestHandler {
+  return rateLimit({
+    windowMs: 60_000,
+    limit: config.cardRequestsPerMinute,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    keyGenerator: (req) => `card:${subjectKey(req)}`,
+    skip: (req) => !isCardRefreshRequest(req),
     message: { error: "rate_limit_exceeded" },
   });
 }

@@ -49,6 +49,7 @@ import { prewarmDocSearch } from "./services/doc-search.js";
 import {
   challengeUnauthenticated,
   createPreAuthRateLimiter,
+  createCardRateLimiter,
   createSubjectRateLimiter,
   createUploadRateLimiter,
   enforceExactHost,
@@ -208,6 +209,7 @@ export function createHttpApp(
     // 认证之后才知道是谁、哪个客户端；限流之前，被限流的调用也算一次调用。
     trackToolCalls(config, dependencies.analytics),
     createSubjectRateLimiter(config),
+    createCardRateLimiter(config),
     enforceToolScopes(config, resourceMetadataUrl),
     async (req, res) => {
       if (!req.auth) {

@@ -37,6 +37,7 @@ import {
   JwtAccessTokenVerifier,
 } from "./http/auth.js";
 import { OpenAIToolMetadataTransport } from "./http/openai-tool-metadata-transport.js";
+import { usesPublishedTools } from "./services/chatgpt-lean.js";
 import {
   createPostHogSink,
   toolCallOf,
@@ -274,7 +275,8 @@ export function createHttpApp(
       const transport = new OpenAIToolMetadataTransport(
         baseTransport,
         toolCall ? (message) => toolCall.observeResponse(message) : undefined,
-        noCards
+        noCards,
+        usesPublishedTools(req.auth?.clientId)
       );
       let closed = false;
       const close = (): void => {

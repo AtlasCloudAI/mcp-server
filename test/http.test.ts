@@ -749,6 +749,48 @@ test("pre-auth and authenticated-subject rate limits return 429", async () => {
   }
 });
 
+test("card refreshes have their own rate limit and never use up the subject limit (11-21 production)", async () => {
+  // 11-21 生产：一位用户同时开着多张进行中的卡片，卡片刷新把每分钟 60 次的总额度用完，
+  // 被限流 773 次，其中 11 次真正的生成音频请求也被挡。卡片刷新单独计额度，不再占总额度。
+  const harness = await startHarness({
+    MCP_PREAUTH_REQUESTS_PER_MINUTE: "100",
+    MCP_SUBJECT_REQUESTS_PER_MINUTE: "2",
+    MCP_CARD_REQUESTS_PER_MINUTE: "3",
+  });
+  const post = (body: string) =>
+    fetch(`${harness.baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer all",
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body,
+    });
+  try {
+    const cardStatuses: number[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const tool = index % 2 === 0 ? "atlas_card_status" : "atlas_card_check_submission";
+      const response = await post(rpcBody("tools/call", { name: tool, arguments: { prediction_id: "p-1" } }));
+      cardStatuses.push(response.status);
+    }
+    assert.deepEqual(cardStatuses, [200, 200, 200, 429], "卡片刷新按自己的额度限流");
+
+    // 卡片刷新已经超额，用户自己的调用照样有完整的总额度。
+    const otherStatuses: number[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      otherStatuses.push((await post(rpcBody("tools/list"))).status);
+    }
+    assert.deepEqual(otherStatuses, [200, 200, 429], "总额度没被卡片刷新占用");
+
+    // 其他工具调用（包括生成）按总额度算，不会借用卡片额度：总额度用完就照样被挡。
+    const generate = await post(rpcBody("tools/call", { name: "atlas_get_balance", arguments: {} }));
+    assert.equal(generate.status, 429);
+  } finally {
+    await closeServer(harness.server);
+  }
+});
+
 test("MCP_ADVERTISED_SCOPES changes the PRM and both 401 challenges together", async () => {
   // 2026-09-20 WorkBuddy 联调：SDK 组授权 URL 时优先取 401 头里的 scope，取不到才
   // 回落到 PRM 的 scopes_supported。此前中间件把 ADVERTISED_SCOPES 常量写死进挑战头，

@@ -373,6 +373,33 @@ export function isRateLimited(text: string | undefined): boolean {
   return !!text && /rate[\s_-]?limit|too many requests|\b429\b/i.test(text);
 }
 
+/** 卡片刷新连着失败时，第一次歇这么久，之后每次翻倍，最多 POLL_RETRY_MAX_MS。 */
+const POLL_RETRY_FIRST_MS = 5_000;
+const POLL_RETRY_MAX_MS = 60_000;
+/** 刷新连着这么多次都是重试也没用的错（见 permanentPollError），卡片就不再自己刷新。 */
+export const POLL_PERMANENT_LIMIT = 3;
+
+/**
+ * 卡片刷新失败后，下一轮前歇多久。failures：连着失败了几次（从 1 数）。原来每次失败都只歇 5 秒，
+ * 被限流时也一样，限流的 429 越刷越多（11-22 生产 Claude 卡片 20 分钟 512 次 429）。
+ * 被限流至少歇 RATE_LIMIT_WAIT_MS。
+ */
+export function pollRetryDelay(failures: number, rateLimited = false): number {
+  const backoff = Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_FIRST_MS * 2 ** Math.max(0, failures - 1));
+  return rateLimited ? Math.max(backoff, RATE_LIMIT_WAIT_MS) : backoff;
+}
+
+/**
+ * 刷新的报错是不是再试也没用：参数校验不过（MCP -32602 / Input validation error）、工具不存在（旧卡片
+ * 调了服务端已经去掉的工具）、任务查不到。网络抖动、超时、限流、上游 5xx 都不算。
+ */
+export function permanentPollError(text: string | undefined): boolean {
+  if (!text || isRateLimited(text)) return false;
+  return /input validation error|invalid (?:params|arguments)|-32602|unknown tool|tool [^\s]+ not found|prediction[^.]*not found|not found:? prediction/i.test(
+    text
+  );
+}
+
 /**
  * 模型暂时用不了：网关没有这个模型的路由（"model[x/y] router not found"，test 上实测）、
  * 上游说模型下线、过载、没有可用通道。

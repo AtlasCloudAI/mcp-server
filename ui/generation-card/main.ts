@@ -20,11 +20,15 @@ import {
   cardFromToolResult,
   earliestTime,
   fileNameOf,
+  POLL_PERMANENT_LIMIT,
   isActive,
+  isRateLimited,
   isSignedOut,
   keepImageRatio,
   newIdempotencyKey,
   notStartedReason,
+  permanentPollError,
+  pollRetryDelay,
 } from "./card.js";
 import { type CardActions, type ViewOptions, button, cancelledCard, errorCard, h, loadingCard, notStartedCard, renderCard, tickTimers } from "./view.js";
 import {
@@ -416,6 +420,9 @@ async function pollLoop(): Promise<void> {
   polling = true;
   pollStartedAt = Date.now();
   stalled = false;
+  // 连着失败了几次、其中连着几次是再试也没用的错：成功一次就清零。
+  let failures = 0;
+  let permanent = 0;
   try {
     while (card && isActive(card.state)) {
       if (Date.now() - pollStartedAt > POLL_BUDGET_MS) {
@@ -425,6 +432,7 @@ async function pollLoop(): Promise<void> {
       }
       const started = Date.now();
       let failed = false;
+      let errorText = "";
       const asked: string = card.prediction_id;
       try {
         const result = await app.callServerTool({
@@ -435,19 +443,29 @@ async function pollLoop(): Promise<void> {
         // 改回旧任务。下一轮按现在这张卡接着查（没有卡就停）。
         if (card?.prediction_id !== asked) continue;
         failed = result.isError === true || !accept(result);
-        if (result.isError && isSignedOut(errorTextOf(result))) signedOut = true;
+        if (result.isError) errorText = errorTextOf(result);
+        if (result.isError && isSignedOut(errorText)) signedOut = true;
       } catch (error) {
         // 网络抖一下不算失败，歇一会儿下一轮再试；登录失效了就停下，等用户重新连接。
         failed = true;
-        if (isSignedOut(error instanceof Error ? error.message : String(error), true)) signedOut = true;
+        errorText = error instanceof Error ? error.message : String(error);
+        if (isSignedOut(errorText, true)) signedOut = true;
       }
       if (signedOut) {
         render();
         return;
       }
-      // 服务端本身会等一会儿再回答，正常情况只补足最小间隔；出错时多歇几秒。
+      failures = failed ? failures + 1 : 0;
+      permanent = failed && permanentPollError(errorText) ? permanent + 1 : 0;
+      // 参数不对、工具没了、任务查不到：再刷也一样，停下来交给用户（Keep waiting 还能再试一轮）。
+      if (permanent >= POLL_PERMANENT_LIMIT) {
+        stalled = true;
+        setNotice("This card couldn't refresh itself. Check the chat or Atlas Cloud for the result.", POLL_BUDGET_MS);
+        return;
+      }
+      // 服务端本身会等一会儿再回答，正常情况只补足最小间隔；出错时按连着失败的次数越歇越久，被限流至少歇 30 秒。
       const gap = MIN_POLL_GAP_MS - (Date.now() - started);
-      await sleep(Math.max(gap, failed ? 5_000 : 0));
+      await sleep(Math.max(gap, failed ? pollRetryDelay(failures, isRateLimited(errorText)) : 0));
     }
   } finally {
     polling = false;

@@ -120,6 +120,9 @@ function installChannel(): string {
 }
 
 function environmentOf(): string {
+  // Lets a test run against the test cluster label its events so they stay out of production numbers.
+  const override = process.env.ATLASCLOUD_TELEMETRY_ENVIRONMENT?.trim().toLowerCase();
+  if (override && /^[a-z][a-z0-9_-]{0,19}$/.test(override)) return override;
   if (API_BASE.startsWith("https://api.atlascloud.ai")) return "production";
   if (API_BASE.includes("test")) return "test";
   if (API_BASE.includes("dev")) return "dev";

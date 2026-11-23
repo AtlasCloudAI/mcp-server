@@ -272,3 +272,33 @@ test("确认那次记下是怎么对上报价的", async () => {
   assert.ok(missing.error, "没有报价就不能确认");
   assert.equal(missing.fields.confirm_resolution, "no_quote");
 });
+
+test("成功的大响应不被截取：只在拒绝时留开头，且只解码前 400 字节", async () => {
+  const { noteRejections } = await import("../src/http/rejections.js");
+  const middleware = noteRejections(() => {});
+  const run = (status: number, body: Buffer) => {
+    const written: unknown[] = [];
+    const res = {
+      statusCode: status,
+      locals: {} as Record<string, unknown>,
+      write: (chunk: unknown) => {
+        written.push(chunk);
+        return true;
+      },
+      end: (chunk?: unknown) => {
+        if (chunk) written.push(chunk);
+        return res;
+      },
+    };
+    middleware({ body: {}, auth: undefined, get: () => undefined } as never, res as never, () => {});
+    (res.end as (chunk: unknown) => unknown)(body);
+    return { res, written };
+  };
+  const big = Buffer.alloc(5 * 1024 * 1024, "a");
+  const ok = run(200, big);
+  assert.equal(ok.written[0], big, "原样写出，不改响应");
+  assert.equal(ok.res.locals.rejection, undefined);
+
+  const refused = run(429, Buffer.concat([Buffer.from('{"error":"rate_limit_exceeded"}'), big]));
+  assert.equal((refused.res.locals.rejection as { reason: string }).reason, "rate_limited");
+});

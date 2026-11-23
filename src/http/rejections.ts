@@ -83,9 +83,12 @@ export function rejectionOf(res: Response): Rejection | undefined {
   return value && typeof value === "object" ? (value as Rejection) : undefined;
 }
 
-function chunkText(chunk: unknown): string {
-  if (typeof chunk === "string") return chunk;
-  if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString("utf8");
+/** 只解码开头 limit 字节：成功的生成结果可能有几 MB，不能整块转成字符串再截。 */
+function chunkText(chunk: unknown, limit: number): string {
+  if (typeof chunk === "string") return chunk.slice(0, limit);
+  if (chunk instanceof Uint8Array) {
+    return Buffer.from(chunk.buffer, chunk.byteOffset, Math.min(chunk.byteLength, limit)).toString("utf8");
+  }
   return "";
 }
 
@@ -96,9 +99,11 @@ function chunkText(chunk: unknown): string {
 export function noteRejections(log: (line: string) => void = (line) => console.warn(line)): RequestHandler {
   return (req, res, next) => {
     let head = "";
+    // 只在已经是拒绝（状态码 >= 400）时才留开头：成功的响应一个字节都不碰。状态码在 writeHead / status()
+    // 时就定了，早于写响应体。
     const capture = (chunk: unknown): void => {
-      if (head.length >= HEAD_LIMIT) return;
-      head += chunkText(chunk).slice(0, HEAD_LIMIT - head.length);
+      if (res.statusCode < 400 || head.length >= HEAD_LIMIT) return;
+      head += chunkText(chunk, HEAD_LIMIT - head.length);
     };
     const write = res.write.bind(res) as (...args: unknown[]) => boolean;
     const end = res.end.bind(res) as (...args: unknown[]) => Response;

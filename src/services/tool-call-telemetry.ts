@@ -120,6 +120,28 @@ export interface ToolCallFields {
    * not_charged / refunded 是 0，pending 不报。同一个任务会被查好几次，看板按 task_hash 去重取值。
    */
   charged_usd?: number;
+  /**
+   * 报价的幂等键哈希（quoteHash）：报价、确认提交、卡片查「提交过没有」、作废报价都带同一个值，
+   * 看板能数出一份报价被几张卡问了几次（11-22 生产：长对话里几十张旧报价卡反复问，触发限流）。
+   */
+  quote_hash?: string;
+  /** atlas_card_check_submission 的结论：started / not_submitted / checking / unknown / canceled / not_started。 */
+  check_outcome?: string;
+  /** atlas_card_check_submission 是卡片加载或后台悄悄问的（on_load），不是用户点了确认之后的查询。 */
+  check_on_load?: boolean;
+  /**
+   * 这次请求服务端给的是卡片还是纯文字：cards（挂卡片模板）、text（认得出不画卡或明确没声明 MCP Apps）、
+   * off（卡片总开关关着）。WorkBuddy、GrokBot 这类按声明决定的客户端，看板上能直接对上。
+   */
+  cards_mode?: "cards" | "text" | "off";
+  /**
+   * 确认那次是怎么对上报价的：exact（令牌或键就是最新这份）、recovered（键没带或不对，按参数找回最新这份）、
+   * token_only（没有报价记录、凭令牌和键验过）、earlier_returned（指向更早已提交的那单，原样返回、不重复扣费）；
+   * 没对上的：rejected_quote、earlier_missing、repeat_needs_explicit、no_quote。
+   */
+  confirm_resolution?: string;
+  /** 报价时这组参数已经提交过：repeat（再跑一次，会再扣费）或 already_submitted（同一单还在跑，确认会拿回它）。 */
+  quote_note?: "repeat" | "already_submitted";
 }
 
 /** 美元金额只报有限、非负的数，按微美元取整，免得浮点尾数进看板。 */
@@ -159,6 +181,15 @@ export function taskHash(predictionId: unknown): string | undefined {
   if (typeof predictionId !== "string" || predictionId.trim() === "") return undefined;
   return createHash("sha256")
     .update(`atlas-task:${predictionId.trim()}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** 报价幂等键的 16 位哈希，和 taskHash 一样不带原值。 */
+export function quoteHash(idempotencyKey: unknown): string | undefined {
+  if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") return undefined;
+  return createHash("sha256")
+    .update(`atlas-quote:${idempotencyKey.trim()}`)
     .digest("hex")
     .slice(0, 16);
 }

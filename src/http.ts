@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { pathToFileURL } from "node:url";
+import { noteRejections } from "./http/rejections.js";
 import { SERVER_VERSION } from "./version.js";
 import type { Server as NodeHttpServer } from "node:http";
 import type { Express, Request, RequestHandler, Response } from "express";
@@ -207,6 +208,8 @@ export function createHttpApp(
       resourceMetadataUrl,
     }),
     // 认证之后才知道是谁、哪个客户端；限流之前，被限流的调用也算一次调用。
+    // 被拒的请求记原因（埋点和一行日志），要在埋点之前挂上，响应结束时埋点才读得到。
+    noteRejections(),
     trackToolCalls(config, dependencies.analytics),
     createSubjectRateLimiter(config),
     createCardRateLimiter(config),
@@ -261,6 +264,7 @@ export function createHttpApp(
           noCards = (await uiDeclaration(req.auth?.clientId, quoteStore)) === false;
         }
       }
+      toolCallOf(res)?.annotate({ cards_mode: generationCardEnabled() ? (noCards ? "text" : "cards") : "off" });
       const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId, noCards });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

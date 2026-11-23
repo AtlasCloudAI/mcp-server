@@ -577,4 +577,6 @@ test("tool calls over HTTP emit one mcp_tool_call each, with no user data", asyn
   const registered = await nextEvent(4);
   assert.equal(registered.distinctId, "uid-7");
   assert.equal(registered.properties.client_platform, "workbuddy");
+  // initialize 报的版本带到之后的工具调用上（客户端升级引起的问题能按版本看）。
+  assert.equal(registered.properties.client_version, "5.5.6");
 });

@@ -48,6 +48,7 @@
 - [Quick Start](#quick-start)
 - [Available Tools](#available-tools)
 - [Usage Examples](#usage-examples)
+- [Telemetry](#telemetry)
 - [Development](#development)
 - [More Atlas Cloud Tools](#more-atlas-cloud-tools)
 - [License](#license)
@@ -309,6 +310,31 @@ The assistant uses `atlas_list_predictions` to list recent tasks and `atlas_get_
 > "How much Atlas Cloud credit do I have left, and what did I spend this month?"
 
 The assistant will use `atlas_get_balance` for the current balance and `atlas_get_model_costs` for the spend breakdown.
+
+## Telemetry
+
+The npm package sends anonymous usage telemetry to Atlas Cloud (PostHog), the same way the Atlas CLI does, so we can see which clients and tools people use and where calls fail. It never includes prompts, messages, file names, paths, URLs, generated output, or your API key.
+
+**Turn it off** with any of these in the server's `env`:
+
+```json
+"env": { "ATLASCLOUD_API_KEY": "...", "ATLASCLOUD_TELEMETRY": "0" }
+```
+
+`ATLAS_TELEMETRY=0` (the CLI's switch) and `DO_NOT_TRACK=1` work too.
+
+**What is sent**
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `mcp_local_install` | First run on a machine | — |
+| `mcp_local_session_start` | Your MCP client connects | client capabilities (names only), startup time |
+| `mcp_local_tool_call` | Every tool call | tool name, catalog model ID, generation type, execution mode (submit / dry run / status check / chat / upload…), outcome and error code, duration, number of API requests, retries and their routes with IDs removed, HTTP status, task status, task price, number of outputs, a one-way hash of the task ID, LLM token counts and finish reason, upload size and coarse type (image / video / audio), which arguments were given (names only), prompt length in characters, number of media links |
+| `mcp_local_session_end` | Your MCP client disconnects | session length, tool call and error counts, tools used, number of generations |
+
+Every event also carries: server version, MCP client name and version (from the MCP handshake, e.g. `claude-code`, `cursor-vscode`), protocol version, OS, CPU architecture, Node.js version, locale, how the package was installed (npx / global / local), a random install ID stored in `~/.config/atlascloud-mcp/telemetry.json`, a random per-session ID, and — once your key has been used — a one-way hash of your Atlas account ID. IP-based geolocation is disabled.
+
+The MCP client name and version are also sent to the Atlas API as an `X-Atlas-MCP-Client` header, so usage can be broken down by client.
 
 ## Development
 

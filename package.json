@@ -1,6 +1,6 @@
 {
   "name": "atlascloud-mcp",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "MCP server for AI image / video / 3D / audio (TTS, music, speech-to-text) generation & LLM chat. Use Sora 2, Veo 3, Kling 3, Seedance 2, Flux 2, Nano Banana Pro, Hunyuan 3D, Seed Audio, Suno in Claude Code, Cursor, Codex, Gemini CLI.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,13 +10,14 @@
   "scripts": {
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/write-telemetry-key.mjs",
     "clean": "rm -rf dist",
     "prepack": "npm run clean && npm run build"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "telemetry-key.json"
   ],
   "engines": {
     "node": ">=18"

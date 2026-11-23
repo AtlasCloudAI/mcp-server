@@ -11,9 +11,23 @@ import {
   RETRY_BASE_DELAY_MS,
 } from "../constants.js";
 import type { UploadResponse } from "../types.js";
+import { clientHeaderValue } from "../telemetry/identity.js";
+import { clientState, noteAccount, noteAuthedSuccess } from "../telemetry/state.js";
+import {
+  annotateToolCall,
+  currentToolCall,
+  errorCodeForHttpStatus,
+  errorCodeForMessage,
+  normalizeGenerationStatus,
+  recordToolCallError,
+  sanitizeModel,
+  taskHash,
+  telemetryNumber,
+  type ToolCallError,
+} from "../telemetry/tool-call.js";
 
 // Auto-detect proxy env vars for Node.js fetch
-function getProxyDispatcher(): Dispatcher | undefined {
+function detectProxyDispatcher(): Dispatcher | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
@@ -25,7 +39,12 @@ function getProxyDispatcher(): Dispatcher | undefined {
   return undefined;
 }
 
-const proxyDispatcher = getProxyDispatcher();
+const proxyDispatcher = detectProxyDispatcher();
+
+/** The proxy agent every outgoing request uses, shared with the telemetry sender. */
+export function getProxyDispatcher(): Dispatcher | undefined {
+  return proxyDispatcher;
+}
 
 // Custom error class that preserves HTTP status code and the parsed body.
 // The body matters because the backend reports *task* failures as HTTP 5xx
@@ -106,6 +125,100 @@ function isRetryable(error: unknown): boolean {
 // records the request as a plain API-key call, as before.
 const SOURCE_HEADERS: Record<string, string> = { "X-Source-From": "atlas-mcp" };
 
+/**
+ * The source tag plus, once the MCP client has said who it is, which client
+ * this is ("claude-code/2.1.321"). Atlas stores the client next to each task
+ * (task_context.mcp_client) so local MCP spend can be split by client, the
+ * way plugin spend is split by OAuth client. It is only a label: the API key
+ * still decides who is billed.
+ */
+function sourceHeaders(): Record<string, string> {
+  const client = clientHeaderValue(clientState.name, clientState.version);
+  return client ? { ...SOURCE_HEADERS, "X-Atlas-MCP-Client": client } : SOURCE_HEADERS;
+}
+
+// --- telemetry hooks -------------------------------------------------------
+// Everything below only fills in the current tool call's telemetry record
+// (src/telemetry). Outside a tool call it does nothing, and none of it can
+// change what a request returns or throws.
+
+const ID_SEGMENT = /^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{3,}|[A-Za-z0-9_-]{24,})$/i;
+
+/** "GET api /model/prediction/:id": base, path with IDs replaced, no query. */
+function routeOf(baseUrl: string, endpoint: string, method: string): string {
+  const base = baseUrl === LLM_API_BASE ? "llm" : baseUrl === PUBLIC_API_BASE ? "public" : "api";
+  const path = (endpoint.split("?")[0] ?? "")
+    .split("/")
+    .map((segment) => (segment && ID_SEGMENT.test(segment) ? ":id" : segment))
+    .join("/")
+    .slice(0, 80);
+  // LLM paths embed the model name (Gemini: /models/<model>:generateContent).
+  const normalized = base === "llm" ? path.replace(/\/models\/[^/]+(:[A-Za-z]+)?$/, "/models/:model$1") : path;
+  return `${method} ${base} ${normalized.startsWith("/") ? normalized : `/${normalized}`}`;
+}
+
+function classifyApiError(error: unknown, route: string): ToolCallError {
+  if (error instanceof ApiRequestError) {
+    const status = error.statusCode;
+    const terminal = readTerminalTaskStatus(error.responseBody);
+    if (terminal) return { code: "generation_failed", ...(status ? { httpStatus: status } : {}) };
+    const byMessage = errorCodeForMessage(error.message);
+    if (byMessage) return { code: byMessage, ...(status ? { httpStatus: status } : {}) };
+    if (status === 404 && route.includes("/model/prediction/")) return { code: "prediction_not_found", httpStatus: 404 };
+    if (status) return { code: errorCodeForHttpStatus(status), httpStatus: status };
+    return { code: "network_error" };
+  }
+  if (error instanceof Error && error.name === "AbortError") return { code: "timeout", cause: "request_timeout" };
+  return { code: "network_error" };
+}
+
+const CHARGE_STATUSES = new Set(["charged", "partially_charged", "pending", "not_charged", "refunded"]);
+
+/** Read the parts of a response that describe the task, the account or the result size. */
+function observeResponse(route: string, payload: unknown): void {
+  if (!currentToolCall() && !route.endsWith(" /balance")) return;
+  if (!payload || typeof payload !== "object") return;
+  const body = payload as Record<string, any>;
+  if (route.endsWith(" /balance")) {
+    noteAccount(body.account?.id);
+    return;
+  }
+  if (/ api \/model\/(generate|prediction)/.test(route)) {
+    const data = (body.data && typeof body.data === "object" ? body.data : body) as Record<string, any>;
+    const outputs = Array.isArray(data.outputs) ? data.outputs : Array.isArray(data.output) ? data.output : undefined;
+    const nsfw = Array.isArray(data.has_nsfw_contents) ? data.has_nsfw_contents : undefined;
+    const price = telemetryNumber(data.price);
+    const charge = typeof data.charge_status === "string" && CHARGE_STATUSES.has(data.charge_status) ? data.charge_status : undefined;
+    annotateToolCall({
+      execution_mode: route.startsWith("POST") ? "submit" : "get",
+      task_hash: taskHash(data.id),
+      model: sanitizeModel(data.model),
+      generation_status: normalizeGenerationStatus(data.status),
+      price_usd: price,
+      charge_status: charge,
+      charged_usd:
+        charge === "not_charged" || charge === "refunded"
+          ? 0
+          : charge === "charged" || charge === "partially_charged"
+            ? price
+            : undefined,
+      output_count: outputs ? outputs.length : undefined,
+      nsfw_blocked: nsfw && nsfw.length > 0 && nsfw.every(Boolean) && (!outputs || outputs.length === 0) ? true : undefined,
+      task_latency_ms: telemetryNumber(data.latency_ms) || telemetryNumber(data.executionTime),
+    });
+    return;
+  }
+  if (route.endsWith(" /model/history")) {
+    const items = body.data?.items;
+    annotateToolCall({ execution_mode: "list", result_rows: Array.isArray(items) ? items.length : undefined });
+    return;
+  }
+  if (/ public \/model-(usage|costs)$/.test(route)) {
+    const rows = Array.isArray(body.data) ? body.data : Array.isArray(body.items) ? body.items : body.data?.items;
+    annotateToolCall({ execution_mode: "read", result_rows: Array.isArray(rows) ? rows.length : undefined });
+  }
+}
+
 // Sleep with exponential backoff
 function backoff(attempt: number): Promise<void> {
   const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
@@ -156,8 +269,10 @@ async function request<T>(
 
   if (requireAuth) {
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
-    Object.assign(finalHeaders, SOURCE_HEADERS);
+    Object.assign(finalHeaders, sourceHeaders());
   }
+
+  const route = routeOf(baseUrl, endpoint, method);
 
   // POST requests should not retry - they may create billable tasks (image/video generation)
   const effectiveMaxRetries = method === "POST" ? 0 : maxRetries;
@@ -171,6 +286,8 @@ async function request<T>(
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    const attemptStarted = performance.now();
+    let attemptStatus: number | undefined;
 
     try {
       const response = await fetch(url, {
@@ -180,6 +297,7 @@ async function request<T>(
         signal: controller.signal,
         ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
       } as any);
+      attemptStatus = response.status;
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
@@ -211,14 +329,19 @@ async function request<T>(
 
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("application/json")) {
-        return (await response.json()) as T;
+        const json = (await response.json()) as T;
+        observeResponse(route, json);
+        if (requireAuth) noteAuthedSuccess();
+        return json;
       }
+      if (requireAuth) noteAuthedSuccess();
       return (await response.text()) as unknown as T;
     } catch (error) {
       clearTimeout(timer);
 
       // Non-retryable errors throw immediately
       if (error instanceof ApiRequestError && !isRetryable(error)) {
+        recordToolCallError(classifyApiError(error, route));
         throw error;
       }
 
@@ -229,12 +352,22 @@ async function request<T>(
         continue;
       }
 
+      recordToolCallError(classifyApiError(lastError, route));
       throw lastError;
     } finally {
       clearTimeout(timer);
+      currentToolCall()?.recordApi({
+        route,
+        durationMs: performance.now() - attemptStarted,
+        attempt,
+        ...(attemptStatus !== undefined
+          ? { status: attemptStatus }
+          : { failure: controller.signal.aborted ? "timeout" : "network" }),
+      });
     }
   }
 
+  recordToolCallError(classifyApiError(lastError, route));
   throw lastError;
 }
 
@@ -318,8 +451,24 @@ export function guessUploadMimeType(fileName: string): string {
 // Upload a local file to Atlas Cloud, returns a download URL
 export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   const apiKey = getApiKey();
-  const fileBuffer = await readFile(filePath);
+  annotateToolCall({ execution_mode: "upload", stage: "upload" });
+  let fileBuffer: Buffer;
+  try {
+    fileBuffer = await readFile(filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    recordToolCallError({
+      code: "local_file_error",
+      cause: typeof code === "string" && /^E[A-Z]{2,12}$/.test(code) ? code.toLowerCase() : "read_failed",
+    });
+    throw error;
+  }
   const fileName = basename(filePath);
+  const mime = guessUploadMimeType(fileName);
+  annotateToolCall({
+    upload_bytes: fileBuffer.byteLength,
+    upload_kind: mime === "application/octet-stream" ? "unknown" : mime.split("/")[0],
+  });
 
   const formData = new FormData();
   formData.append(
@@ -329,21 +478,25 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   );
 
   const url = `${API_BASE}/model/uploadMedia`;
+  const route = "POST api /model/uploadMedia";
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+  const started = performance.now();
+  let status: number | undefined;
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        ...SOURCE_HEADERS,
+        ...sourceHeaders(),
       },
       body: formData,
       signal: controller.signal,
       ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
     } as any);
+    status = response.status;
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
@@ -359,9 +512,19 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
       throw new ApiRequestError(errorMsg, response.status, parsedBody);
     }
 
+    noteAuthedSuccess();
     return (await response.json()) as UploadResponse;
+  } catch (error) {
+    recordToolCallError(classifyApiError(error, route));
+    throw error;
   } finally {
     clearTimeout(timer);
+    currentToolCall()?.recordApi({
+      route,
+      durationMs: performance.now() - started,
+      attempt: 0,
+      ...(status !== undefined ? { status } : { failure: controller.signal.aborted ? "timeout" : "network" }),
+    });
   }
 }
 

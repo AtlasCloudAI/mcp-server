@@ -6,6 +6,7 @@ import {
   formatValidationError,
 } from "../utils/schema-validator.js";
 import type { Model, PredictionResponse } from "../types.js";
+import { annotateToolCall, recordToolCallError, sanitizeModel, schemaErrorParam } from "../telemetry/tool-call.js";
 
 export type SubmitResult =
   | { ok: true; predictionId: string; model: Model; body: Record<string, unknown> }
@@ -46,14 +47,18 @@ export async function submitGeneration(
   params: Record<string, unknown>,
   opts: SubmitOptions
 ): Promise<SubmitResult> {
+  annotateToolCall({ stage: "prepare", model_type: opts.typeLabel, execution_mode: opts.dryRun ? "dry_run" : "submit" });
   const found = await findModel(modelId);
   if (!found) {
+    recordToolCallError({ code: "model_not_found" });
     return {
       ok: false,
       message: `Model "${modelId}" not found. Use atlas_list_models with type="${opts.expectedType}" to see available ${opts.typeLabel} models.`,
     };
   }
+  annotateToolCall({ model: sanitizeModel(found.model) });
   if (found.type !== opts.expectedType) {
+    recordToolCallError({ code: "model_type_mismatch", cause: found.type.toLowerCase() === "image" || found.type.toLowerCase() === "video" || found.type.toLowerCase() === "audio" ? `is_${found.type.toLowerCase()}` : "other" });
     const article = (word: string) =>
       /^[aeiou]/i.test(word) ? `an ${word}` : `a ${word}`;
     return {
@@ -64,15 +69,19 @@ export async function submitGeneration(
 
   const kindError = opts.validateModel?.(found);
   if (kindError) {
+    recordToolCallError({ code: "model_type_mismatch", cause: "wrong_audio_kind" });
     return { ok: false, message: kindError };
   }
 
   // Fetch schema and validate params before hitting the billable endpoint.
   // If the schema is unavailable, validation is skipped (does not block).
+  annotateToolCall({ stage: "schema" });
   const schema = await getModelSchema(found);
+  if (!schema) annotateToolCall({ schema_skipped: true });
   const finalParams = fillRequiredDefaults(schema, params);
   const validation = validateModelParams(schema, found.model, finalParams);
   if (!validation.ok) {
+    recordToolCallError({ code: "invalid_param", cause: "schema_validation", param: schemaErrorParam(validation.errors) });
     return { ok: false, message: formatValidationError(found.model, validation) };
   }
 
@@ -82,6 +91,7 @@ export async function submitGeneration(
     return { ok: true, predictionId: null, model: found, body };
   }
 
+  annotateToolCall({ stage: "submit" });
   const response = await api<PredictionResponse>(opts.endpoint, {
     method: "POST",
     body,

@@ -151,6 +151,15 @@ export function clientPlatform(
   }
 }
 
+/**
+ * Is this OAuth client ChatGPT (not Codex)? Any client metadata document on an
+ * OpenAI host counts, so the OpenAI platform's plugin scanner is treated the same
+ * as ChatGPT itself.
+ */
+export function isChatGptClient(clientId: string | undefined): boolean {
+  return knownClient(clientId) === "chatgpt";
+}
+
 /** Is the request being served coming from ChatGPT (not Codex)? */
 export function currentClientIsChatGpt(): boolean {
   return knownClient(getRequestContext()?.authInfo.clientId) === "chatgpt";

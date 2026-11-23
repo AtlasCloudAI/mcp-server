@@ -26,9 +26,26 @@ export function chatGptLeanDescriptionsEnabled(env: NodeJS.ProcessEnv = process.
   return !["0", "false", "no", "off"].includes(raw);
 }
 
+/**
+ * 开关取 `published` 时更进一步：atlas_generate_image / atlas_generate_video / atlas_quick_generate 三个工具
+ * 的描述和参数结构换成 ChatGPT 已发布的原文（services/chatgpt-published-tools.ts），只多挂卡片模板。
+ * atlas_list_models 和服务器说明照精简版（精简版的 list_models 本来就和已发布原文逐字一致）。
+ *
+ * 用途：精简版要是还被 OpenAI 拦，用它确认「只加卡片模板」能不能过——同一天通过的 atlas_generate_audio
+ * 和它的已发布原文唯一的区别就是卡片模板。这样还被拦，说明问题在模板本身或检查变严，描述怎么改都没用。
+ */
+export function chatGptPublishedToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MCP_CHATGPT_LEAN_DESCRIPTIONS?.trim().toLowerCase() === "published";
+}
+
 /** 这个客户端拿精简描述吗：开关打开，且是 ChatGPT（OpenAI 平台的插件扫描也算）。 */
 export function usesLeanDescriptions(clientId: string | undefined): boolean {
   return chatGptLeanDescriptionsEnabled() && isChatGptClient(clientId);
+}
+
+/** 这个客户端的三个生成工具用已发布原文吗（开关为 published，且是 ChatGPT）。 */
+export function usesPublishedTools(clientId: string | undefined): boolean {
+  return chatGptPublishedToolsEnabled() && isChatGptClient(clientId);
 }
 
 /** 注册工具时的描述版本。 */

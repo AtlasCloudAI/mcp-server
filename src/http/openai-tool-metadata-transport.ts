@@ -7,6 +7,7 @@ import type {
   MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
 import { remoteToolPolicy } from "../tool-policy.js";
+import { CHATGPT_PUBLISHED_TOOLS } from "../services/chatgpt-published-tools.js";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -95,6 +96,25 @@ export function withoutCards(message: JSONRPCMessage): JSONRPCMessage {
   return message;
 }
 
+/**
+ * 把工具列表里那几个工具的描述和参数结构换成 ChatGPT 已发布的原文（services/chatgpt-published-tools.ts），
+ * 其他字段（标题、标注、_meta 里的卡片模板）不动。只在 MCP_CHATGPT_LEAN_DESCRIPTIONS=published 且是 ChatGPT 时用。
+ * 服务端校验仍按当前参数结构：已发布结构只差说明文字、且更严，ChatGPT 生产现在就按它调用。
+ */
+export function withPublishedToolText(message: JSONRPCMessage): JSONRPCMessage {
+  const record = asRecord(message);
+  const result = asRecord(record?.result);
+  if (!record || !result || !Array.isArray(result.tools)) return message;
+  const tools = result.tools.map((value) => {
+    const tool = asRecord(value);
+    const published = typeof tool?.name === "string" ? CHATGPT_PUBLISHED_TOOLS[tool.name] : undefined;
+    return tool && published
+      ? { ...tool, description: published.description, inputSchema: structuredClone(published.inputSchema) }
+      : value;
+  });
+  return { ...record, result: { ...result, tools } } as unknown as JSONRPCMessage;
+}
+
 export class OpenAIToolMetadataTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -111,7 +131,9 @@ export class OpenAIToolMetadataTransport implements Transport {
     private readonly inner: Transport,
     private readonly onSend?: (message: JSONRPCMessage) => void,
     /** 这个客户端不显示卡片：发出前去掉卡片模板和卡片数据（withoutCards）。 */
-    private readonly noCards = false
+    private readonly noCards = false,
+    /** ChatGPT 的三个生成工具用已发布原文（withPublishedToolText）。 */
+    private readonly publishedTools = false
   ) {}
 
   get sessionId(): string | undefined {
@@ -130,7 +152,8 @@ export class OpenAIToolMetadataTransport implements Transport {
     options?: TransportSendOptions
   ): Promise<void> {
     this.onSend?.(message);
-    const outgoing = this.noCards ? withoutCards(message) : message;
+    let outgoing = this.noCards ? withoutCards(message) : message;
+    if (this.publishedTools) outgoing = withPublishedToolText(outgoing);
     await this.inner.send(withOpenAIToolSecuritySchemes(outgoing), options);
   }
 

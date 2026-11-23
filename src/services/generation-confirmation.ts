@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { ModelPrice } from "../types.js";
 import { type StoredRecord, idempotencyFingerprint, peekIdempotent, storedPredictionId } from "./idempotency.js";
 import { getRequestContext } from "./request-context.js";
-import { annotateToolCall } from "./tool-call-telemetry.js";
+import { annotateToolCall, quoteHash } from "./tool-call-telemetry.js";
 import { InMemoryUploadTicketStore, type UploadTicketStore } from "./upload-ticket-store.js";
 
 const localConfirmationSecret = randomBytes(32).toString("base64url");
@@ -120,7 +120,7 @@ export async function issueGenerationConfirmation(
   const chosen = await unusedIdempotencyKey(toolName, idempotencyKey, request);
   idempotencyKey = chosen.idempotencyKey;
   // 只报价、没提交：这是正常的第一步，不是错误。取值沿用 CLI 的 estimate。
-  annotateToolCall({ execution_mode: "estimate", stage: "quote" });
+  annotateToolCall({ execution_mode: "estimate", stage: "quote", quote_hash: quoteHash(idempotencyKey) });
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(

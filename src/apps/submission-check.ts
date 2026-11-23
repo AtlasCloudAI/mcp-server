@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { annotateToolCall, quoteHash } from "../services/tool-call-telemetry.js";
 import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
 import { type ApiRequestOptions, api, generationApi } from "../services/api-client.js";
@@ -188,8 +189,10 @@ export function registerCardCheckTool(server: McpServer): void {
     },
     async (args) => {
       void rememberCardClient();
+      annotateToolCall({ quote_hash: quoteHash(args.idempotency_key), check_on_load: args.on_load === true });
       try {
         const result = await checkSubmission(args);
+        annotateToolCall({ check_outcome: result.outcome });
         if (result.outcome !== "started") {
           return {
             structuredContent: result,
@@ -248,6 +251,7 @@ export function registerCancelQuoteTool(server: McpServer): void {
       annotations: { ...CARD_TOOL_POLICIES.atlas_cancel_quote.annotations },
     },
     async ({ tool, idempotency_key, reason }) => {
+      annotateToolCall({ quote_hash: quoteHash(idempotency_key) });
       try {
         const result = await cancelIdempotent(tool, idempotency_key, reason);
         if (result.status === "canceled") {

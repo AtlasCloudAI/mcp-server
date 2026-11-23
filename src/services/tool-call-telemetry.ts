@@ -120,6 +120,15 @@ export interface ToolCallFields {
    * not_charged / refunded 是 0，pending 不报。同一个任务会被查好几次，看板按 task_hash 去重取值。
    */
   charged_usd?: number;
+  /**
+   * 报价的幂等键哈希（quoteHash）：报价、确认提交、卡片查「提交过没有」、作废报价都带同一个值，
+   * 看板能数出一份报价被几张卡问了几次（11-22 生产：长对话里几十张旧报价卡反复问，触发限流）。
+   */
+  quote_hash?: string;
+  /** atlas_card_check_submission 的结论：started / not_submitted / checking / unknown / canceled / not_started。 */
+  check_outcome?: string;
+  /** atlas_card_check_submission 是卡片加载或后台悄悄问的（on_load），不是用户点了确认之后的查询。 */
+  check_on_load?: boolean;
 }
 
 /** 美元金额只报有限、非负的数，按微美元取整，免得浮点尾数进看板。 */
@@ -159,6 +168,15 @@ export function taskHash(predictionId: unknown): string | undefined {
   if (typeof predictionId !== "string" || predictionId.trim() === "") return undefined;
   return createHash("sha256")
     .update(`atlas-task:${predictionId.trim()}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** 报价幂等键的 16 位哈希，和 taskHash 一样不带原值。 */
+export function quoteHash(idempotencyKey: unknown): string | undefined {
+  if (typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") return undefined;
+  return createHash("sha256")
+    .update(`atlas-quote:${idempotencyKey.trim()}`)
     .digest("hex")
     .slice(0, 16);
 }

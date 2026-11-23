@@ -401,6 +401,30 @@ test("without POSTHOG_KEY analytics is off end to end", async () => {
   assert.equal(captured.length, 0);
 });
 
+test("card-only tools are recorded by name; names we don't serve stay unknown", () => {
+  // 11-21 生产巡检：卡片刷新原来都记成 unknown，看板分不清它和真正认不出的调用。
+  const sink: AnalyticsSink = { capture: () => {}, shutdown: async () => {} };
+  const middleware = trackToolCalls(loadHttpServerConfig({ ...BASE_ENV, POSTHOG_KEY: "phc_test" }), sink);
+  const commandOf = (name: string): string | undefined => {
+    const locals: Record<string, unknown> = {};
+    middleware(
+      {
+        body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name } },
+        auth: { extra: { sub: "42" }, clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata" },
+        get: () => undefined,
+      } as never,
+      { locals, once: () => {} } as never,
+      () => {}
+    );
+    return (locals.toolCall as { command?: string } | undefined)?.command;
+  };
+  assert.equal(commandOf("atlas_card_status"), "atlas_card_status");
+  assert.equal(commandOf("atlas_card_check_submission"), "atlas_card_check_submission");
+  assert.equal(commandOf("atlas_cancel_quote"), "atlas_cancel_quote");
+  assert.equal(commandOf("atlas_get_prediction"), "atlas_get_prediction");
+  assert.equal(commandOf("drop_tables"), "unknown");
+});
+
 test("POSTHOG_KEY turns analytics on; environment follows the deployment", () => {
   const config = loadHttpServerConfig({ ...BASE_ENV, POSTHOG_KEY: " phc_test " });
   assert.deepEqual(config.analytics, {

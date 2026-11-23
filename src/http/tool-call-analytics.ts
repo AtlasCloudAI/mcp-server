@@ -2,7 +2,7 @@ import type { RequestHandler, Response } from "express";
 import type { HttpServerConfig } from "../config.js";
 import { clientPlatform, type ClientPlatform } from "../services/client-profile.js";
 import { ToolCallTelemetry } from "../services/tool-call-telemetry.js";
-import { isAtlasToolName } from "../tool-policy.js";
+import { remoteToolPolicy } from "../tool-policy.js";
 import { SERVER_VERSION } from "../version.js";
 
 /**
@@ -142,8 +142,10 @@ export function trackToolCalls(
     }
 
     const toolName = params?.name;
+    // 公开工具和卡片专用工具（atlas_card_status 等）都记真名；以前卡片工具一律记成 unknown，
+    // 看板分不清卡片刷新和别的调用。认不出的名字仍记 unknown，不把任意字符串写进埋点。
     const toolCall = new ToolCallTelemetry(
-      typeof toolName === "string" && isAtlasToolName(toolName) ? toolName : "unknown"
+      typeof toolName === "string" && remoteToolPolicy(toolName) ? toolName : "unknown"
     );
     res.locals[TOOL_CALL_LOCAL] = toolCall;
     const platform = memory.recall(clientId) ?? clientPlatform(clientId, req.get("user-agent"));

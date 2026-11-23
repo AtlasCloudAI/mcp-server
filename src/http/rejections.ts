@@ -91,7 +91,7 @@ function chunkText(chunk: unknown): string {
 
 /**
  * 记下响应体开头，响应结束时状态码 >= 400 就归类，放进 res.locals 给埋点用，并打一行日志。
- * 401 不打日志：那是正常的 OAuth 挑战，每个新连接都有。放在认证之后、限流之前，限流的 429 也能记到。
+ * 401 一般不打日志（正常的 OAuth 挑战），account_not_linked 例外。放在认证之后、限流之前，限流的 429 也能记到。
  */
 export function noteRejections(log: (line: string) => void = (line) => console.warn(line)): RequestHandler {
   return (req, res, next) => {
@@ -115,7 +115,8 @@ export function noteRejections(log: (line: string) => void = (line) => console.w
           ...(res.statusCode === 429 ? { bucket: isCardRefreshRequest(req) ? "card" : "subject" } : {}),
         };
         res.locals[LOCAL_KEY] = rejection;
-        if (res.statusCode !== 401) {
+        // 401 大多是正常的 OAuth 挑战（令牌过期、新连接），不打；「账户没绑凭据」不是例行的，照打。
+        if (res.statusCode !== 401 || rejection.reason === "account_not_linked") {
           const body = req.body as { method?: unknown } | undefined;
           const method = typeof body?.method === "string" ? body.method : Array.isArray(req.body) ? "batch" : "-";
           log(

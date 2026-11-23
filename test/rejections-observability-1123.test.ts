@@ -192,3 +192,83 @@ test("卡片查「提交过没有」：埋点带报价哈希、是不是加载�
   assert.equal(JSON.stringify(event).includes(key), false, "不带原始幂等键");
   assert.equal("rejection_reason" in (event?.properties ?? {}), false, "没被拒的调用不带拒绝原因");
 });
+
+test("客户端版本：initialize 报的版本按 client_id 记住，形状不对的不记", async () => {
+  const { ClientPlatformMemory, clientVersionOf } = await import("../src/http/tool-call-analytics.js");
+  const memory = new ClientPlatformMemory(10);
+  memory.remember("cursor-1", "cursor", clientVersionOf("3.29.1"));
+  memory.remember("dcr-x", "unknown", clientVersionOf("1.0.0"));
+  memory.remember("dcr-y", "unknown", clientVersionOf("evil version; rm -rf"));
+  assert.equal(memory.recall("cursor-1"), "cursor");
+  assert.equal(memory.recallVersion("cursor-1"), "3.29.1");
+  assert.equal(memory.recall("dcr-x"), undefined, "认不出的平台不记平台");
+  assert.equal(memory.recallVersion("dcr-x"), "1.0.0", "但版本照记");
+  assert.equal(memory.recallVersion("dcr-y"), undefined);
+  assert.equal(clientVersionOf("26.1111.0-beta+2"), "26.1111.0-beta+2");
+  assert.equal(clientVersionOf(""), undefined);
+});
+
+test("每次调用记服务端给的卡片模式", async (t) => {
+  const savedCards = process.env.MCP_UI_CARDS;
+  process.env.MCP_UI_CARDS = "1";
+  const h = await harness();
+  t.after(async () => {
+    await h.close();
+    if (savedCards === undefined) delete process.env.MCP_UI_CARDS;
+    else process.env.MCP_UI_CARDS = savedCards;
+  });
+  await h.call("11", "atlas_get_balance", {});
+  const [event] = await h.events(1);
+  assert.equal(event?.properties.cards_mode, "cards", "Claude 网页版、卡片开着");
+});
+
+test("确认那次记下是怎么对上报价的", async () => {
+  const { issueGenerationConfirmation, resolveConfirmedIdempotencyKey } = await import(
+    "../src/services/generation-confirmation.js"
+  );
+  const { runWithRequestContext } = await import("../src/services/request-context.js");
+  const { ToolCallTelemetry } = await import("../src/services/tool-call-telemetry.js");
+  const store = new InMemoryIdempotencyStore();
+  const request = { resolved_model: "provider/model-v1", request_body: { model: "provider/model-v1", prompt: "a cat" } };
+  const pricing = { discount: "100", actual: { base_price: "0.01" }, origin: { base_price: "0.01" } };
+  const run = async <T>(op: () => Promise<T>): Promise<{ fields: Record<string, unknown>; value?: T; error?: unknown }> => {
+    const toolCall = new ToolCallTelemetry("atlas_generate_image");
+    const context = {
+      authInfo: { token: "t", clientId: CLAUDE, scopes: ["tasks:write"] } as AuthInfo,
+      subject: "user-9",
+      atlasApiKey: "k",
+      idempotencyStore: store,
+      idempotencyTtlSeconds: 600,
+      generationConfirmationSecret: "test-confirmation-secret-that-is-long-enough",
+      generationConfirmationTtlSeconds: 600,
+      toolCall,
+    };
+    try {
+      const value = await runWithRequestContext(context, op);
+      return { fields: toolCall.properties({}, 200), value };
+    } catch (error) {
+      return { fields: toolCall.properties({}, 200), error };
+    }
+  };
+
+  const key = "3a95b8e8-19f5-4e91-9e37-7ac34320c659";
+  const quoted = await run(() => issueGenerationConfirmation("atlas_generate_image", key, request, pricing));
+  assert.equal(quoted.fields.quote_hash, quoteHash(key));
+  assert.equal("quote_note" in quoted.fields, false, "第一次报价不是再跑一次");
+
+  const exact = await run(() =>
+    resolveConfirmedIdempotencyKey(undefined, "atlas_generate_image", key, request, pricing)
+  );
+  assert.equal(exact.fields.confirm_resolution, "exact");
+
+  const recovered = await run(() =>
+    resolveConfirmedIdempotencyKey(undefined, "atlas_generate_image", undefined, request, pricing)
+  );
+  assert.equal(recovered.fields.confirm_resolution, "recovered", "没带键：按参数找回");
+
+  const missing = await run(() =>
+    resolveConfirmedIdempotencyKey(undefined, "atlas_generate_image", undefined, { ...request, request_body: { prompt: "a dog" } }, pricing)
+  );
+  assert.ok(missing.error, "没有报价就不能确认");
+  assert.equal(missing.fields.confirm_resolution, "no_quote");
+});

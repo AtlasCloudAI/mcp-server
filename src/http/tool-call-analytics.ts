@@ -79,22 +79,41 @@ export function userDistinctId(sub: unknown): string | undefined {
  * 退回看 User-Agent。
  */
 export class ClientPlatformMemory {
-  private readonly platforms = new Map<string, ClientPlatform>();
+  private readonly clients = new Map<string, { platform?: ClientPlatform; version?: string }>();
 
   constructor(private readonly limit = 10_000) {}
 
-  remember(clientId: string, platform: ClientPlatform): void {
-    this.platforms.delete(clientId);
-    this.platforms.set(clientId, platform);
-    if (this.platforms.size > this.limit) {
-      const oldest = this.platforms.keys().next().value;
-      if (oldest !== undefined) this.platforms.delete(oldest);
+  /** 记下 initialize 时的平台（认不出的不记）和客户端版本（版本形状不对的不记）。 */
+  remember(clientId: string, platform: ClientPlatform | undefined, version?: string): void {
+    const entry = {
+      ...(platform && platform !== "unknown" ? { platform } : {}),
+      ...(version ? { version } : {}),
+    };
+    if (!entry.platform && !entry.version) return;
+    this.clients.delete(clientId);
+    this.clients.set(clientId, entry);
+    if (this.clients.size > this.limit) {
+      const oldest = this.clients.keys().next().value;
+      if (oldest !== undefined) this.clients.delete(oldest);
     }
   }
 
   recall(clientId: string | undefined): ClientPlatform | undefined {
-    return clientId ? this.platforms.get(clientId) : undefined;
+    return clientId ? this.clients.get(clientId)?.platform : undefined;
   }
+
+  /**
+   * initialize 时报的客户端版本。11-20 Codex 桌面版升级后开始照模板画卡片、卡片刷新全报错，
+   * 埋点里看不出是哪个版本开始的。同 platform 一样只在本进程记，多副本时可能落空。
+   */
+  recallVersion(clientId: string | undefined): string | undefined {
+    return clientId ? this.clients.get(clientId)?.version : undefined;
+  }
+}
+
+/** clientInfo.version 只收版本号的形状（字母数字和 . + -，最长 32），不把任意字符串写进埋点。 */
+export function clientVersionOf(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/.test(value) ? value : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -135,9 +154,10 @@ export function trackToolCalls(
     const clientId = req.auth?.clientId;
 
     if (payload?.method === "initialize") {
-      const name = asRecord(params?.clientInfo)?.name;
+      const clientInfo = asRecord(params?.clientInfo);
+      const name = clientInfo?.name;
       const platform = clientPlatform(clientId, typeof name === "string" ? name : undefined);
-      if (clientId && platform !== "unknown") memory.remember(clientId, platform);
+      if (clientId) memory.remember(clientId, platform, clientVersionOf(clientInfo?.version));
       next();
       return;
     }
@@ -160,6 +180,7 @@ export function trackToolCalls(
     res.locals[TOOL_CALL_LOCAL] = toolCall;
     const platform = memory.recall(clientId) ?? clientPlatform(clientId, req.get("user-agent"));
     const protocolVersion = protocolVersionOf(req);
+    const clientVersion = memory.recallVersion(clientId);
 
     let sent = false;
     const send = (disconnected: boolean): void => {
@@ -176,6 +197,7 @@ export function trackToolCalls(
               // ChatGPT 拿的是精简描述还是完整描述（MCP_CHATGPT_LEAN_DESCRIPTIONS），打开开关后对比用。
               tool_surface: usesLeanDescriptions(clientId) ? "lean" : "full",
               ...(protocolVersion ? { protocol_version: protocolVersion } : {}),
+              ...(clientVersion ? { client_version: clientVersion } : {}),
               // 被拒时的原因和限流额度（http/rejections.ts）；工具跑了的调用没有这两项。
               ...rejectionFields(rejectionOf(res)),
             },

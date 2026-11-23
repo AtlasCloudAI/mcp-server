@@ -264,6 +264,7 @@ export function createHttpApp(
           noCards = (await uiDeclaration(req.auth?.clientId, quoteStore)) === false;
         }
       }
+      toolCallOf(res)?.annotate({ cards_mode: generationCardEnabled() ? (noCards ? "text" : "cards") : "off" });
       const server = createAtlasCloudServer("remote", { clientId: req.auth?.clientId, noCards });
       const baseTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

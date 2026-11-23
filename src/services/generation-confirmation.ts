@@ -120,7 +120,12 @@ export async function issueGenerationConfirmation(
   const chosen = await unusedIdempotencyKey(toolName, idempotencyKey, request);
   idempotencyKey = chosen.idempotencyKey;
   // 只报价、没提交：这是正常的第一步，不是错误。取值沿用 CLI 的 estimate。
-  annotateToolCall({ execution_mode: "estimate", stage: "quote", quote_hash: quoteHash(idempotencyKey) });
+  annotateToolCall({
+    execution_mode: "estimate",
+    stage: "quote",
+    quote_hash: quoteHash(idempotencyKey),
+    ...(chosen.repeatOf ? { quote_note: "repeat" as const } : chosen.alreadySubmitted ? { quote_note: "already_submitted" as const } : {}),
+  });
   const pricing = currentPricing(modelPrice);
   const { subject, secret, ttlSeconds } = runtime();
   const { requestFingerprint, pricingFingerprint } = fingerprints(
@@ -604,6 +609,7 @@ export async function resolveConfirmedIdempotencyKey(
     // 卡片认 "rejected by Atlas Cloud before it started" 这几个词，会换新键重新报价。
     const state = (await peekIdempotent(toolName, record.idempotencyKey).catch(() => undefined))?.state;
     if (state === "rejected") {
+      annotateToolCall({ confirm_resolution: "rejected_quote" });
       throw new GenerationConfirmationError(
         "The earlier quote for these exact arguments was rejected by Atlas Cloud before it started, so nothing " +
           "was charged and that quote can't be confirmed again. Call again without confirmed or confirmation_token " +
@@ -619,6 +625,7 @@ export async function resolveConfirmedIdempotencyKey(
     if (!confirmsThisQuote) {
       const earlier = await earlierSubmission(toolName, token, idempotencyKey, record, requestFingerprint, request, modelPrice);
       if (earlier === "missing") {
+        annotateToolCall({ confirm_resolution: "earlier_missing" });
         throw new GenerationConfirmationError(
           "This confirmation belongs to an earlier quote for these exact arguments whose job can no longer be looked " +
             "up, so it can't be confirmed again. Call again without confirmed or confirmation_token to get a new quote, " +
@@ -626,6 +633,7 @@ export async function resolveConfirmedIdempotencyKey(
         );
       }
       if (earlier) {
+        annotateToolCall({ confirm_resolution: "earlier_returned" });
         return {
           idempotencyKey: earlier.key,
           notice:
@@ -638,6 +646,7 @@ export async function resolveConfirmedIdempotencyKey(
       }
       // 最新这份报价是「再跑一次」：没明确指向它的确认一律不算（什么都不带、带了认不出的令牌或别的键）。
       if (record.repeatOf) {
+        annotateToolCall({ confirm_resolution: "repeat_needs_explicit" });
         throw new GenerationConfirmationError(
           `The latest quote for these exact arguments runs a request that was already submitted, so confirming it ` +
             `starts and bills a new job. Confirm it with that quote's idempotency_key (${record.idempotencyKey}) or its ` +
@@ -649,8 +658,10 @@ export async function resolveConfirmedIdempotencyKey(
     void rememberSubmission(toolName, requestFingerprint, record.idempotencyKey);
     // 幂等键现在可以不传（服务端在报价时生成）：没带就用报价记录里那个，不算「换了一单」。
     if (idempotencyKey === undefined || record.idempotencyKey === idempotencyKey) {
+      annotateToolCall({ confirm_resolution: record.idempotencyKey === idempotencyKey ? "exact" : "recovered" });
       return { idempotencyKey: record.idempotencyKey };
     }
+    annotateToolCall({ confirm_resolution: "recovered" });
     return {
       idempotencyKey: record.idempotencyKey,
       notice:
@@ -662,8 +673,10 @@ export async function resolveConfirmedIdempotencyKey(
   if (token && idempotencyKey !== undefined) {
     verifyGenerationConfirmation(token, toolName, idempotencyKey, request, modelPrice);
     void rememberSubmission(toolName, requestFingerprint, idempotencyKey);
+    annotateToolCall({ confirm_resolution: "token_only" });
     return { idempotencyKey };
   }
+  annotateToolCall({ confirm_resolution: "no_quote" });
   throw new GenerationConfirmationError(
     "No quote was found for these exact arguments and current price. Call again without " +
       "confirmed or confirmation_token to get a quote, show it to the user, and wait for their " +

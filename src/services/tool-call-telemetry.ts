@@ -129,6 +129,19 @@ export interface ToolCallFields {
   check_outcome?: string;
   /** atlas_card_check_submission 是卡片加载或后台悄悄问的（on_load），不是用户点了确认之后的查询。 */
   check_on_load?: boolean;
+  /**
+   * 这次请求服务端给的是卡片还是纯文字：cards（挂卡片模板）、text（认得出不画卡或明确没声明 MCP Apps）、
+   * off（卡片总开关关着）。WorkBuddy、GrokBot 这类按声明决定的客户端，看板上能直接对上。
+   */
+  cards_mode?: "cards" | "text" | "off";
+  /**
+   * 确认那次是怎么对上报价的：exact（令牌或键就是最新这份）、recovered（键没带或不对，按参数找回最新这份）、
+   * token_only（没有报价记录、凭令牌和键验过）、earlier_returned（指向更早已提交的那单，原样返回、不重复扣费）；
+   * 没对上的：rejected_quote、earlier_missing、repeat_needs_explicit、no_quote。
+   */
+  confirm_resolution?: string;
+  /** 报价时这组参数已经提交过：repeat（再跑一次，会再扣费）或 already_submitted（同一单还在跑，确认会拿回它）。 */
+  quote_note?: "repeat" | "already_submitted";
 }
 
 /** 美元金额只报有限、非负的数，按微美元取整，免得浮点尾数进看板。 */

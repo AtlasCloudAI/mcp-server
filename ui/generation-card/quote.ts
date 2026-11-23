@@ -24,6 +24,7 @@ import {
 } from "./card.js";
 import { ICON_FILE, ICON_IMAGE, type ViewOptions, badge, button, chips, h, head, retryButton, row } from "./view.js";
 import { withTimeout } from "./handoff.js";
+import { type CheckNote, forgetCheck, quoteKey, readCheck, writeCheck } from "./check-memo.js";
 import { say, sendForUser, userLang } from "./voice.js";
 
 const CHECK_TOOL = "atlas_card_check_submission";
@@ -47,8 +48,20 @@ const WATCH_FAST_MS = 15_000;
 const WATCH_FAST_FOR_MS = 5 * 60_000;
 const WATCH_EVERY_MS = 60_000;
 export const WATCH_FOR_MS = 10 * 60_000;
-/** 切回页面时，离上次问不到这么久就不再问。 */
-const WATCH_REFOCUS_MIN_MS = 3_000;
+/**
+ * 切回页面时，离上次问不到这么久就不再问。原来 3 秒：对话里每张还在有效期内的报价卡，用户每切一次标签页
+ * 就各问一次（11-22 生产 Claude 卡片 20 分钟约 440 次「没交过」）。
+ */
+const WATCH_REFOCUS_MIN_MS = 30_000;
+/** 别的卡片 / 上一次加载刚问过同一份报价（记在浏览器里），这么久之内后台不再问。 */
+const QUIET_SHARED_MIN_MS = 10_000;
+/** 重新打开时，同一份报价这么久之内问过、没交过，就不再问，直接显示报价。 */
+const RESUME_REUSE_MS = 60_000;
+/**
+ * 报价过期这么久以后，重新打开不再问：服务端的幂等记录早没了，只会回「没交过」。
+ * 服务端记录默认留 24 小时（MCP_IDEMPOTENCY_TTL_SECONDS），这里按它允许的上限 7 天算，配置怎么改都不会漏。
+ */
+export const RECORD_KEPT_MS = 7 * 24 * 60 * 60_000;
 const RESUME_FAILED =
   "Couldn't check whether this quote was already submitted. Confirming again won't charge twice: you'd get the same job back.";
 
@@ -235,7 +248,20 @@ export function quoteExpired(quote: QuoteInfo | undefined, now = Date.now()): bo
   return Number.isFinite(at) && at <= now;
 }
 
-/** 第 n 次（从 0 数）后台检查前等多久；加上已经问了的时长超过 WATCH_FOR_MS 就不再定时问（undefined）。 */
+/**
+ * 报价发出的时刻（失效时间减有效期，服务端出报价时算好、写在工具结果里，重新加载也不变）；
+ * 拿不到就是 undefined。
+ */
+export function quoteIssuedAt(quote: QuoteInfo | undefined): number | undefined {
+  const expires = quote?.expires_at ? Date.parse(quote.expires_at) : NaN;
+  if (!Number.isFinite(expires) || !quote?.valid_seconds) return undefined;
+  return expires - quote.valid_seconds * 1000;
+}
+
+/**
+ * 第 n 次（从 0 数）后台检查前等多久；elapsedMs 从报价发出时算（不是卡片加载时：原来每加载一次就重新问满
+ * 10 分钟，旧对话里的卡片反复加载就一直问）。加上已经过去的时长超过 WATCH_FOR_MS 就不再定时问（undefined）。
+ */
 export function watchGap(n: number, elapsedMs: number): number | undefined {
   const gap = n === 0 ? WATCH_FIRST_MS : elapsedMs < WATCH_FAST_FOR_MS ? WATCH_FAST_MS : WATCH_EVERY_MS;
   return elapsedMs + gap > WATCH_FOR_MS ? undefined : gap;
@@ -285,9 +311,38 @@ export function initialQuoteState(card: CardData, now = Date.now()): QuoteState 
  */
 export function reopenedOnQuote(quote: QuoteInfo | undefined, now = Date.now()): boolean {
   if (!quote) return false;
+  const issued = quoteIssuedAt(quote);
+  if (issued === undefined) return true;
+  return now - issued > REOPENED_AFTER_MS;
+}
+
+/** 这份报价在浏览器里记检查结果用的键。 */
+export function checkKeyOf(quote: QuoteInfo): string {
+  return quoteKey(quote.tool, quote.idempotency_key, quoteIssuedAt(quote));
+}
+
+/**
+ * 重新打开在一份报价上时要不要问服务端。ask：问；quote：不问，照旧显示报价（过期的显示过期）；
+ * canceled / replaced：之前问到过已作废，直接显示作废。
+ */
+export type ResumePlan = "ask" | "quote" | "canceled" | "replaced";
+
+export function resumePlan(quote: QuoteInfo, note: CheckNote | undefined, now = Date.now()): ResumePlan {
+  if (note?.outcome === "canceled") return "canceled";
+  if (note?.outcome === "canceled_replaced") return "replaced";
+  // 过期后问到过「没交过」：报价已经交不了了，结论不会再变。
+  if (note?.outcome === "not_submitted" && note.expired) return "quote";
+  if (note?.outcome === "not_submitted" && now - note.at < RESUME_REUSE_MS) return "quote";
   const expires = quote.expires_at ? Date.parse(quote.expires_at) : NaN;
-  if (!Number.isFinite(expires) || !quote.valid_seconds) return true;
-  return now - (expires - quote.valid_seconds * 1000) > REOPENED_AFTER_MS;
+  if (Number.isFinite(expires) && now - expires > RECORD_KEPT_MS) return "quote";
+  return "ask";
+}
+
+/** 后台问的回答记到浏览器里（开始了的不记：每次都要拿服务端的回答接着显示进度）。 */
+function noteCheck(quote: QuoteInfo, outcome: string | undefined, reason: unknown, now = Date.now()): void {
+  const key = checkKeyOf(quote);
+  if (outcome === "not_submitted") writeCheck(key, { at: now, outcome, ...(quoteExpired(quote, now) ? { expired: true } : {}) }, now);
+  else if (outcome === "canceled") writeCheck(key, { at: now, outcome: reason === "replaced" ? "canceled_replaced" : "canceled" }, now);
 }
 
 /** 重新报价拿到的新价格和用户先前同意的不一样（按显示出来的金额比，不比浮点尾数）。 */
@@ -328,6 +383,15 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   async function resume(): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote || sample() || checking) return;
+    // 已经有定论、刚问过、或者旧到服务端早就不记得了：不问，直接显示（11-22 生产：旧对话里的报价卡
+    // 每次重新加载都问一遍，问到的都是「没交过」）。
+    const plan = resumePlan(quote, readCheck(checkKeyOf(quote)));
+    if (plan !== "ask") {
+      const card = deps.card();
+      if (card?.quote !== quote) return;
+      deps.setState(plan === "quote" ? initialQuoteState(card) : canceledState(plan === "replaced" ? "replaced" : "declined"));
+      return;
+    }
     // 问的这段时间画一张中性的「加载中」，不先画报价：已经出过图的对话重开时，报价卡和 Checking
     // 会先闪一下再变成结果（11-11 Claude H）。有的宿主（Cursor）卡片调工具前要用户先点授权，
     // 加载卡上写着在查什么，用户不至于看着一张待确认的报价不知道卡片在等什么（验收问题 59）。
@@ -345,6 +409,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       });
       const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
       const outcome = content?.outcome;
+      if (!result.isError) noteCheck(quote, outcome, content?.reason);
       // 只认「开始了」和「作废了」：没提交过、被拒过的，照旧显示这份报价，用户还能确认或重新报价。
       if (!result.isError && outcome === "started" && deps.card()?.quote === quote) startedFrom(result, quote, false);
       else if (!result.isError && outcome === "canceled" && deps.card()?.quote === quote) deps.setState(canceledState(content?.reason));
@@ -355,17 +420,21 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
     }
   }
 
-  let watchingSince = 0;
+  let watching = false;
   let watchInflight = false;
   let lastQuietCheck = 0;
 
   /** 悄悄问一次：不改卡片的样子，只有「开始了」才切成进度；问不到、没提交，都照旧。 */
-  async function quietCheck(): Promise<void> {
+  async function quietCheck(minGapMs = QUIET_SHARED_MIN_MS): Promise<void> {
     const quote = deps.card()?.quote;
     if (!quote || checking || watchInflight || !deps.quietCalls()) return;
     if (!awaitingConfirmation(deps.card(), deps.state())) return;
+    // 这张卡、或者同一份报价的另一次加载刚问过：这回不问。
+    const now = Date.now();
+    const shared = readCheck(checkKeyOf(quote), now);
+    if (now - Math.max(lastQuietCheck, shared?.at ?? 0) < minGapMs) return;
     watchInflight = true;
-    lastQuietCheck = Date.now();
+    lastQuietCheck = now;
     try {
       const result = await deps.app.callServerTool({
         name: CHECK_TOOL,
@@ -373,6 +442,7 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       });
       const content = result.structuredContent as { outcome?: string; reason?: string } | undefined;
       const outcome = content?.outcome;
+      if (!result.isError && deps.card()?.quote === quote) noteCheck(quote, outcome, content?.reason);
       // 问的这会儿用户可能自己点了确认：那一路自己会接着显示，这里不插手。
       const stillWaiting = !result.isError && deps.card()?.quote === quote && awaitingConfirmation(deps.card(), deps.state());
       if (stillWaiting && outcome === "started") startedFrom(result, quote, false);
@@ -386,11 +456,14 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
   }
 
   function watch(): void {
-    if (watchingSince || sample()) return;
-    watchingSince = Date.now();
+    if (watching || sample()) return;
+    watching = true;
+    const mountedAt = Date.now();
     let n = 0;
     const next = (): void => {
-      const gap = watchGap(n++, Date.now() - watchingSince);
+      // 从报价发出时算（卡里重新报价后按新报价算）；算不出发出时间就从加载时算。
+      const issued = quoteIssuedAt(deps.card()?.quote) ?? mountedAt;
+      const gap = watchGap(n++, Date.now() - issued);
       if (gap === undefined) return;
       setTimeout(() => {
         void quietCheck().finally(() => {
@@ -398,10 +471,11 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
         });
       }, gap);
     };
+    // 报价发出已超过 WATCH_FOR_MS（旧对话重新加载）就不定时问；切回页面时的检查只问还在有效期内的报价。
     next();
     const refocus = (): void => {
-      if (document.visibilityState !== "visible" || Date.now() - lastQuietCheck < WATCH_REFOCUS_MIN_MS) return;
-      void quietCheck();
+      if (document.visibilityState !== "visible") return;
+      void quietCheck(WATCH_REFOCUS_MIN_MS);
     };
     document.addEventListener("visibilitychange", refocus);
     window.addEventListener("focus", refocus);
@@ -482,6 +556,8 @@ export function createQuoteActions(deps: QuoteDeps): QuoteActions {
       return;
     }
     const withConfirmation = opts.confirm === true;
+    // 卡片自己提交或重新报价：之前记的「没交过」不算数了，下次加载照常问。
+    forgetCheck(checkKeyOf(quote));
     deps.setState({ phase: withConfirmation ? "submitting" : "quoting" });
     if (withConfirmation) submittedAt = new Date().toISOString();
     try {

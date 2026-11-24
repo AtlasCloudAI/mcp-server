@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { annotateToolCall, recordToolCallError, sanitizeEnum, sanitizeModel, telemetryNumber } from "../telemetry/tool-call.js";
 import { z } from "zod";
 import { llmApi } from "../services/api-client.js";
 import { findModel } from "../services/doc-fetcher.js";
@@ -191,8 +192,16 @@ Examples:
 
         const declared = resolveDeclaredProtocol(found?.supported_protocols);
         const protocol = resolveChatProtocol(found?.supported_protocols);
+        annotateToolCall({
+          execution_mode: "chat",
+          model_type: "llm",
+          model: sanitizeModel(found?.model || model),
+          llm_protocol: sanitizeEnum(declared),
+          stream: false,
+        });
 
         if (!isProtocolImplemented(declared)) {
+          recordToolCallError({ code: "model_type_mismatch", cause: "unsupported_protocol" });
           return {
             isError: true,
             content: [
@@ -238,7 +247,15 @@ Examples:
         });
 
         const text = extractResponseText(protocol, response);
+        const tokenUsage = extractUsage(protocol, response);
+        annotateToolCall({
+          prompt_tokens: telemetryNumber(tokenUsage?.prompt),
+          completion_tokens: telemetryNumber(tokenUsage?.completion),
+          total_tokens: telemetryNumber(tokenUsage?.total),
+          finish_reason: sanitizeEnum(extractFinishReason(protocol, response)),
+        });
         if (text === undefined) {
+          recordToolCallError({ code: "upstream_failure", cause: "empty_response" });
           return {
             isError: true,
             content: [

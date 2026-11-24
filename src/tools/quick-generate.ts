@@ -4,6 +4,7 @@ import { searchModels, findModel } from "../services/doc-fetcher.js";
 import { api, fetchExternal } from "../services/api-client.js";
 import { handleError } from "../utils/error-handler.js";
 import { formatDryRun } from "../utils/dry-run.js";
+import { annotateToolCall, recordToolCallError, sanitizeModel, schemaErrorParam } from "../telemetry/tool-call.js";
 import {
   validateModelParams,
   formatValidationError,
@@ -493,9 +494,11 @@ Examples:
     }) => {
       try {
         // Step 1: Resolve model
+        annotateToolCall({ stage: "prepare", model_type: String(type).toLowerCase(), execution_mode: dry_run ? "dry_run" : "submit" });
         const resolved = await resolveModel(model_keyword, type);
 
         if ("error" in resolved) {
+          recordToolCallError({ code: "model_not_found" });
           return {
             isError: true,
             content: [{ type: "text", text: resolved.error }],
@@ -503,6 +506,7 @@ Examples:
         }
 
         const { model: foundModel, candidates } = resolved;
+        annotateToolCall({ model: sanitizeModel(foundModel.model), model_candidates: candidates?.length ?? 1, stage: "schema" });
 
         const media: Record<MediaKind, string[]> = {
           image: image_url
@@ -523,6 +527,7 @@ Examples:
             // Continue without schema
           }
         }
+        if (!schema) annotateToolCall({ schema_skipped: true });
 
         // Step 3: Build params
         let requestBody: Record<string, unknown>;
@@ -558,6 +563,7 @@ Examples:
             paramsToValidate
           );
           if (!validation.ok) {
+            recordToolCallError({ code: "invalid_param", cause: "schema_validation", param: schemaErrorParam(validation.errors) });
             return {
               isError: true,
               content: [
@@ -593,6 +599,7 @@ Examples:
         }
 
         // Step 4: Submit generation
+        annotateToolCall({ stage: "submit" });
         const response = await api<PredictionResponse>(endpoint, {
           method: "POST",
           body: requestBody,

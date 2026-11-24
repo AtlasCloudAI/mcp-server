@@ -9,3 +9,4 @@ deploy/kubernetes/*-credentials.txt
 
 connectors/workbuddy/dist-skills/
 connectors/workbuddy/dist-expert/
+telemetry-key.json

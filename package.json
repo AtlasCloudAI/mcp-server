@@ -11,7 +11,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "telemetry-key.json"
   ],
   "scripts": {
     "start": "node dist/index.js",
@@ -22,6 +23,7 @@
     "dev:auth": "tsx watch src/auth.ts",
     "build": "tsc && node scripts/build-ui.mjs",
     "clean": "rm -rf dist",
+    "prepack": "npm run clean && npm run build && node scripts/write-telemetry-key.mjs",
     "test": "tsx --test test/**/*.test.ts",
     "test:codex-oauth": "./scripts/test-codex-oauth-app-server-login.sh",
     "test:codex-oauth:chrome-live": "node scripts/codex-oauth-chrome-e2e.mjs",

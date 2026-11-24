@@ -41,9 +41,15 @@ export interface ServerClient {
 const SERVER_ICON_URL =
   "https://raw.githubusercontent.com/AtlasCloudAI/atlas-cloud-plugin/v0.6.0/plugins/atlas-cloud/assets/app-icon.svg";
 
+export interface ServerHooks {
+  /** Runs on the new server before any tool registers (the local telemetry wraps registerTool here). */
+  beforeTools?: (server: McpServer) => void;
+}
+
 export function createAtlasCloudServer(
   profile: ServerProfile = "stdio",
-  client: ServerClient = {}
+  client: ServerClient = {},
+  hooks: ServerHooks = {}
 ): McpServer {
   // ChatGPT 拿精简版描述（开关 MCP_CHATGPT_LEAN_DESCRIPTIONS，见 services/chatgpt-lean.ts）。
   const lean = profile === "remote" && usesLeanDescriptions(client.clientId);
@@ -79,6 +85,7 @@ export function createAtlasCloudServer(
     }
   );
 
+  hooks.beforeTools?.(server);
   registerDocsTools(server);
   registerModelTools(server, { lean });
   registerImageTools(server, { lean });

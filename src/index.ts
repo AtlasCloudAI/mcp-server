@@ -14,6 +14,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createAtlasCloudServer } from "./server.js";
 import { prefetchCardCatalog } from "./apps/generation-card.js";
+import { watchClientInfo } from "./telemetry/identity.js";
 
 // Start stdio transport
 async function main(): Promise<void> {
@@ -23,6 +24,8 @@ async function main(): Promise<void> {
   const server = createAtlasCloudServer("stdio");
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Which MCP client this is, for the X-Atlas-MCP-Client header (services/api-client.ts).
+  watchClientInfo(transport);
   prefetchCardCatalog();
   console.error("Atlas Cloud MCP Server running via stdio");
 }

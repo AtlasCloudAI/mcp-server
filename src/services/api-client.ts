@@ -16,6 +16,8 @@ import {
 } from "../constants.js";
 import type { UploadResponse } from "../types.js";
 import { getRequestContext } from "./request-context.js";
+import { clientHeaderValue } from "../telemetry/identity.js";
+import { clientState } from "../telemetry/state.js";
 
 // Auto-detect proxy env vars for Node.js fetch
 function getProxyDispatcher(): Dispatcher | undefined {
@@ -122,6 +124,21 @@ export function disableEnvironmentApiKey(): void {
   environmentKeyAllowed = false;
 }
 
+// The local (stdio) server sends these with every request that carries the
+// user's API key, so Atlas can tell usage that came through this MCP server
+// from other API-key traffic (X-Source-From) and which MCP client it was
+// (X-Atlas-MCP-Client, stored as task_context.mcp_client). They are labels
+// only: the API key still decides who is billed. The remote server never sends
+// them: its traffic is attributed by the OAuth client instead, and the remote
+// entry point turns this off together with the environment key.
+const LOCAL_SOURCE_HEADERS: Readonly<Record<string, string>> = { "X-Source-From": "atlas-mcp" };
+
+export function localSourceHeaders(): Record<string, string> {
+  if (!environmentKeyAllowed) return {};
+  const client = clientHeaderValue(clientState.name, clientState.version);
+  return client ? { ...LOCAL_SOURCE_HEADERS, "X-Atlas-MCP-Client": client } : { ...LOCAL_SOURCE_HEADERS };
+}
+
 export function getApiKey(): string {
   const key =
     getRequestContext()?.atlasApiKey ?? (environmentKeyAllowed ? process.env.ATLASCLOUD_API_KEY : undefined);
@@ -196,6 +213,7 @@ export async function request<T>(
   if (requireAuth) {
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
   }
+  if (finalHeaders["Authorization"]) Object.assign(finalHeaders, localSourceHeaders());
 
   // POST requests should not retry - they may create billable tasks (image/video generation)
   const effectiveMaxRetries = method === "POST" ? 0 : maxRetries;
@@ -423,6 +441,7 @@ export async function uploadMediaBuffer(
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        ...localSourceHeaders(),
       },
       body: formData,
       signal: controller.signal,
@@ -544,6 +563,7 @@ export async function uploadStreamToAssetLibrary(
       method: "POST",
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
+        ...localSourceHeaders(),
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
         Accept: "application/json",
       },

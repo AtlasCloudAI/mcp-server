@@ -9,7 +9,7 @@ import {
   registerAppResource,
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
-import { generationApi } from "../services/api-client.js";
+import { ApiRequestError, generationApi } from "../services/api-client.js";
 import { rememberCardClient } from "../services/card-clients.js";
 import { publicUrlStillServes } from "../services/input-link-check.js";
 import { isConfiguredMediaHost } from "../services/owned-storage.js";
@@ -582,6 +582,28 @@ export async function predictionCardData(
   });
 }
 
+/** 查这个任务的状态时上游回这几种码：任务查不到或状态读不了，再查也一样。 */
+const UNREADABLE_STATUS_CODES = new Set([400, 404, 410, 422]);
+
+/**
+ * 卡片刷新时任务状态读不了（上游 400/404/410/422），给一句卡片认得出的固定说法。
+ *
+ * 卡片连着 3 次碰到「再试也没用」的错就停止自己刷新（ui/generation-card/card.ts 的 permanentPollError），
+ * 但上游 400 的原文各式各样，404 给的是通用的 "Resource not found"，卡片都认不出，会一直退避重试：
+ * 2026-11-23～24 生产 v2.10.4，6 个任务、4 个用户的卡片刷了 92 次 prediction_status_rejected。
+ * 这句以 "Prediction not found" 开头，现有卡片（包括 ChatGPT 缓存的旧模板）的正则就能认出，
+ * 所以不用改卡片、卡片模板地址的哈希也不变。埋点照旧由 handleError 记。
+ */
+export function unreadablePredictionText(predictionId: string, error: unknown): string | undefined {
+  if (!(error instanceof ApiRequestError) || !error.statusCode || !UNREADABLE_STATUS_CODES.has(error.statusCode)) {
+    return undefined;
+  }
+  return (
+    `Error: Prediction not found or its status can't be read (Atlas Cloud returned HTTP ${error.statusCode} for ${predictionId}). ` +
+    "Refreshing again won't change this; check the chat or Atlas Cloud for the result."
+  );
+}
+
 /**
  * 卡片自己刷新用。和 atlas_get_prediction 读同一个接口、同样在服务端等一会儿，
  * 但只回卡片数据：不附图片预览块、不写给模型的指引，轮询起来轻。
@@ -637,7 +659,8 @@ export function registerCardStatusTool(server: McpServer): void {
           content: [{ type: "text", text: `Prediction ${prediction_id}: ${card.state}` }],
         };
       } catch (error) {
-        return { isError: true, content: [{ type: "text", text: handleError(error) }] };
+        const text = handleError(error);
+        return { isError: true, content: [{ type: "text", text: unreadablePredictionText(prediction_id, error) ?? text }] };
       }
     }
   );

@@ -1,3 +1,6 @@
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { clientState } from "./state.js";
+
 /**
  * Which MCP client is running this server, from the `clientInfo` it sends in
  * `initialize`. Only shape-checked strings leave this file: a client name is a
@@ -91,4 +94,33 @@ export function hostedPlatformOf(detail: string): string {
 export function clientHeaderValue(name: string | undefined, version: string | undefined): string | undefined {
   if (!name) return undefined;
   return version ? `${name}/${version}` : name;
+}
+
+/**
+ * Read the client's name, version and protocol version from `initialize` into
+ * clientState, for the X-Atlas-MCP-Client header and for telemetry. Runs for
+ * every session, independent of the telemetry switch: the header is request
+ * metadata like X-Source-From, not a usage event. Call after server.connect().
+ */
+export function watchClientInfo(transport: Transport): void {
+  const original = transport.onmessage;
+  if (!original) return;
+  transport.onmessage = (message, extra) => {
+    try {
+      const record = message as { method?: unknown; params?: Record<string, unknown> };
+      if (record.method === "initialize" && record.params) {
+        const info = record.params.clientInfo as { name?: unknown; version?: unknown } | undefined;
+        clientState.name = clientNameOf(info?.name);
+        clientState.version = clientVersionOf(info?.version);
+        clientState.platformDetail = clientPlatformOf(clientState.name);
+        clientState.platform = hostedPlatformOf(clientState.platformDetail);
+        const protocol = record.params.protocolVersion;
+        clientState.protocolVersion =
+          typeof protocol === "string" && /^[0-9A-Za-z.-]{1,20}$/.test(protocol) ? protocol : undefined;
+      }
+    } catch {
+      // never interfere with the session
+    }
+    return original.call(transport, message, extra);
+  };
 }

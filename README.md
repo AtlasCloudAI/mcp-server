@@ -334,7 +334,7 @@ The npm package sends anonymous usage telemetry to Atlas Cloud (PostHog), the sa
 
 Every event also carries: server version, MCP client name and version (from the MCP handshake, e.g. `claude-code`, `cursor-vscode`) and the client family it belongs to, protocol version, OS, CPU architecture, Node.js version, locale, how the package was installed (npx / global / local), a random install ID stored in `~/.config/atlascloud-mcp/telemetry.json`, a random per-session ID, and — once your key has been used — a one-way hash of your Atlas account ID. IP-based geolocation is disabled.
 
-The MCP client name and version are also sent to the Atlas API as an `X-Atlas-MCP-Client` header, so usage can be broken down by client.
+The MCP client name and version are also sent to the Atlas API as an `X-Atlas-MCP-Client` header, so usage can be broken down by client. Like the `X-Source-From` tag, this header is part of the request to Atlas rather than a telemetry event, so it is sent even when telemetry is off.
 
 ## Development
 

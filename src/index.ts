@@ -25,6 +25,7 @@ import { registerQuickGenerateTools } from "./tools/quick-generate.js";
 import { registerUploadTools } from "./tools/upload.js";
 import { registerAccountTools } from "./tools/account.js";
 import { Telemetry } from "./telemetry/telemetry.js";
+import { watchClientInfo } from "./telemetry/identity.js";
 import { publicApi } from "./services/api-client.js";
 import type { BalanceResponse } from "./types.js";
 
@@ -63,6 +64,8 @@ registerAccountTools(server);
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Which MCP client this is (X-Atlas-MCP-Client), whether or not telemetry is on.
+  watchClientInfo(transport);
   if (telemetry) {
     telemetry.observeTransport(transport);
     // Report the session end before the process goes away. The client closing

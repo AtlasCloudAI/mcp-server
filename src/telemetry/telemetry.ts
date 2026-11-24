@@ -8,7 +8,6 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { API_BASE } from "../constants.js";
 import { getProxyDispatcher } from "../services/api-client.js";
 import { summarizeArgs } from "./args.js";
-import { clientNameOf, clientPlatformOf, clientVersionOf, hostedPlatformOf } from "./identity.js";
 import { clientState, onAccountSeen, onAuthedSuccess } from "./state.js";
 import { ToolCallRecord, runInToolCall } from "./tool-call.js";
 
@@ -347,9 +346,9 @@ export class Telemetry {
   }
 
   /**
-   * Watch the transport's incoming messages for `initialize`: the client's
-   * name, version, protocol version and capabilities are only sent there.
-   * Must be called after server.connect(), which installs onmessage.
+   * Watch the transport for session start, client capabilities and tools/call
+   * requests the SDK answers itself. Must be called after server.connect(),
+   * which installs onmessage.
    */
   observeTransport(transport: Transport): void {
     const original = transport.onmessage;
@@ -358,14 +357,8 @@ export class Telemetry {
       try {
         const record = message as { method?: unknown; params?: Record<string, unknown> };
         if (record.method === "initialize" && record.params) {
-          const info = record.params.clientInfo as { name?: unknown; version?: unknown } | undefined;
-          clientState.name = clientNameOf(info?.name);
-          clientState.version = clientVersionOf(info?.version);
-          clientState.platformDetail = clientPlatformOf(clientState.name);
-          clientState.platform = hostedPlatformOf(clientState.platformDetail);
-          const protocol = record.params.protocolVersion;
-          clientState.protocolVersion =
-            typeof protocol === "string" && /^[0-9A-Za-z.-]{1,20}$/.test(protocol) ? protocol : undefined;
+          // Client name / version / protocol are read by watchClientInfo (identity.ts),
+          // which runs whether or not telemetry is on; only capabilities are telemetry's.
           this.clientCapabilities = capabilityNames(record.params.capabilities);
         } else if (record.method === "notifications/initialized") {
           this.sessionStart();

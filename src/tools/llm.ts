@@ -28,7 +28,24 @@ import {
   type OutputKind,
 } from "../services/media-preview.js";
 import { handleError } from "../utils/error-handler.js";
-import type { ChatCompletionResponse } from "../types.js";
+import type { ChatCompletionResponse, ChatTurn, MediaInput, Model } from "../types.js";
+import {
+  MODEL_PROTOCOLS,
+  buildChatPath,
+  buildChatRequestBody,
+  extractFinishReason,
+  extractResponseText,
+  extractUsage,
+  isMediaSupportedByProtocol,
+  isProtocolImplemented,
+  resolveChatProtocol,
+  resolveDeclaredProtocol,
+} from "../services/protocols.js";
+import {
+  annotateToolCall as annotateLocalToolCall,
+  sanitizeEnum,
+  telemetryNumber,
+} from "../telemetry/tool-call.js";
 import {
   generationConfirmationTokenSchema,
   generationConfirmedSchema,
@@ -132,10 +149,142 @@ export const TRANSFER_NEXT_STEP =
   "temporary_outputs are provider links that are slow from many networks and expire within 24 hours; " +
   "use them only if no Atlas link has appeared after about 5 minutes.";
 
+// --- local (npm) server: protocol-aware chat, kept from npm 1.x ------------------
+// The hosted atlas_chat calls /chat/completions with text messages. The local
+// server keeps what 1.x did: call the protocol the model declares first
+// (Gemini's native generateContent, Responses, Messages), attach images /
+// video / audio to a message, and pass extra sampling parameters through.
+
+const MEDIA_KEYS = [
+  ["images", "image"],
+  ["videos", "video"],
+  ["audios", "audio"],
+] as const;
+
+interface LegacyChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+  images?: string[];
+  videos?: string[];
+  audios?: string[];
+}
+
+function mediaOf(message: LegacyChatMessage): MediaInput[] {
+  const media: MediaInput[] = [];
+  for (const [key, kind] of MEDIA_KEYS) {
+    for (const url of message[key] ?? []) {
+      if (typeof url === "string" && url.trim()) media.push({ kind, url: url.trim() });
+    }
+  }
+  return media;
+}
+
+/** Media that will not reach the model: the model does not take that modality, or the protocol cannot carry it. */
+function mediaWarnings(
+  turns: ChatTurn[],
+  protocol: (typeof MODEL_PROTOCOLS)[keyof typeof MODEL_PROTOCOLS],
+  model: Model
+): string[] {
+  const attached = new Set(turns.flatMap((t) => (t.media ?? []).map((m) => m.kind)));
+  if (attached.size === 0) return [];
+  const warnings: string[] = [];
+  const modalities = model.input_modalities;
+  for (const kind of attached) {
+    if (Array.isArray(modalities) && modalities.length > 0 && !modalities.includes(kind)) {
+      warnings.push(
+        `The model does not accept ${kind} input (input modalities: ${modalities.join(", ")}). The ${kind} attachments were sent anyway and may be rejected.`
+      );
+      continue;
+    }
+    if (!isMediaSupportedByProtocol(protocol, kind)) {
+      warnings.push(`The \`${protocol}\` protocol has no ${kind} content part, so the ${kind} attachments were dropped.`);
+    }
+  }
+  if (
+    attached.has("audio") &&
+    (protocol === MODEL_PROTOCOLS.OPENAI_CHAT_COMPLETIONS || protocol === MODEL_PROTOCOLS.OPENAI_RESPONSES)
+  ) {
+    warnings.push(
+      "On OpenAI-style protocols audio must be inlined as a `data:audio/...;base64,` URI — plain http(s) audio URLs cannot be expressed and were dropped."
+    );
+  }
+  return warnings;
+}
+
+// extra_params may not widen the cost bound (output length, choice count) or change the transport.
+const EXTRA_PARAMS_RESERVED = new Set([
+  "model",
+  "messages",
+  "stream",
+  "n",
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+]);
+
+function chatExtraParams(extra: Record<string, unknown> | undefined): {
+  extra?: Record<string, unknown>;
+  dropped: string[];
+} {
+  if (!extra) return { dropped: [] };
+  const kept: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(extra)) {
+    if (EXTRA_PARAMS_RESERVED.has(key)) dropped.push(key);
+    else kept[key] = value;
+  }
+  return { ...(Object.keys(kept).length > 0 ? { extra: kept } : {}), dropped };
+}
+
+/** A non-chat-completions reply in the chat-completions shape the rest of the tool reads. */
+function protocolChatResponse(
+  protocol: (typeof MODEL_PROTOCOLS)[keyof typeof MODEL_PROTOCOLS],
+  raw: Record<string, unknown>,
+  model: string
+): ChatCompletionResponse {
+  const text = extractResponseText(protocol, raw) ?? "";
+  const usage = extractUsage(protocol, raw);
+  const prompt = usage?.prompt ?? 0;
+  const completion = usage?.completion ?? 0;
+  const id = typeof raw.id === "string" ? raw.id : typeof raw.responseId === "string" ? raw.responseId : "";
+  const replyModel =
+    typeof raw.model === "string" ? raw.model : typeof raw.modelVersion === "string" ? raw.modelVersion : model;
+  return {
+    id,
+    object: "chat.completion",
+    created: 0,
+    model: replyModel,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: extractFinishReason(protocol, raw) ?? "stop",
+      },
+    ],
+    ...(usage ? { usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: usage.total ?? prompt + completion } } : {}),
+  };
+}
+
+const legacyMessageSchema = z.object({
+  role: z.enum(["system", "user", "assistant"]).describe("Message role"),
+  content: z.string().describe("Message text"),
+  images: z.array(z.string()).optional().describe("Image URLs or data: URIs to attach to this message"),
+  videos: z.array(z.string()).optional().describe("Video URLs or data: URIs to attach to this message"),
+  audios: z
+    .array(z.string())
+    .optional()
+    .describe("Audio URLs or data: URIs. OpenAI-style protocols require a base64 data: URI"),
+});
+
+const LEGACY_CHAT_ARGS = `
+  - messages[].images / videos / audios (string arrays, optional): Media to attach to a message (URLs or data: URIs). The request goes to the protocol the model declares first (OpenAI chat completions, OpenAI Responses, Anthropic Messages or Gemini generateContent). A request with attachments always stops for confirmation first: attachments add input tokens that cannot be counted in advance.
+  - extra_params (object, optional): Additional sampling parameters passed through unchanged (top_k, seed, stop, penalties, ...). Output-length and stream keys are ignored; use max_tokens.`;
+
 export function registerLLMTools(
   server: McpServer,
-  options: { includeChat?: boolean } = {}
+  options: { includeChat?: boolean; legacyParams?: boolean } = {}
 ): void {
+  const legacy = options.legacyParams === true;
   // Chat completions (OpenAI-compatible)
   if (options.includeChat !== false) {
     server.registerTool(
@@ -152,7 +301,7 @@ Args:
     Roles: "system", "user", "assistant"
   - temperature (number, optional): Sampling temperature, 0-2. Default: 1
   - max_tokens (number, optional): Maximum tokens in the response. Setting it also lowers the worst-case bound. Reasoning models spend part of it on hidden reasoning, so do not set it below about 1024 for them, or the answer is cut off.
-  - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1
+  - top_p (number, optional): Nucleus sampling parameter, 0-1. Default: 1${legacy ? LEGACY_CHAT_ARGS : ""}
 
 Returns:
   The LLM response including the generated message, token usage, finish reason and cost.
@@ -163,15 +312,17 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
           model: z.string().min(1).describe("Exact current LLM model ID"),
-          messages: z
-            .array(
-              z.object({
-                role: z.enum(["system", "user", "assistant"]).describe("Message role"),
-                content: z.string().describe("Message content"),
-              })
-            )
-            .min(1)
-            .describe("Array of chat messages"),
+          messages: legacy
+            ? z.array(legacyMessageSchema).min(1).describe("Array of chat messages")
+            : z
+                .array(
+                  z.object({
+                    role: z.enum(["system", "user", "assistant"]).describe("Message role"),
+                    content: z.string().describe("Message content"),
+                  })
+                )
+                .min(1)
+                .describe("Array of chat messages"),
           temperature: z
             .number()
             .min(0)
@@ -190,6 +341,14 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
             .max(1)
             .optional()
             .describe("Nucleus sampling parameter, 0-1. Default: 1"),
+          ...(legacy
+            ? {
+                extra_params: z
+                  .record(z.unknown())
+                  .optional()
+                  .describe("Additional sampling parameters passed through unchanged (top_k, seed, stop, penalties, ...)"),
+              }
+            : {}),
         },
         outputSchema: {
           status: z.enum(["confirmation_required", "completed"]),
@@ -216,16 +375,10 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         },
         annotations: toolAnnotations("atlas_chat"),
       },
-      async ({
-        idempotency_key,
-        confirmation_token,
-        confirmed,
-        model,
-        messages,
-        temperature,
-        max_tokens,
-        top_p,
-      }) => {
+      async (args) => {
+        const { idempotency_key, confirmation_token, confirmed, model, temperature, max_tokens, top_p } = args;
+        const messages = args.messages as LegacyChatMessage[];
+        const { extra_params } = args as { extra_params?: Record<string, unknown> };
         try {
           annotateToolCall({ stage: "prepare" });
           const found = await findModelByExactId(model);
@@ -243,13 +396,56 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           }
 
           annotateToolCall({ model: found.model });
-          const body: Record<string, unknown> = {
-            model: found.model,
-            messages,
-          };
-          if (temperature !== undefined) body.temperature = temperature;
-          if (max_tokens !== undefined) body.max_tokens = max_tokens;
-          if (top_p !== undefined) body.top_p = top_p;
+          // 托管版固定走 /chat/completions；本地版按模型声明的协议（npm 1.x 的行为）。
+          const declared = legacy ? resolveDeclaredProtocol(found.supported_protocols) : MODEL_PROTOCOLS.OPENAI_CHAT_COMPLETIONS;
+          const protocol = legacy ? resolveChatProtocol(found.supported_protocols) : MODEL_PROTOCOLS.OPENAI_CHAT_COMPLETIONS;
+          annotateLocalToolCall({ execution_mode: "chat", model_type: "llm", llm_protocol: sanitizeEnum(declared), stream: false });
+          if (!isProtocolImplemented(declared)) {
+            recordToolCallError({ code: "invalid_param", cause: "unsupported_protocol" });
+            return {
+              isError: true,
+              content: [{
+                type: "text",
+                text:
+                  `Model \`${found.model}\` speaks the \`${declared}\` protocol, which atlas_chat cannot call. ` +
+                  (declared === MODEL_PROTOCOLS.OPENAI_IMAGES
+                    ? "It is an image-generation endpoint, not a chat model: use atlas_generate_image."
+                    : "Pick a different model with atlas_list_models.") +
+                  " No billable request was submitted.",
+              }],
+            };
+          }
+          const turns: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.content, media: legacy ? mediaOf(m) : [] }));
+          const hasMedia = turns.some((turn) => (turn.media?.length ?? 0) > 0);
+          const extras = legacy ? chatExtraParams(extra_params) : { dropped: [] as string[] };
+          const warnings = legacy ? mediaWarnings(turns, protocol, found) : [];
+          if (extras.dropped.length > 0) {
+            warnings.push(`extra_params ${extras.dropped.join(", ")} ignored: use max_tokens for the output length.`);
+          }
+          // 纯文字、协议就是 chat completions、没有额外参数时，请求体和托管版一模一样。
+          const protocolRequest =
+            protocol !== MODEL_PROTOCOLS.OPENAI_CHAT_COMPLETIONS || hasMedia || extras.extra !== undefined;
+          let body: Record<string, unknown>;
+          if (protocolRequest) {
+            body = buildChatRequestBody(protocol, {
+              model: found.model,
+              turns,
+              maxTokens: max_tokens,
+              temperature,
+              topP: top_p,
+              // Gemini's generationConfig has its own field names; OpenAI sampling keys would be rejected.
+              extra: protocol === MODEL_PROTOCOLS.GEMINI_GENERATE ? undefined : extras.extra,
+            });
+          } else {
+            body = {
+              model: found.model,
+              messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            };
+            if (temperature !== undefined) body.temperature = temperature;
+            if (max_tokens !== undefined) body.max_tokens = max_tokens;
+            if (top_p !== undefined) body.top_p = top_p;
+          }
+          const chatPath = protocolRequest ? buildChatPath(protocol, found.model) : "/chat/completions";
 
           const confirmedRequest = {
             resolved_model: found.model,
@@ -257,7 +453,14 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           };
           let spend: (SpendDecision & { reservation?: AutoSpendReservation }) | undefined;
           if (!confirmation_token && !confirmed) {
-            spend = await applyDailyAutoSubmitBudget(evaluateChatSpend(found, { messages, max_tokens }));
+            const decision = evaluateChatSpend(found, {
+              messages: messages.map((m) => ({ role: m.role, content: m.content })),
+              max_tokens,
+            });
+            // 附件的输入 token 事先算不出来，最坏花费没有上限：一律先确认（宁可多问一次）。
+            spend = await applyDailyAutoSubmitBudget(
+              hasMedia ? { ...decision, autoSubmit: false, reason: "media attached" } : decision
+            );
           }
           if (spend && !spend.autoSubmit) {
             const confirmation = await issueGenerationConfirmation(
@@ -266,8 +469,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               confirmedRequest,
               found.price
             );
-            const bound =
-              spend.quotedUsd === null
+            const bound = hasMedia
+              ? "- **Worst-case cost**: not bounded in advance — the attached images, video or audio add input tokens that cannot be counted before the request runs. The real charge follows actual token usage."
+              : spend.quotedUsd === null
                 ? "- **Worst-case cost**: unknown — the catalog has no complete per-token rates or output limit for this model, so it cannot be bounded in advance."
                 : spend.dailyBudget
                   ? `- **Worst-case cost**: ${formatUsd(spend.quotedUsd)} for this request. It is under the per-request limit, but chat requests that ran without confirmation today already add up to ${formatUsd(spend.dailyBudget.usedUsd === Number.POSITIVE_INFINITY ? spend.dailyBudget.budgetUsd : spend.dailyBudget.usedUsd)} of the ${formatUsd(spend.dailyBudget.budgetUsd)} daily allowance, so this one needs the user's confirmation.`
@@ -302,18 +506,31 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
               : { idempotencyKey: idempotency_key };
           const submitKey = confirmedKey.idempotencyKey;
 
-          const response = await executeIdempotently(
+          const raw: unknown = await executeIdempotently<unknown>(
             "atlas_chat",
             { idempotency_key: submitKey, ...confirmedRequest },
             submitKey,
             () =>
-              llmApi<ChatCompletionResponse>("/chat/completions", {
-                method: "POST",
-                body,
-                timeout: 120000,
-                responseSchema: chatCompletionResponseSchema,
-              })
+              protocolRequest
+                ? llmApi<Record<string, unknown>>(chatPath, { method: "POST", body, timeout: 120000 })
+                : llmApi<ChatCompletionResponse>("/chat/completions", {
+                    method: "POST",
+                    body,
+                    timeout: 120000,
+                    responseSchema: chatCompletionResponseSchema,
+                  })
           );
+          const response = protocolRequest
+            ? protocolChatResponse(protocol, raw as Record<string, unknown>, found.model)
+            : (raw as ChatCompletionResponse);
+          if (response.usage) {
+            annotateLocalToolCall({
+              prompt_tokens: telemetryNumber(response.usage.prompt_tokens),
+              completion_tokens: telemetryNumber(response.usage.completion_tokens),
+              total_tokens: telemetryNumber(response.usage.total_tokens),
+            });
+          }
+          annotateLocalToolCall({ finish_reason: sanitizeEnum(response.choices?.[0]?.finish_reason) });
 
           if (spend?.reservation) {
             // 放行前已经按最坏情况预占了今天的额度：按实际用量退回差额（空回答也扣了钱）；
@@ -344,7 +561,12 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           const truncated = choice.finish_reason === "length";
           const lines = [`# Chat Response\n`];
           lines.push(`**Model**: \`${response.model || found.model}\``);
+          if (protocolRequest) lines.push(`**Protocol**: \`${protocol}\``);
           lines.push(`**Finish Reason**: ${choice.finish_reason}\n`);
+          if (warnings.length > 0) {
+            warnings.forEach((warning) => lines.push(`> ${warning}`));
+            lines.push("");
+          }
           lines.push("## Response\n");
           lines.push(choice.message.content);
           if (truncated) lines.push(`\n${CHAT_TRUNCATED_NEXT_STEP}`);

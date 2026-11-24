@@ -25,6 +25,7 @@ import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
 import { usesLeanDescriptions } from "./services/chatgpt-lean.js";
 import { registerCardUploadPartTool } from "./tools/card-upload.js";
+import { installLegacyDryRun } from "./legacy-params.js";
 
 export type ServerProfile = "stdio" | "remote";
 
@@ -86,15 +87,18 @@ export function createAtlasCloudServer(
   );
 
   hooks.beforeTools?.(server);
+  // 本地 npm 版保留 1.x 的老参数（dry_run、list_models 的 kind/query 等），托管版工具定义不变。
+  const legacyParams = profile === "stdio";
+  if (legacyParams) installLegacyDryRun(server);
   registerDocsTools(server);
-  registerModelTools(server, { lean });
+  registerModelTools(server, { lean, legacyParams });
   registerImageTools(server, { lean });
   registerVideoTools(server, { lean });
   registerAudioTools(server);
-  registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote });
-  registerQuickGenerateTools(server, { lean });
+  registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote, legacyParams });
+  registerQuickGenerateTools(server, { lean, legacyParams });
   registerAccountTools(server);
-  registerPredictionTools(server);
+  registerPredictionTools(server, { legacyParams });
   registerAssetTools(server);
   // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
   // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。

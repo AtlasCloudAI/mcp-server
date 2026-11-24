@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generationApi, type ApiRequestOptions } from "./api-client.js";
@@ -126,11 +127,22 @@ function estimateDetails(quote: Quote | null): Pick<SpendDecision, "estimateReas
  * confirmation would make chat unusable.
  */
 export function generationAutoSubmitThresholdUsd(): number {
+  if (quoteOnly.getStore()) return 0;
   const raw = process.env.MCP_GENERATION_AUTOSUBMIT_MAX_USD;
   if (raw === undefined || raw.trim() === "") return 0;
   const parsed = Number.parseFloat(raw);
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   return parsed;
+}
+
+const quoteOnly = new AsyncLocalStorage<true>();
+
+/**
+ * 在这段调用里生成工具只报价、不自动提交（阈值按 0 算）。本地版 dry_run 用（legacy-params.ts）：
+ * 部署放宽了自动提交额度时，dry_run 也不会真的跑。
+ */
+export function runQuoteOnly<T>(operation: () => T): T {
+  return quoteOnly.run(true, operation);
 }
 
 /**

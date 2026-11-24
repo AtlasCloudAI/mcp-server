@@ -127,7 +127,7 @@ export function summarizeHistoryItem(item: HistoryItem): PredictionSummary {
   };
 }
 
-export function registerPredictionTools(server: McpServer): void {
+export function registerPredictionTools(server: McpServer, options: { legacyParams?: boolean } = {}): void {
   server.registerTool(
     "atlas_list_predictions",
     {
@@ -180,6 +180,27 @@ Notes:
           .regex(modelIdPattern)
           .optional()
           .describe("Model ID prefix selecting a whole family"),
+        // npm 1.x 的老参数，只在本地版列出（托管版工具定义不变）。
+        ...(options.legacyParams
+          ? {
+              prediction_id: z
+                .string()
+                .regex(/^[A-Za-z0-9_-]{1,128}$/)
+                .optional()
+                .describe("Look up one exact task by its prediction ID"),
+              status: z
+                .enum(["created", "processing", "completed", "failed", "timeout"])
+                .optional()
+                .describe("Filter by the platform's task status (older alias; prefer state)"),
+              limit: z
+                .number()
+                .int()
+                .min(1)
+                .max(50)
+                .optional()
+                .describe("Older alias of size: entries per page (max 50)"),
+            }
+          : {}),
       },
       outputSchema: {
         card_note: z.string(),
@@ -214,12 +235,25 @@ Notes:
       annotations: toolAnnotations("atlas_list_predictions"),
       ...generationToolCardMeta(),
     },
-    async ({ page, size, state, model, model_prefix }) => {
+    async (args) => {
+      const { page, state, model, model_prefix } = args;
+      const legacy = args as { prediction_id?: string; status?: string; limit?: number };
+      // 老参数 limit 只在没给 size 时生效；size 有默认值 10，看不出调用方给没给，所以 limit 优先。
+      const size = legacy.limit ?? args.size;
       try {
         // /model/history 由 kubedl 的 console backend 提供，走 api()（ATLASCLOUD_API_BASE_URL）。
         // 后端的分页参数叫 no/size，不是 page/pageSize；传错不报错，只是静默按默认值分页。
         const result = await api<HistoryResponse>("/model/history", {
-          params: { no: page, size, state, model, modelPrefix: model_prefix },
+          params: {
+            no: page,
+            size,
+            state,
+            model,
+            modelPrefix: model_prefix,
+            // npm 1.x 的查法，原样传给 /model/history（sessionID 就是任务 ID）。
+            ...(legacy.prediction_id ? { sessionID: legacy.prediction_id } : {}),
+            ...(legacy.status && !state ? { status: legacy.status } : {}),
+          },
           responseSchema: historyResponseSchema,
         });
         const predictions = result.data.items.map(summarizeHistoryItem);

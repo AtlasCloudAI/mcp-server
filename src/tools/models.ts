@@ -2,7 +2,8 @@ import { quoteAtDefaults } from "../services/spend-policy.js";
 import type { ToolTextOptions } from "../services/chatgpt-lean.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getModels, findModel, getModelSchema } from "../services/doc-fetcher.js";
+import { getModels, findModel, getModelSchema, searchModels } from "../services/doc-fetcher.js";
+import { KIND_FILTERS, MODEL_KINDS } from "../utils/model-kind.js";
 import { formatDefaultRoute } from "../services/default-models.js";
 import { formatModelList, formatModelInfo, truncate } from "../utils/formatter.js";
 import { generateLLMPrompt } from "../utils/prompt-gen.js";
@@ -29,7 +30,9 @@ export function registerModelTools(server: McpServer, options: ToolTextOptions =
 Args:
   - type (string, optional): Filter by model type. Options: "Text", "Image", "Video", "Audio"${options.lean ? "" : `, "Workflow"`}
   - limit (integer, optional): Models per page, 1-100 (default 50)
-  - offset (integer, optional): Zero-based result offset (default 0)
+  - offset (integer, optional): Zero-based result offset (default 0)${options.legacyParams ? `
+  - kind (string, optional): Sub-kind that cuts across type: "3d", "tts", "stt", "music", "lyrics"
+  - query (string, optional): Keyword matched against model ID, name, provider and tags` : ""}
 
 Returns:
   Markdown-formatted list of models grouped by type, including model ID, description, provider, and pricing.
@@ -55,11 +58,27 @@ Examples:
               .describe("Filter by model type: Text, Image, Video, Audio, or Workflow (ready-made marketing workflows)"),
         limit: modelPageLimitSchema,
         offset: modelPageOffsetSchema,
+        ...(options.legacyParams
+          ? {
+              kind: z
+                .enum(MODEL_KINDS)
+                .optional()
+                .describe("Filter by sub-kind: 3d, tts, stt (speech-to-text), music, lyrics"),
+              query: z
+                .string()
+                .max(200)
+                .optional()
+                .describe("Keyword matched against model ID, name, provider and tags"),
+            }
+          : {}),
       },
       outputSchema: modelSearchOutputSchema,
       annotations: toolAnnotations("atlas_list_models"),
     },
-    async ({ type, limit, offset }) => {
+    async (args) => {
+      const { type, limit, offset } = args;
+      // 只有本地版的工具定义里有这两个参数（options.legacyParams）。
+      const { kind, query } = args as { kind?: (typeof MODEL_KINDS)[number]; query?: string };
       try {
         if (type === "Workflow") {
           const templates = await getWorkflowTemplates();
@@ -91,13 +110,15 @@ Examples:
           };
         }
         const models = await getModels();
+        let candidates = query?.trim() ? await searchModels(query) : models;
+        if (kind) candidates = candidates.filter(KIND_FILTERS[kind]);
         const filtered = type
-          ? models.filter((model) => model.type === type)
-          : models;
+          ? candidates.filter((model) => model.type === type)
+          : candidates;
         const page = filtered.slice(offset, offset + limit);
         const hasMore = offset + page.length < filtered.length;
         // 第一页顶上先列默认路由：智能体没点名模型时照它选，而不是挑最便宜的。
-        const route = offset === 0 && (type === "Video" || type === "Image")
+        const route = offset === 0 && !query && !kind && (type === "Video" || type === "Image")
           ? formatDefaultRoute(models, type)
           : null;
         const text = (route ? `${route}\n\n` : "") + (page.length > 0

@@ -30,6 +30,29 @@ export interface ModelPrice {
   };
 }
 
+// Chat protocol a model speaks. Values match the backend `Protocol` constants.
+export type ModelProtocol =
+  | "openai.chat.completions"
+  | "openai.completions"
+  | "openai.responses"
+  | "openai.images"
+  | "claude.messages"
+  | "gemini.generate";
+
+// A media part attached to a chat message (protocol-neutral)
+export interface MediaInput {
+  kind: "image" | "video" | "audio";
+  // Public URL or data URI (data:image/png;base64,...)
+  url: string;
+}
+
+// LLM chat message (protocol-neutral; translated per protocol before sending).
+export interface ChatTurn {
+  role: "system" | "user" | "assistant";
+  text: string;
+  media?: MediaInput[];
+}
+
 // Model data type
 export interface Model {
   uuid: string;
@@ -59,6 +82,10 @@ export interface Model {
   coreStrengths?: string[];
   useCases?: string[];
   display_console?: boolean;
+  /** Ordered chat protocols the model speaks (first = preferred); see services/protocols.ts. */
+  supported_protocols?: string[];
+  /** Input modalities the model accepts ("text", "image", "video", "audio"). */
+  input_modalities?: string[];
 }
 
 // Models list API response

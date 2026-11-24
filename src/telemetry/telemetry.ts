@@ -8,7 +8,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { API_BASE } from "../constants.js";
 import { getProxyDispatcher } from "../services/api-client.js";
 import { summarizeArgs } from "./args.js";
-import { clientNameOf, clientPlatformOf, clientVersionOf } from "./identity.js";
+import { clientNameOf, clientPlatformOf, clientVersionOf, hostedPlatformOf } from "./identity.js";
 import { clientState, onAccountSeen, onAuthedSuccess } from "./state.js";
 import { ToolCallRecord, runInToolCall } from "./tool-call.js";
 
@@ -321,6 +321,7 @@ export class Telemetry {
       ),
       ...(locale() ? { locale: locale() } : {}),
       client_platform: clientState.platform,
+      client_platform_detail: clientState.platformDetail,
       ...(clientState.name ? { client_name: clientState.name } : {}),
       ...(clientState.version ? { client_version: clientState.version } : {}),
       ...(clientState.protocolVersion ? { protocol_version: clientState.protocolVersion } : {}),
@@ -360,7 +361,8 @@ export class Telemetry {
           const info = record.params.clientInfo as { name?: unknown; version?: unknown } | undefined;
           clientState.name = clientNameOf(info?.name);
           clientState.version = clientVersionOf(info?.version);
-          clientState.platform = clientPlatformOf(clientState.name);
+          clientState.platformDetail = clientPlatformOf(clientState.name);
+          clientState.platform = hostedPlatformOf(clientState.platformDetail);
           const protocol = record.params.protocolVersion;
           clientState.protocolVersion =
             typeof protocol === "string" && /^[0-9A-Za-z.-]{1,20}$/.test(protocol) ? protocol : undefined;

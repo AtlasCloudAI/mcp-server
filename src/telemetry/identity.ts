@@ -63,6 +63,27 @@ export function clientPlatformOf(name: string | undefined): string {
 }
 
 /**
+ * The hosted server's `client_platform` values (mcp-server
+ * src/services/client-profile.ts ClientPlatform), so local and hosted events
+ * can be grouped by the same column. Claude Code and Claude desktop are one
+ * value there ("claude"); clients the hosted server has no value for are
+ * "unknown" there too. The finer value stays in `client_platform_detail`.
+ */
+const HOSTED_PLATFORM: Readonly<Record<string, string>> = {
+  claude_code: "claude",
+  claude_desktop: "claude",
+  cursor: "cursor",
+  codex: "codex",
+  workbuddy: "workbuddy",
+  hermes: "hermes",
+  openclaw: "openclaw",
+};
+
+export function hostedPlatformOf(detail: string): string {
+  return HOSTED_PLATFORM[detail] ?? "unknown";
+}
+
+/**
  * Value of the X-Atlas-MCP-Client header: "<name>/<version>", or just the name.
  * Atlas records it next to the task (task_context.mcp_client) so spend can be
  * split by client the same way plugin spend is split by OAuth client.

@@ -6,11 +6,14 @@
 export interface ClientState {
   name?: string;
   version?: string;
+  /** Same values as the hosted server's client_platform. */
   platform: string;
+  /** Finer value: claude_code vs claude_desktop, gemini_cli, vscode, … */
+  platformDetail: string;
   protocolVersion?: string;
 }
 
-export const clientState: ClientState = { platform: "unknown" };
+export const clientState: ClientState = { platform: "unknown", platformDetail: "unknown" };
 
 type AccountListener = (accountId: string) => void;
 let accountListener: AccountListener | undefined;

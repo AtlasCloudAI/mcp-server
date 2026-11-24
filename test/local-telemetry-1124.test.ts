@@ -69,13 +69,18 @@ test("quote / confirm fields from the shared generation code reach mcp_local_too
     name: "atlas_generate_image",
     arguments: { model: "a/b", confirmed: true, confirmation_token: "secret-token" },
   });
+  // 同一份报价再确认一次（幂等重放）：不算第二次确认。
+  await client.callTool({
+    name: "atlas_generate_image",
+    arguments: { model: "a/b", confirmed: true, confirmation_token: "secret-token" },
+  });
   await client.callTool({ name: "atlas_cancel_quote", arguments: { reason: "declined" } });
   await telemetry.shutdown("test");
   receiver.close();
 
   const calls = events.filter((e) => e.event === "mcp_local_tool_call");
-  assert.equal(calls.length, 3);
-  const [quote, confirm, cancel] = calls.map((e) => e.properties);
+  assert.equal(calls.length, 4);
+  const [quote, confirm, , cancel] = calls.map((e) => e.properties);
   assert.equal(quote.execution_mode, "estimate");
   assert.equal(quote.stage, "quote");
   assert.equal(quote.estimated_cost_usd, 0.25);

@@ -91,6 +91,7 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
     atlas_list_predictions: ["prediction_id", "status", "limit"],
     atlas_quick_generate: ["video_url", "dry_run"],
     atlas_chat: ["extra_params"],
+    atlas_upload_media: [],
     atlas_generate_image: ["dry_run"],
     atlas_generate_video: ["dry_run"],
     atlas_generate_audio: ["dry_run"],
@@ -102,6 +103,12 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
       if (remoteParams[tool]) assert.ok(!remoteParams[tool].includes(param), `remote ${tool} has no ${param}`);
     }
   }
+
+  const required = async (client: Awaited<ReturnType<typeof connect>>, name: string) =>
+    (await client.listTools()).tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
+  assert.ok(!(await required(local, "atlas_chat")).includes("idempotency_key"), "local chat: key optional (1.x)");
+  assert.ok((await required(remote, "atlas_chat")).includes("idempotency_key"), "hosted chat: key still required");
+  assert.ok(!(await required(local, "atlas_upload_media")).includes("idempotency_key"), "local upload: key optional (1.x)");
 
   // list_models: query + kind 过滤（1.x 的 kind="music" 只要 Suno，不要 TTS）。
   const music = await local.callTool({ name: "atlas_list_models", arguments: { kind: "music" } });
@@ -127,7 +134,7 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
   const chatArgs = {
     model: "google/gemini-native-only",
     messages: [{ role: "user", content: "hello", images: ["https://cdn.example.test/a.png"] }],
-    idempotency_key: "4b0c6c2e-6a43-4f63-9d8e-2a3f0e7c1b11",
+    // npm 1.x 的 atlas_chat 没有 idempotency_key：报价和确认都不带，服务端按参数找回报价。
   };
   const quote = await local.callTool({ name: "atlas_chat", arguments: chatArgs });
   const quoted = quote.structuredContent as { status: string; confirmation_token: string };

@@ -230,7 +230,9 @@ interface SessionCounters {
   chats: number;
   /** Generation calls that stopped at a quote, and confirmations that matched one. */
   quotes: number;
-  confirmations: number;
+  confirmations: Set<string>;
+  /** Task and quote hashes already counted as submitted: confirming the same quote again returns the same task. */
+  submittedTasks: Set<string>;
   pricesByTask: Map<string, number>;
 }
 
@@ -261,7 +263,8 @@ export class Telemetry {
     uploads: 0,
     chats: 0,
     quotes: 0,
-    confirmations: 0,
+    confirmations: new Set(),
+    submittedTasks: new Set(),
     pricesByTask: new Map(),
   };
 
@@ -495,14 +498,25 @@ export class Telemetry {
       this.counters.tools.add(record.command);
       if (merged.is_error) this.counters.toolErrors += 1;
       const mode = record.annotations.execution_mode;
-      if (mode === "submit" && !merged.is_error) this.counters.submits += 1;
+      // atlas_chat records execution_mode "submit" in the shared code; it is counted as an LLM call, not a generation.
+      const isChat = record.command === "atlas_chat";
+      if (mode === "submit" && !merged.is_error && !isChat) {
+        // An idempotent replay returns the stored result without an API call, so it may carry only the
+        // quote hash: a call whose task or quote was already counted is the same generation.
+        const keys = [record.annotations.task_hash, record.annotations.quote_hash].filter((k): k is string => Boolean(k));
+        if (!keys.some((k) => this.counters.submittedTasks.has(k))) {
+          keys.forEach((k) => this.counters.submittedTasks.add(k));
+          this.counters.submits += 1;
+        }
+      }
       if (mode === "dry_run") this.counters.dryRuns += 1;
       if (mode === "upload" && !merged.is_error) this.counters.uploads += 1;
-      if (mode === "chat") this.counters.chats += 1;
+      if (isChat && !merged.is_error && (mode === "chat" || mode === "submit")) this.counters.chats += 1;
       if (mode === "estimate") this.counters.quotes += 1;
       const resolution = record.annotations.confirm_resolution;
       if (resolution && MATCHED_CONFIRMATIONS.has(resolution)) {
-        this.counters.confirmations += 1;
+        // One per quote: confirming the same quote again (an idempotent replay) is not another confirmation.
+        this.counters.confirmations.add(record.annotations.quote_hash ?? `call-${seq}`);
       }
       const { task_hash: task, charged_usd: charged } = record.annotations;
       if (task && typeof charged === "number") this.counters.pricesByTask.set(task, charged);
@@ -532,7 +546,7 @@ export class Telemetry {
       uploads: this.counters.uploads,
       llm_calls: this.counters.chats,
       quotes_shown: this.counters.quotes,
-      quotes_confirmed: this.counters.confirmations,
+      quotes_confirmed: this.counters.confirmations.size,
       charged_tasks: this.counters.pricesByTask.size,
       charged_usd: Math.round(priced * 1e6) / 1e6,
     });

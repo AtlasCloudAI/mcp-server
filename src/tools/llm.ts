@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withRecordedCharge } from "../services/recorded-charge.js";
 import { z } from "zod";
@@ -308,7 +309,8 @@ Returns:
 
 Before calling, use atlas_list_models with type="Text" to obtain a current model ID.`,
         inputSchema: {
-          idempotency_key: idempotencyKeySchema,
+          // 本地版：npm 1.x 的 atlas_chat 没有这个参数，不给就由服务端生成（报价里会返回，确认时带回）。
+          idempotency_key: legacy ? idempotencyKeySchema.optional() : idempotencyKeySchema,
           confirmation_token: generationConfirmationTokenSchema,
         confirmed: generationConfirmedSchema,
           model: z.string().min(1).describe("Exact current LLM model ID"),
@@ -376,7 +378,8 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
         annotations: toolAnnotations("atlas_chat"),
       },
       async (args) => {
-        const { idempotency_key, confirmation_token, confirmed, model, temperature, max_tokens, top_p } = args;
+        const { confirmation_token, confirmed, model, temperature, max_tokens, top_p } = args;
+        const idempotency_key = args.idempotency_key ?? randomUUID();
         const messages = args.messages as LegacyChatMessage[];
         const { extra_params } = args as { extra_params?: Record<string, unknown> };
         try {
@@ -420,7 +423,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
           const extras = legacy ? chatExtraParams(extra_params) : { dropped: [] as string[] };
           const warnings = legacy ? mediaWarnings(turns, protocol, found) : [];
           if (extras.dropped.length > 0) {
-            warnings.push(`extra_params ${extras.dropped.join(", ")} ignored: use max_tokens for the output length.`);
+            warnings.push(
+              `extra_params ${extras.dropped.join(", ")} ignored: the output length is set with max_tokens, and streaming and multiple choices are not supported.`
+            );
           }
           // 纯文字、协议就是 chat completions、没有额外参数时，请求体和托管版一模一样。
           const protocolRequest =

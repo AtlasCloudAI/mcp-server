@@ -1,4 +1,5 @@
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { TASK_TOOL_NAMES, type TaskToolName } from "./services/chatgpt-task-tools.js";
 
 export type AtlasToolName =
   | "atlas_search_docs"
@@ -295,9 +296,26 @@ export const CARD_TOOL_POLICIES: Record<CardToolName, ToolPolicy> = {
   },
 };
 
-/** 远端按工具名查策略：公开工具表优先，其次是卡片工具；都不是就不放行。 */
+// ChatGPT 专用的任务工具（开关 MCP_CHATGPT_TASK_TOOLS，services/chatgpt-task-tools.ts）。只在 ChatGPT 的
+// 工具列表里出现，所以也不进 TOOL_POLICIES（那张表是所有客户端共用的契约）。标注和 atlas_generate_* 一样。
+export const TASK_TOOL_POLICIES: Record<TaskToolName, ToolPolicy> = Object.fromEntries(
+  TASK_TOOL_NAMES.map((name) => [
+    name,
+    {
+      scope: "tasks:write",
+      remote: true,
+      billable: true,
+      annotations: billableExternalWrite,
+      annotationJustification:
+        "Creates a billable external generation task with one fixed kind of operation; a stable idempotency key prevents duplicate effects.",
+    },
+  ])
+) as Record<TaskToolName, ToolPolicy>;
+
+/** 远端按工具名查策略：公开工具表优先，其次是卡片工具、ChatGPT 任务工具；都不是就不放行。 */
 export function remoteToolPolicy(name: string): ToolPolicy | undefined {
   if (isAtlasToolName(name)) return TOOL_POLICIES[name];
+  if ((TASK_TOOL_NAMES as readonly string[]).includes(name)) return TASK_TOOL_POLICIES[name as TaskToolName];
   if (Object.prototype.hasOwnProperty.call(CARD_TOOL_POLICIES, name)) {
     return CARD_TOOL_POLICIES[name as CardToolName];
   }

@@ -161,7 +161,14 @@ export async function startedCard(predictionId: string, model: string | undefine
   return buildGenerationCardData({ predictionId, status: "queued", outputs: [], transferPending: false, modelId: model });
 }
 
-export function registerCardCheckTool(server: McpServer): void {
+/**
+ * 卡片能报出的生成工具名。ChatGPT 打开任务工具时（server.ts）再加上那 5 个；不加的客户端定义一字不变。
+ */
+function generationToolEnum(extraTools: readonly string[]) {
+  return z.enum([...CARD_GENERATION_TOOLS, ...extraTools] as [string, ...string[]]);
+}
+
+export function registerCardCheckTool(server: McpServer, extraTools: readonly string[] = []): void {
   server.registerTool(
     CARD_CHECK_TOOL,
     {
@@ -169,7 +176,7 @@ export function registerCardCheckTool(server: McpServer): void {
       description:
         "Used by the Atlas Cloud generation card to find out whether a submission it sent actually started. Not for direct use: call atlas_list_predictions instead.",
       inputSchema: {
-        tool: z.enum(CARD_GENERATION_TOOLS).describe("Generation tool the card called"),
+        tool: generationToolEnum(extraTools).describe("Generation tool the card called"),
         idempotency_key: idempotencyKeySchema,
         model: z.string().regex(modelIdPattern).optional().describe("Model ID on the card"),
         arguments: z.record(z.unknown()).optional().describe("Arguments the card sent, for matching the prompt"),
@@ -233,7 +240,7 @@ export const CANCEL_QUOTE_TOOL = "atlas_cancel_quote";
  * 旧卡还是 Needs confirmation、还能点确认，可能误下单。模型在用户拒绝或改需求时调它：占住旧报价的幂等键，
  * 之后拿它确认一律拒绝，卡片后台核实时看到作废就改成 Canceled / Settings changed。
  */
-export function registerCancelQuoteTool(server: McpServer): void {
+export function registerCancelQuoteTool(server: McpServer, extraTools: readonly string[] = []): void {
   server.registerTool(
     CANCEL_QUOTE_TOOL,
     {
@@ -244,7 +251,7 @@ export function registerCancelQuoteTool(server: McpServer): void {
         "and when the user changes a quoted request (different duration, size, model, prompt...) with reason \"replaced\", for the old quote, before or right after quoting the new one. " +
         "Pass the tool and idempotency_key of the quote being withdrawn. Nothing is charged. A quote that was already submitted cannot be canceled; the result says so.",
       inputSchema: {
-        tool: z.enum(CARD_GENERATION_TOOLS).describe("Generation tool that issued the quote"),
+        tool: generationToolEnum(extraTools).describe("Generation tool that issued the quote"),
         idempotency_key: idempotencyKeySchema.describe("idempotency_key of the quote being withdrawn"),
         reason: z.enum(["declined", "replaced"]).describe("declined: the user doesn't want it; replaced: the request changed and a new quote replaces it"),
       },

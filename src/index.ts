@@ -15,13 +15,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createAtlasCloudServer } from "./server.js";
 import { prefetchCardCatalog } from "./apps/generation-card.js";
 import { publicApi } from "./services/api-client.js";
+import { gateStdioCards } from "./stdio-cards.js";
 import { watchClientInfo } from "./telemetry/identity.js";
 import { Telemetry } from "./telemetry/telemetry.js";
 
 // Start stdio transport
 async function main(): Promise<void> {
-  // 本地版默认也开卡片，和托管版一致（托管版在部署里设 MCP_UI_CARDS=1）。会不会真显示卡片看客户端
-  // initialize 时的声明（clientRendersCards）；不想要可以设 MCP_UI_CARDS=0。
+  // 本地版默认也开卡片，和托管版一致（托管版在部署里设 MCP_UI_CARDS=1）。给不给卡片看客户端
+  // initialize 时有没有声明 MCP Apps（stdio-cards.ts）；不想要可以设 MCP_UI_CARDS=0。
   if (process.env.MCP_UI_CARDS === undefined || process.env.MCP_UI_CARDS.trim() === "") process.env.MCP_UI_CARDS = "1";
 
   // Anonymous usage telemetry (README "Telemetry"; ATLASCLOUD_TELEMETRY=0 turns it off).
@@ -39,6 +40,8 @@ async function main(): Promise<void> {
   // Which MCP client this is, for the X-Atlas-MCP-Client header (services/api-client.ts),
   // whether or not telemetry is on.
   watchClientInfo(transport);
+  // Cards only for clients that declare MCP Apps, as on the hosted server.
+  gateStdioCards(server, transport);
   if (telemetry) {
     telemetry.observeTransport(transport);
     // Report the session end before the process goes away. The client closing

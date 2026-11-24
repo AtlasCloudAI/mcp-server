@@ -29,6 +29,10 @@ import { installLegacyDryRun } from "./legacy-params.js";
 
 export type ServerProfile = "stdio" | "remote";
 
+/** 卡片专用的那句总说明；本地版遇到不显示卡片的客户端时从 initialize 结果里去掉（stdio-cards.ts）。 */
+export const CANCEL_QUOTE_INSTRUCTION =
+  "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. ";
+
 export interface ServerClient {
   /** OAuth client_id of the remote client; decides which client-specific tools to list. */
   clientId?: string;
@@ -80,7 +84,7 @@ export function createAtlasCloudServer(
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
         "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
         (generationCardEnabled() && (profile === "stdio" || (rendersCards(client.clientId) && !client.noCards))
-          ? "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. "
+          ? CANCEL_QUOTE_INSTRUCTION
           : "") +
         "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
     }

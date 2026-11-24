@@ -335,6 +335,7 @@ export class Telemetry {
       ...(clientState.name ? { client_name: clientState.name } : {}),
       ...(clientState.version ? { client_version: clientState.version } : {}),
       ...(clientState.protocolVersion ? { protocol_version: clientState.protocolVersion } : {}),
+      ...(clientState.cardsMode ? { cards_mode: clientState.cardsMode } : {}),
       ...(this.accountHash ? { account_hash: this.accountHash } : {}),
       $lib: "atlascloud-mcp",
       $lib_version: SERVER_VERSION,

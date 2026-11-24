@@ -11,6 +11,8 @@ export interface ClientState {
   /** Finer value: claude_code vs claude_desktop, gemini_cli, vscode, … */
   platformDetail: string;
   protocolVersion?: string;
+  /** Whether this session gets cards (stdio-cards.ts): cards / text (client did not declare MCP Apps) / off. */
+  cardsMode?: "cards" | "text" | "off";
 }
 
 export const clientState: ClientState = { platform: "unknown", platformDetail: "unknown" };

@@ -22,5 +22,15 @@
     "Generate a 5-second video of ocean waves at sunset with seedance",
     "Check my Atlas account balance",
     "Transcribe this audio recording"
-  ]
+  ],
+  "auth_mode": "server-side",
+  "server_auth": {
+    "auth_type": "mcp_oauth",
+    "data": {
+      "mcp_oauth": {
+        "server_url": "https://mcp.atlascloud.ai/mcp",
+        "scopes": "tasks:read tasks:write billing:read offline_access"
+      }
+    }
+  }
 }

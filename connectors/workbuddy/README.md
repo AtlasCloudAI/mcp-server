@@ -9,18 +9,40 @@ WorkBuddy 开放平台的连接器、技能、专家是三条各自审核的通�
 
 | 物料 | 内容 | 位置 | 状态 |
 | --- | --- | --- | --- |
-| 连接器 | `connector-meta.json` + `mcp.json` + `icon.svg` | 本目录 | 草稿 `oc_630b5b5c9e689e22`；动态注册已在生产上线（2026-11-19），可以提交审核 |
+| 连接器 | `connector-meta.json` + `mcp.json` + `icon.svg` | 本目录 | 草稿 `oc_630b5b5c9e689e22`；2026-11-24 已提交审核（含 `auth_mode: server-side` 的 2.10.0 包） |
 | 技能 | 每个一个 `SKILL.md` 目录 | `skills/`，用 `打技能包.sh` 单独打 | 可独立提交 |
 | 专家 | `.codebuddy-plugin/plugin.json` + `agents/*.md` + 头像 | `expert/`，见该目录 README | 包已就绪，两项待确认 |
 
 专家通过 `dependencies.connectors: ["atlas-cloud"]` 把连接器拉进来用，并打包复用 `skills/` 的三个技能
 （打包时复制，不在仓库里存第二份）。
 
-## 当前方案：标准 MCP OAuth（`auth_mode` 省略）
+## 当前方案：服务端认证 + 标准 MCP OAuth（`auth_mode: server-side`）
+
+2026-11-24 起，开放平台发布远程连接器时要求在 `connector-meta.json` 里写明认证方式。
+省略 `auth_mode` 会被当成「无需授权」，自测报「当前 MCP 需要授权，不能按『无需授权』发布」。
+所以现在声明：
+
+```json
+"auth_mode": "server-side",
+"server_auth": {
+  "auth_type": "mcp_oauth",
+  "data": {
+    "mcp_oauth": {
+      "server_url": "https://mcp.atlascloud.ai/mcp",
+      "scopes": "tasks:read tasks:write billing:read offline_access"
+    }
+  }
+}
+```
+
+`scopes` 要和生产 `MCP_ADVERTISED_SCOPES` 保持一致，并加上 `offline_access`。这个模式下由平台云端走
+OAuth（发现 → 动态注册 → 授权），回调是平台域名上的 https 地址；授权服务器的动态注册本来就接受任意
+https 回调，不用改。另外，平台的连接自测页（`open.workbuddy.cn`）会在浏览器里请求我们，所以
+`MCP_ALLOWED_ORIGINS` 要包含它，这一项只认精确 origin，不支持 `*.`。
 
 ```
 connectors/workbuddy/
-├── connector-meta.json   必须，不声明 auth_mode = 走标准 MCP OAuth
+├── connector-meta.json   必须，声明 auth_mode: server-side + server_auth
 ├── mcp.json              必须，直连生产远程服务
 ├── icon.svg              必须
 └── skills/               三个 skill
@@ -56,8 +78,10 @@ WorkBuddy 桌面端内置官方 MCP TypeScript SDK 1.24.3。实测其打包代�
 ### 走过的弯路
 
 一度判断要走 `auth_mode: server-side` 云端托管 OAuth，理由是平台按连接器下发
-`oauth_client_id` / `oauth_redirect_url`。后来发现桌面端把这条路硬限制在
+`oauth_client_id` / `oauth_redirect_url`。后来发现当时的桌面端把这条路硬限制在
 `.mcp.it.woa.com` 等域名加两个内部企业 ID，用例全是腾讯自家产品，对外部开发者不适用。
+（2026-11-24 更新：开放平台现在要求远程连接器声明 server-side，`server_auth.auth_type: mcp_oauth`
+直接复用我们的动态注册，见上文「当前方案」。）
 据此写过一封向腾讯索取回调地址的申请信，已删除 —— 动态注册模式下客户端自带 redirect_uri，
 不需要向平台索取任何参数。
 

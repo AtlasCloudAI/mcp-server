@@ -30,13 +30,13 @@
 
 <!-- ATLAS-MODELS:START lang=ko campaign=mcp-server -->
 <!-- ⚠️ Auto-generated from the live model catalog by AtlasCloudAI/.github/scripts/update-models-readme.mjs — do not edit by hand. -->
-- 🎬 **비디오** (246) — Seedance 2.5 Flash · Seedance 2.5 · Bach 1.0 Pro · MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash
-- 🎨 **이미지** (158) — MiniMax H3-Image Highspeed · MiniMax H3-Image · GPT Image 2.6 Sunburst · GPT Image 2.6 Flare
+- 🎬 **비디오** (247) — Seedance 2.5 Flash · Seedance 2.5 · Bach 1.0 Pro · MiniMax H3 Max · MiniMax H3 Fast · Gemini Omni 1.1 Flash
+- 🎨 **이미지** (164) — MiniMax H3-Image Highspeed · MiniMax H3-Image · GPT Image 2.6 Sunburst · GPT Image 2.6 Flare
 - 🧊 **3D** (14) — Seed3D 2.0 · Tripo H3.1 · Hunyuan 3D Rapid · Hunyuan 3D Pro
-- 💬 **LLM** (98) — Hy4 · Gemini 4 Neon · Gemini 4 Hydrogen · Gemini 4 Carbon
+- 💬 **LLM** (97) — Hy4 · Gemini 4 Neon · Gemini 4 Hydrogen · Gemini 4 Carbon
 - 🔊 **오디오 (TTS · 음악 · STT)** (21) — Seed Audio 1.0 · MiniMax Speech 2.6 Turbo · MiniMax Speech 2.6 HD · xAI TTS v1
 
-- 📚 **더 살펴보기** — [전체 575개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
+- 📚 **더 살펴보기** — [전체 584개 모델 »](https://www.atlascloud.ai/models?utm_source=github&utm_campaign=mcp-server)
 <!-- ATLAS-MODELS:END -->
 
 > 🎬 **최신 비디오 모델** — Seedance 2.5 · Kling 4.0 · Wan 3.0 · Kling Video O3.

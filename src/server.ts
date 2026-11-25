@@ -26,6 +26,8 @@ import { passesChatAttachmentLinks, rendersCards } from "./services/client-profi
 import { usesLeanDescriptions } from "./services/chatgpt-lean.js";
 import { registerCardUploadPartTool } from "./tools/card-upload.js";
 import { installLegacyDryRun } from "./legacy-params.js";
+import { TASK_TOOL_NAMES, usesTaskTools } from "./services/chatgpt-task-tools.js";
+import { registerChatGptTaskTools } from "./tools/chatgpt-task.js";
 
 export type ServerProfile = "stdio" | "remote";
 
@@ -114,15 +116,19 @@ export function createAtlasCloudServer(
   if (profile === "stdio") {
     registerUploadTools(server);
   }
+  // ChatGPT 另加「一个任务一个工具」（开关 MCP_CHATGPT_TASK_TOOLS，services/chatgpt-task-tools.ts）。
+  // 只加不减，原来的生成工具照旧；其他客户端和本地版不受影响。
+  const taskTools = profile === "remote" && usesTaskTools(client.clientId);
+  if (taskTools) registerChatGptTaskTools(server);
 
   if (generationCardEnabled()) {
     registerGenerationCardResource(server);
     // 卡片专用工具只给会显示卡片的客户端；不显示卡片的会把它们当普通工具列给模型（问题 48）。
     if (profile === "stdio" || (rendersCards(client.clientId) && !client.noCards)) {
       registerCardStatusTool(server);
-      registerCardCheckTool(server);
+      registerCardCheckTool(server, taskTools ? TASK_TOOL_NAMES : []);
       // 用户拒绝或改需求时作废旧报价，旧卡不能再确认（11-13 Jia A12/A14）。
-      registerCancelQuoteTool(server);
+      registerCancelQuoteTool(server, taskTools ? TASK_TOOL_NAMES : []);
       // 上传卡是兜底：模型读得到文件时用 atlas_get_upload_url 自己传（2026-11-11 Cursor）。
       registerUploadCardTool(server);
       // 本地版没有上传中转：上传卡把文件分块交给本地服务（tools/card-upload.ts）。

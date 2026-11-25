@@ -9,6 +9,7 @@ import { currentClientIsChatGpt } from "../services/client-profile.js";
 import { rememberedMedia } from "../services/media-names.js";
 import { mayHaveStarted, rememberNotStarted } from "../services/not-started.js";
 import type { BalanceResponse } from "../types.js";
+import type { TaskToolName } from "../services/chatgpt-task-tools.js";
 import {
   CARD_META_KEY,
   NOT_STARTED_META_KEY,
@@ -349,7 +350,8 @@ export async function withQuoteDetails(
  */
 export function withGenerationCard<Args extends Record<string, unknown>, Extra>(
   server: McpServer,
-  tool: (typeof CARD_GENERATION_TOOLS)[number],
+  // ChatGPT 的任务工具（tools/chatgpt-task.ts）也套这一层，所以收任意生成工具名。
+  tool: (typeof CARD_GENERATION_TOOLS)[number] | TaskToolName,
   handler: (args: Args, extra: Extra) => Promise<CallToolResult>,
   options: { fetcher?: ApiRequestOptions["fetcher"] } = {}
 ): (args: Args, extra: Extra) => Promise<CallToolResult> {

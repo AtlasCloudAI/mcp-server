@@ -4,6 +4,7 @@ import { clientPlatform, type ClientPlatform } from "../services/client-profile.
 import { ToolCallTelemetry } from "../services/tool-call-telemetry.js";
 import { remoteToolPolicy } from "../tool-policy.js";
 import { usesLeanDescriptions, usesPublishedTools } from "../services/chatgpt-lean.js";
+import { usesTaskTools } from "../services/chatgpt-task-tools.js";
 import { protocolVersionOf, rejectionOf, type Rejection } from "./rejections.js";
 
 function rejectionFields(rejection: Rejection | undefined): Record<string, unknown> {
@@ -196,6 +197,8 @@ export function trackToolCalls(
               client_platform: platform,
               // ChatGPT 拿的是哪版描述（MCP_CHATGPT_LEAN_DESCRIPTIONS：full / lean / published），打开开关后对比用。
               tool_surface: usesPublishedTools(clientId) ? "published" : usesLeanDescriptions(clientId) ? "lean" : "full",
+              // ChatGPT 有没有另加的任务工具（MCP_CHATGPT_TASK_TOOLS）。
+              ...(usesTaskTools(clientId) ? { task_tools: true } : {}),
               ...(protocolVersion ? { protocol_version: protocolVersion } : {}),
               ...(clientVersion ? { client_version: clientVersion } : {}),
               // 被拒时的原因和限流额度（http/rejections.ts）；工具跑了的调用没有这两项。

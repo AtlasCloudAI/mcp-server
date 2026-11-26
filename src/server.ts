@@ -15,12 +15,13 @@ import { registerUploadCardTool, registerUploadUrlTool } from "./tools/upload-ur
 import { registerVideoTools } from "./tools/video.js";
 import { TOOL_POLICIES } from "./tool-policy.js";
 import {
+  CARD_STATUS_TOOL,
   generationCardEnabled,
   registerCardStatusTool,
   registerGenerationCardResource,
 } from "./apps/generation-card.js";
 import { registerCardSelftestTool } from "./apps/card-selftest.js";
-import { registerCancelQuoteTool, registerCardCheckTool } from "./apps/submission-check.js";
+import { CARD_CHECK_TOOL, registerCancelQuoteTool, registerCardCheckTool } from "./apps/submission-check.js";
 import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
 import { usesLeanDescriptions } from "./services/chatgpt-lean.js";
@@ -138,8 +139,37 @@ export function createAtlasCloudServer(
       if (selftest === "1" || selftest === "true" || selftest === "on") {
         registerCardSelftestTool(server);
       }
+    } else if (profile === "remote") {
+      // 这次会话按文字版走，但聊天里可能还留着以前画出来的卡片：它们会接着调这两个只读工具刷新进度、
+      // 核实提交。没注册就每次都报「工具不存在」，卡片每次加载都重问（11-26 生产：同一用户的 Claude Code
+      // 桌面版会画卡片、命令行版不声明 MCP Apps，两边共用一个 OAuth 客户端，命令行一 initialize，
+      // 这个客户端就被记成文字版，桌面版里的旧卡片 1.5 小时报了约 2700 次）。照样注册、能调，
+      // 但不放进工具列表：模型看不到，列表和以前一字不差（问题 48）。
+      registerCardStatusTool(server);
+      registerCardCheckTool(server, taskTools ? TASK_TOOL_NAMES : []);
+      hideFromToolList(server, CARD_REFRESH_TOOLS);
     }
   }
 
   return server;
+}
+
+/** 文字版会话里照样能调、但不列出来的卡片工具（卡片刷新和核实提交用）。 */
+export const CARD_REFRESH_TOOLS: readonly string[] = [CARD_STATUS_TOOL, CARD_CHECK_TOOL];
+
+/**
+ * 工具照常注册、能调，只是不出现在 tools/list 里。SDK 没有「能调但不列」的开关（disable() 连调用一起拒），
+ * 所以在它的列表处理器外面再包一层，把这几个名字滤掉。只在注册完所有工具之后调。
+ */
+function hideFromToolList(server: McpServer, names: readonly string[]): void {
+  const hidden = new Set(names);
+  // McpServer 第一次 registerTool 时装好 tools/list 处理器；这里取出来包一层（SDK 版本锁定，测试兜底）。
+  const handlers = (server.server as unknown as { _requestHandlers: Map<string, (request: unknown, extra: unknown) => Promise<unknown>> })
+    ._requestHandlers;
+  const list = handlers.get("tools/list");
+  if (!list) return;
+  handlers.set("tools/list", async (request, extra) => {
+    const result = (await list(request, extra)) as { tools?: Array<{ name: string }> };
+    return Array.isArray(result?.tools) ? { ...result, tools: result.tools.filter((tool) => !hidden.has(tool.name)) } : result;
+  });
 }

@@ -45,9 +45,10 @@ test("server 的 noCards：不列卡片专用工具（上传卡、作废报价�
     assert.ok(withCards.includes("atlas_open_upload_card"));
     assert.ok(withCards.includes("atlas_cancel_quote"));
     const grok = toolsOf({ clientId: "dcr-client", noCards: true });
-    for (const name of ["atlas_open_upload_card", "atlas_cancel_quote", "atlas_card_status", "atlas_card_check_submission"]) {
+    for (const name of ["atlas_open_upload_card", "atlas_cancel_quote"]) {
       assert.equal(grok.includes(name), false, name);
     }
+    // 卡片刷新的两个只读工具照样注册（旧卡片还要调），但不列给模型，见 card-refresh-text-mode-1126.test.ts。
     // 上传的默认路径照旧在。
     assert.ok(grok.includes("atlas_get_upload_url"));
   } finally {

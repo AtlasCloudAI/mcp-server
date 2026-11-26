@@ -28,7 +28,7 @@ import {
   QUOTE_REDIS_PREFIX,
   type UploadTicketStore,
 } from "./services/upload-ticket-store.js";
-import { createAtlasCloudServer } from "./server.js";
+import { CARD_REFRESH_TOOLS, createAtlasCloudServer } from "./server.js";
 import { generationCardEnabled, prefetchCardCatalog } from "./apps/generation-card.js";
 import { declaresMcpApps, initializeSummary, isKnownCardClient, rememberUiDeclaration, uiDeclaration } from "./services/card-clients.js";
 import { clientProfile, rendersCards } from "./services/client-profile.js";
@@ -127,6 +127,13 @@ function protectedResourceMetadata(config: HttpServerConfig): Record<string, unk
       ? { resource_documentation: config.resourceDocumentation.toString() }
       : {}),
   };
+}
+
+/** 这次请求是不是卡片的刷新调用（atlas_card_status / atlas_card_check_submission）。批量请求不算。 */
+export function isCardRefreshCall(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const message = body as { method?: unknown; params?: { name?: unknown } };
+  return message.method === "tools/call" && typeof message.params?.name === "string" && CARD_REFRESH_TOOLS.includes(message.params.name);
 }
 
 function methodNotAllowed(_req: Request, res: Response): void {
@@ -275,7 +282,9 @@ export function createHttpApp(
       const transport = new OpenAIToolMetadataTransport(
         baseTransport,
         toolCall ? (message) => toolCall.observeResponse(message) : undefined,
-        noCards,
+        // 文字版会话里照样接住旧卡片的刷新调用（server.ts CARD_REFRESH_TOOLS）：这类调用只有卡片会发，
+        // 结果里给卡片读的数据不去掉，卡片才能照常显示进度和结果。
+        noCards && !isCardRefreshCall(req.body),
         usesPublishedTools(req.auth?.clientId)
       );
       let closed = false;

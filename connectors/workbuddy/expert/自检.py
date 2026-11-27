@@ -45,6 +45,11 @@ for f,n in (('tags',3),('quickPrompts',3)):
         for lang in ('en','zh'):
             if not it.get(lang): bad.append(f'{f}[{i}] 缺 {lang}')
 
+# 开放平台解析时的硬限制（2026-10-21 实测：专家名称 18 字被拒，"上限 15 字"）
+for lang in ('zh',):
+    n = len(pj.get('displayName', {}).get(lang, ''))
+    if n > 15: bad.append(f'displayName.{lang} {n} 字，平台上限 15 字')
+
 for f in ('displayName','profession','displayDescription','defaultInitPrompt'):
     for lang in ('en','zh'):
         if not pj.get(f,{}).get(lang): bad.append(f'{f} 缺 {lang}')

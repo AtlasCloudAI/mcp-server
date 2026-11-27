@@ -217,11 +217,16 @@ test("图片比例换算出的 size / aspect_ratio 都在上游枚举里", async
   }
 });
 
-test("ChatGPT + 开关：多出 5 个任务工具，形状符合 OpenAI 指南 6.2 / 6.3；原来的工具照旧在", async () => {
+test("ChatGPT + 开关：图片、视频只剩 5 个任务工具，形状符合 OpenAI 指南 6.2 / 6.3", async () => {
   const tools = await withTaskTools("1", () => listTools("remote", CHATGPT));
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const name of ["atlas_generate_image", "atlas_generate_video", "atlas_generate_audio", "atlas_quick_generate", "atlas_list_models"]) {
-    assert.ok(byName.has(name), `${name} 照旧注册（只加不减）`);
+  // 11-24 实测：旧的通用生成工具还在时，ChatGPT 做视频总绕回旧工具，所以开关打开时不再给。
+  for (const name of ["atlas_generate_image", "atlas_generate_video", "atlas_quick_generate"]) {
+    assert.equal(byName.has(name), false, `${name} 不再给 ChatGPT`);
+  }
+  // 音频、转写照旧，查模型的两个工具它们还要用。
+  for (const name of ["atlas_generate_audio", "atlas_transcribe_audio", "atlas_list_models", "atlas_get_model_info", "atlas_get_prediction"]) {
+    assert.ok(byName.has(name), `${name} 照旧在`);
   }
   for (const name of TASK_TOOLS) {
     const tool = byName.get(name);
@@ -272,6 +277,19 @@ test("其他客户端、ChatGPT 关开关、本地版：工具列表和开关关
     assert.equal(JSON.stringify(on), JSON.stringify(off), name);
     assert.ok(off.every((tool) => !TASK_TOOLS.includes(tool.name)), `${name} 没有任务工具`);
   }
+});
+
+test("ChatGPT + 开关：服务器说明不再让模型去 atlas_list_models 找工作流（没有能跑工作流的工具了）", async () => {
+  const instructions = await withTaskTools("1", async () => {
+    const { client, close } = await connect("remote", CHATGPT);
+    try {
+      return client.getInstructions() ?? "";
+    } finally {
+      await close();
+    }
+  });
+  assert.doesNotMatch(instructions, /Workflow/);
+  assert.match(instructions, /confirmation_token/);
 });
 
 type Result = { isError?: boolean; structuredContent?: Record<string, unknown>; content: Array<{ type: string; text?: string }> };

@@ -14,8 +14,10 @@ import { DEFAULT_MODEL_ROUTES, type DefaultRouteTask, type DefaultRouteType } fr
  * 所以给 ChatGPT 另加 5 个工具，每个只做一种任务，模型从固定的几个里选（枚举），参数是固定的字段，
  * 服务端换算成各模型自己的字段名，再走和 atlas_generate_* 同一套报价 → 确认 → 提交。
  *
- * 只加不减：原来的生成工具照旧注册。ChatGPT 副本里它们停在已发布的旧版本，新工具被拦也不影响现在能用的；
- * 新工具过了再决定要不要对 ChatGPT 撤掉旧的。其他客户端、本地 npm 版一个字不变。
+ * 11-24 这 5 个工具过审上线（v2.10.5）。当时旧的 atlas_generate_image / video、atlas_quick_generate 还留着，
+ * 正式应用实测做视频 3 次 ChatGPT 都绕回「list_models → get_model_info → 旧工具」，自己挑目录里便宜的模型，
+ * 新工具和卡片用不上。所以开关打开时这三个旧工具不再给 ChatGPT（server.ts），图片、视频只走任务工具；
+ * atlas_list_models、atlas_get_model_info 留着，音频和转写还要靠它们查模型。其他客户端、本地 npm 版一个字不变。
  */
 export function chatGptTaskToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   // 和 MCP_UI_CARDS 等开关同一个写法：没设或空着算关，0 / false / no / off 算关，其余算开。

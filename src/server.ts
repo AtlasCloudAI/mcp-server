@@ -50,6 +50,10 @@ export function createAtlasCloudServer(
 ): McpServer {
   // ChatGPT 拿精简版描述（开关 MCP_CHATGPT_LEAN_DESCRIPTIONS，见 services/chatgpt-lean.ts）。
   const lean = profile === "remote" && usesLeanDescriptions(client.clientId);
+  // ChatGPT 的任务工具（开关 MCP_CHATGPT_TASK_TOOLS，services/chatgpt-task-tools.ts）。打开时图片、视频只走这 5 个
+  // 工具：旧的 atlas_generate_image / video、atlas_quick_generate 不再给 ChatGPT。11-24 正式应用实测，旧工具还在时
+  // ChatGPT 做视频 3 次都绕回「list_models → get_model_info → 旧工具」，新工具和卡片用不上。
+  const taskTools = profile === "remote" && usesTaskTools(client.clientId);
   const server = new McpServer(
     {
       name: "atlascloud-ai-media",
@@ -63,7 +67,8 @@ export function createAtlasCloudServer(
       instructions:
         "Use model discovery before generation when the model ID or parameters are uncertain. " +
         // ChatGPT 精简版的 atlas_list_models 不列 Workflow（services/chatgpt-lean.ts），这句不给它。
-        (lean
+        // 任务工具模式下没有能跑工作流的工具，这句也不给。
+        (lean || taskTools
           ? ""
           : "For marketing content such as product ads, UGC videos, try-on or e-commerce listing images, check atlas_list_models with type \"Workflow\" first: those ready-made workflows usually fit better than assembling base models. ") +
         "Pick the model and parameters yourself from the user's request and the live catalog; ask only when something material is genuinely ambiguous. " +
@@ -84,11 +89,13 @@ export function createAtlasCloudServer(
 
   registerDocsTools(server);
   registerModelTools(server, { lean });
-  registerImageTools(server, { lean });
-  registerVideoTools(server, { lean });
+  if (!taskTools) {
+    registerImageTools(server, { lean });
+    registerVideoTools(server, { lean });
+  }
   registerAudioTools(server);
   registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote });
-  registerQuickGenerateTools(server, { lean });
+  if (!taskTools) registerQuickGenerateTools(server, { lean });
   registerAccountTools(server);
   registerPredictionTools(server);
   registerAssetTools(server);
@@ -102,9 +109,7 @@ export function createAtlasCloudServer(
   if (profile === "stdio") {
     registerUploadTools(server);
   }
-  // ChatGPT 另加「一个任务一个工具」（开关 MCP_CHATGPT_TASK_TOOLS，services/chatgpt-task-tools.ts）。
-  // 只加不减，原来的生成工具照旧；其他客户端和本地版不受影响。
-  const taskTools = profile === "remote" && usesTaskTools(client.clientId);
+  // ChatGPT 的图片、视频生成换成「一个任务一个工具」；其他客户端和本地版不受影响。
   if (taskTools) registerChatGptTaskTools(server);
 
   if (generationCardEnabled()) {

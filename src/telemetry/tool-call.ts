@@ -71,6 +71,8 @@ const ERROR_CODES = {
   idempotency_in_progress: ["idempotency", true],
   client_disconnected: ["network", true],
   budget_exceeded: ["quota", false],
+  // 托管端调到没注册的工具（mcp-server#94）。
+  tool_not_found: ["invalid_request", false],
 } as const satisfies Record<string, readonly [string, boolean]>;
 
 export type ToolErrorCode = keyof typeof ERROR_CODES;

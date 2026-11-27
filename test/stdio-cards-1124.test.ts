@@ -58,3 +58,32 @@ test("a client that does not declare MCP Apps gets the text version", async () =
   assert.equal(hidden.isError, true, "a hidden card tool cannot be called");
   await s.client.close();
 });
+
+// 11-26 Jia：Claude Code 桌面版声明了 MCP Apps、也画卡片，但卡片的按钮和刷新到不了本地（stdio）服务：
+// 点 Confirm 没反应、结果卡一直停在 Generating。本地版给它文字版；Codex 的卡片能调本地服务，照旧给卡片。
+test("stdio: Claude Code gets the text version even though it declares MCP Apps", async () => {
+  const { stdioClientRendersCards } = await import("../src/stdio-cards.js");
+  assert.equal(stdioClientRendersCards(true, "claude-code"), false);
+  assert.equal(stdioClientRendersCards(true, "Claude Code"), false);
+  assert.equal(stdioClientRendersCards(true, "codex-mcp-client"), true);
+  assert.equal(stdioClientRendersCards(true, "claude-ai"), true);
+  assert.equal(stdioClientRendersCards(false, "codex-mcp-client"), false);
+
+  const { createAtlasCloudServer } = await import("../src/server.js");
+  const { gateStdioCards, CARD_ONLY_TOOLS } = await import("../src/stdio-cards.js");
+  const { clientState } = await import("../src/telemetry/state.js");
+  const { clientRendersCards } = await import("../src/apps/generation-card.js");
+  const server = createAtlasCloudServer("stdio");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  gateStdioCards(server, serverTransport);
+  const client = new Client({ name: "claude-code", version: "2.1.330" }, { capabilities: UI_CAPABILITIES });
+  await client.connect(clientTransport);
+  const { tools } = await client.listTools();
+  assert.equal(clientState.cardsMode, "text");
+  for (const name of CARD_ONLY_TOOLS) assert.ok(!tools.some((tool) => tool.name === name), `${name} hidden`);
+  assert.equal(tools.filter((tool) => tool._meta?.ui).length, 0);
+  // 给模型的指引也按文字版写（不说「卡片会自己刷新」），否则它不去查结果。
+  assert.equal(clientRendersCards(server), false);
+  await client.close();
+});

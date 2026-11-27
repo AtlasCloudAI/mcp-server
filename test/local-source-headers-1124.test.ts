@@ -68,3 +68,20 @@ test("remote: once the environment key is disabled, no source headers are sent",
   assert.equal(seen[0]["X-Source-From"], undefined);
   assert.equal(seen[0]["X-Atlas-MCP-Client"], undefined);
 });
+
+test("upload outside the default root says which folder and what to do", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { uploadMedia } = await import("../src/services/api-client.js");
+  const dir = mkdtempSync(join(tmpdir(), "upload-outside-"));
+  const file = join(dir, "a.png");
+  writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  delete process.env.ATLASCLOUD_UPLOAD_ROOTS;
+  await assert.rejects(uploadMedia(file), (error: Error) => {
+    assert.match(error.message, /folder the MCP client started it in/);
+    assert.match(error.message, /ATLASCLOUD_UPLOAD_ROOTS/);
+    assert.ok(error.message.includes(process.cwd()));
+    return true;
+  });
+});

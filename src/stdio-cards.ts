@@ -32,6 +32,21 @@ export const CARD_ONLY_TOOLS = [
   "atlas_card_selftest",
 ] as const;
 
+/**
+ * Clients that declare MCP Apps but whose cards cannot reach a local (stdio) server: they get the
+ * text version, as the hosted server gives Claude Code (client-profile.ts rendersCards).
+ *
+ * Claude Code (desktop Code tab 2.1.330, 11-26 Jia L1/L10): the card is drawn, but its button and
+ * its refresh never reach the stdio server — Confirm does nothing and the result card stays on
+ * "Generating". Codex desktop (same test) calls the server from its cards normally.
+ */
+const STDIO_TEXT_ONLY_CLIENTS = /^claude[-_ ]?code\b/i;
+
+export function stdioClientRendersCards(declared: boolean, clientName: unknown): boolean {
+  if (!declared) return false;
+  return !(typeof clientName === "string" && STDIO_TEXT_ONLY_CLIENTS.test(clientName.trim()));
+}
+
 type RegisteredTools = Record<string, { enabled: boolean }>;
 
 function registeredTools(server: McpServer): RegisteredTools {
@@ -60,11 +75,13 @@ export function gateStdioCards(server: McpServer, transport: Transport): void {
     transport.onmessage = (message, extra) => {
       const declared = declaresMcpApps(message);
       if (declared !== undefined) {
-        textOnly = !declared;
-        clientState.cardsMode = declared ? "cards" : "text";
+        const clientName = (message as { params?: { clientInfo?: { name?: unknown } } }).params?.clientInfo?.name;
+        const cards = stdioClientRendersCards(declared, clientName);
+        textOnly = !cards;
+        clientState.cardsMode = cards ? "cards" : "text";
         for (const name of CARD_ONLY_TOOLS) {
           const tool = registeredTools(server)[name];
-          if (tool) tool.enabled = declared;
+          if (tool) tool.enabled = cards;
         }
       }
       return receive.call(transport, message, extra);

@@ -35,6 +35,7 @@ import { getRequestContext } from "../services/request-context.js";
 import { predictionIdSchema } from "../tool-contracts.js";
 import { CARD_TOOL_POLICIES } from "../tool-policy.js";
 import { ATLAS_SITE_URL } from "../constants.js";
+import { clientState } from "../telemetry/state.js";
 import { handleError } from "../utils/error-handler.js";
 import {
   annotateToolCall,
@@ -128,6 +129,9 @@ export function chatGptCardsEnabled(): boolean {
  */
 export function clientRendersCards(server: McpServer): boolean {
   if (!generationCardEnabled()) return false;
+  // 本地版（stdio）按 initialize 定下的文字版（stdio-cards.ts，含声明了却调不到本地服务的 Claude Code）：
+  // 指引也要按文字版写，否则模型等卡片自己刷新、不去查结果。托管版从不设这个值。
+  if (clientState.cardsMode === "text") return false;
   if (currentClientIsChatGpt() && !chatGptCardsEnabled()) return false;
   const capabilities = server.server.getClientCapabilities() as Parameters<
     typeof getUiCapability

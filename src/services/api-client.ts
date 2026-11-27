@@ -517,7 +517,14 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   });
   if (!allowed) {
-    throw new ApiRequestError("Upload path is outside ATLASCLOUD_UPLOAD_ROOTS");
+    // 11-26 Jia：原来只写「outside ATLASCLOUD_UPLOAD_ROOTS」，模型转述成「你在配置里设的限制」，用户以为自己配错了。
+    const where = configuredRoots.join(", ");
+    throw new ApiRequestError(
+      process.env.ATLASCLOUD_UPLOAD_ROOTS === undefined
+        ? `This file is outside the folder this MCP server may upload from (${where}, the folder the MCP client started it in). ` +
+            "Move or copy the file into that folder and try again, or add its folder to ATLASCLOUD_UPLOAD_ROOTS (comma-separated) in the server's env."
+        : `This file is outside the folders set in ATLASCLOUD_UPLOAD_ROOTS (${where}). Move or copy it into one of them, or add its folder to that setting.`
+    );
   }
   // 只收媒体文件。上传后的地址是公开的，而默认根目录就是当前工作目录（多半是项目目录）：
   // 不挡的话，被注入的 agent 一句话就能把 .env、私钥发布成公网链接（11-16 安全审查 M3）。

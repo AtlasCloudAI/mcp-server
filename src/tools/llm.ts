@@ -500,7 +500,9 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                   `- **Current token rates**: ${formatGenerationPricing(confirmation.pricing)}\n` +
                   `${confirmationReuseNotice(confirmation.idempotencyKey, confirmation.confirmationToken)}\n` +
                 `${confirmationValidityNotice(confirmation.expiresAt)}\n\n` +
-                  "Show this to the user and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token.",
+                  "Show this to the user and stop. After explicit confirmation in a new message, call again with unchanged arguments, confirmed: true, the idempotency_key above and the confirmation_token." +
+                  // 卡片客户端里模型会把生成工具的「在卡片上确认」套到 chat 上（11-26 Jia 本地版 Codex L9）。
+                  (clientRendersCards(server) ? " This chat quote has no Atlas card: ask the user to confirm here in the conversation." : ""),
               }],
             };
           }

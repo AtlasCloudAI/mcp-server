@@ -46,6 +46,13 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
       res.end(JSON.stringify({ code: 200, data: CATALOG }));
     } else if (req.url?.startsWith("/api/v1/model/history")) {
       res.end(JSON.stringify({ code: 200, data: { total: 0, items: [] } }));
+    } else if (req.method === "POST" && req.url?.includes(":generateContent") && body.includes("write a long essay")) {
+      res.end(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "320" }] }, finishReason: "MAX_TOKENS" }],
+          usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 8, totalTokenCount: 11 },
+        })
+      );
     } else if (req.method === "POST" && req.url?.includes(":generateContent")) {
       res.end(
         JSON.stringify({
@@ -137,8 +144,9 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
     // npm 1.x 的 atlas_chat 没有 idempotency_key：报价和确认都不带，服务端按参数找回报价。
   };
   const quote = await local.callTool({ name: "atlas_chat", arguments: chatArgs });
-  const quoted = quote.structuredContent as { status: string; confirmation_token: string };
+  const quoted = quote.structuredContent as { status: string; confirmation_token: string; worst_case_cost_usd?: number };
   assert.equal(quoted.status, "confirmation_required", "attachments always stop for confirmation");
+  assert.equal(quoted.worst_case_cost_usd, undefined, "no worst-case figure when attachments make the cost unbounded");
   const done = await local.callTool({
     name: "atlas_chat",
     arguments: { ...chatArgs, confirmed: true, confirmation_token: quoted.confirmation_token },
@@ -153,6 +161,32 @@ test("local server keeps npm 1.x parameters; hosted tool definitions are unchang
   assert.match(native.url, /\/v1\/models\/google\/gemini-native-only:generateContent/);
   const sent = JSON.parse(native.body) as { contents: Array<{ parts: unknown[] }> };
   assert.equal(sent.contents[0]?.parts.length, 2, "text + image part");
+
+  // Gemini 停在输出上限（MAX_TOKENS）：要当成截断提示用户，不能把半句当完整回答（11-27 Jia R2 只回了「320」）。
+  const longArgs = { model: "google/gemini-native-only", messages: [{ role: "user", content: "write a long essay" }], max_tokens: 8 };
+  const longQuote = await local.callTool({ name: "atlas_chat", arguments: longArgs });
+  const longQuoted = longQuote.structuredContent as { status: string; confirmation_token?: string };
+  const longDone =
+    longQuoted.status === "completed"
+      ? longQuote
+      : await local.callTool({ name: "atlas_chat", arguments: { ...longArgs, confirmed: true, confirmation_token: longQuoted.confirmation_token } });
+  const cut = longDone.structuredContent as { finish_reason: string; truncated?: boolean; next_step?: string };
+  assert.equal(cut.finish_reason, "length");
+  assert.equal(cut.truncated, true);
+  assert.match(cut.next_step ?? "", /max_tokens/);
+
+  // 本地上传在发出前就被拒（目录外）：原样报原因，不截断，也不说「可能已经提交」（11-27 Jia R3）。
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const outside = join(mkdtempSync(join(tmpdir(), "upload-outside-")), "a.png");
+  writeFileSync(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const refused = await local.callTool({ name: "atlas_upload_media", arguments: { file_path: outside } });
+  const refusedText = (refused.content as Array<{ text: string }>).map((c) => c.text).join("\n");
+  assert.equal(refused.isError, true);
+  assert.match(refusedText, /ATLASCLOUD_UPLOAD_ROOTS/);
+  assert.match(refusedText, /Move or copy the file into that folder/);
+  assert.doesNotMatch(refusedText, /may already have gone through/);
 });
 
 test("dry_run only ever quotes: confirmation is dropped and auto-submit is off", async () => {

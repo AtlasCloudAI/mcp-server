@@ -487,21 +487,31 @@ function uploadKindOf(fileName: string): string {
   return "unknown";
 }
 
+/**
+ * A local upload refused before anything was sent (path, folder, size, file type). It carries a
+ * 4xx status so the idempotency layer reports it as rejected, word for word — without one it was
+ * treated as "sent without an answer": the message was cut to 120 characters and followed by
+ * "it may already have gone through" (11-27 Jia R3).
+ */
+function rejectedUpload(message: string, status = 400): ApiRequestError {
+  return new ApiRequestError(message, status);
+}
+
 export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   annotateLocalToolCall({ execution_mode: "upload", stage: "upload" });
   if (!isAbsolute(filePath)) {
-    throw new ApiRequestError("Upload path must be absolute");
+    throw rejectedUpload("Upload path must be absolute");
   }
   const fileInfo = await lstat(filePath);
   if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
-    throw new ApiRequestError("Upload path must be a regular file, not a link or directory");
+    throw rejectedUpload("Upload path must be a regular file, not a link or directory");
   }
   const maxUploadBytes = Number(process.env.ATLASCLOUD_MAX_UPLOAD_BYTES ?? 209715200);
   if (!Number.isSafeInteger(maxUploadBytes) || maxUploadBytes <= 0) {
-    throw new ApiRequestError("ATLASCLOUD_MAX_UPLOAD_BYTES is invalid");
+    throw rejectedUpload("ATLASCLOUD_MAX_UPLOAD_BYTES is invalid");
   }
   if (fileInfo.size > maxUploadBytes) {
-    throw new ApiRequestError(`Upload exceeds the ${maxUploadBytes}-byte limit`);
+    throw rejectedUpload(`Upload exceeds the ${maxUploadBytes}-byte limit`, 413);
   }
   const resolvedFile = await realpath(filePath);
   const configuredRoots = (process.env.ATLASCLOUD_UPLOAD_ROOTS ?? process.cwd())
@@ -510,7 +520,7 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
     .filter((root) => root !== "")
     .map((root) => resolve(root));
   if (configuredRoots.length === 0) {
-    throw new ApiRequestError("ATLASCLOUD_UPLOAD_ROOTS has no usable paths");
+    throw rejectedUpload("ATLASCLOUD_UPLOAD_ROOTS has no usable paths");
   }
   const allowed = configuredRoots.some((root) => {
     const rel = relative(root, resolvedFile);
@@ -519,7 +529,7 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   if (!allowed) {
     // 11-26 Jia：原来只写「outside ATLASCLOUD_UPLOAD_ROOTS」，模型转述成「你在配置里设的限制」，用户以为自己配错了。
     const where = configuredRoots.join(", ");
-    throw new ApiRequestError(
+    throw rejectedUpload(
       process.env.ATLASCLOUD_UPLOAD_ROOTS === undefined
         ? `This file is outside the folder this MCP server may upload from (${where}, the folder the MCP client started it in). ` +
             "Move or copy the file into that folder and try again, or add its folder to ATLASCLOUD_UPLOAD_ROOTS (comma-separated) in the server's env."
@@ -530,14 +540,14 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
   // 不挡的话，被注入的 agent 一句话就能把 .env、私钥发布成公网链接（11-16 安全审查 M3）。
   const fileName = basename(resolvedFile);
   if (fileName.startsWith(".") || !uploadExtensionAllowed(fileName)) {
-    throw new ApiRequestError(
+    throw rejectedUpload(
       "Only image, video, audio and GLB files can be uploaded (jpg, png, webp, gif, mp4, mov, webm, mp3, wav, m4a, aac, ogg, flac, glb)"
     );
   }
   const apiKey = getApiKey();
   const fileBuffer = await readFile(resolvedFile);
   if (!looksLikeMedia(fileBuffer)) {
-    throw new ApiRequestError(UNRECOGNISED_MEDIA_MESSAGE);
+    throw rejectedUpload(UNRECOGNISED_MEDIA_MESSAGE);
   }
   annotateLocalToolCall({ upload_bytes: fileBuffer.byteLength, upload_kind: uploadKindOf(fileName) });
   return uploadMediaBuffer(fileBuffer, fileName, apiKey);

@@ -237,6 +237,24 @@ function chatExtraParams(extra: Record<string, unknown> | undefined): {
   return { ...(Object.keys(kept).length > 0 ? { extra: kept } : {}), dropped };
 }
 
+/**
+ * Each protocol says "stopped at the output limit" its own way; the rest of the tool (truncation
+ * note, next_step) only knows chat completions' "length". Gemini answered just "320" in Codex
+ * with no hint that it was cut off (11-27 Jia R2).
+ */
+function normalizedFinishReason(
+  protocol: (typeof MODEL_PROTOCOLS)[keyof typeof MODEL_PROTOCOLS],
+  raw: Record<string, unknown>
+): string {
+  const reason = extractFinishReason(protocol, raw) ?? "stop";
+  const incomplete = (raw.incomplete_details as { reason?: unknown } | undefined)?.reason;
+  if (/^(max_tokens|max_output_tokens)$/i.test(reason)) return "length";
+  if (protocol === MODEL_PROTOCOLS.OPENAI_RESPONSES && reason === "incomplete" && incomplete === "max_output_tokens") {
+    return "length";
+  }
+  return reason;
+}
+
 /** A non-chat-completions reply in the chat-completions shape the rest of the tool reads. */
 function protocolChatResponse(
   protocol: (typeof MODEL_PROTOCOLS)[keyof typeof MODEL_PROTOCOLS],
@@ -259,7 +277,7 @@ function protocolChatResponse(
       {
         index: 0,
         message: { role: "assistant", content: text },
-        finish_reason: extractFinishReason(protocol, raw) ?? "stop",
+        finish_reason: normalizedFinishReason(protocol, raw),
       },
     ],
     ...(usage ? { usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: usage.total ?? prompt + completion } } : {}),
@@ -489,7 +507,8 @@ Before calling, use atlas_list_models with type="Text" to obtain a current model
                 confirmation_valid_seconds: confirmationValidSeconds(confirmation.expiresAt),
                 idempotency_key: confirmation.idempotencyKey,
                 pricing: confirmation.pricing,
-                ...(spend.quotedUsd !== null ? { worst_case_cost_usd: spend.quotedUsd } : {}),
+                // 带附件时没有上限：不给数字，免得模型把它说成「最高花费」（11-27 Jia R2：写最高 $0.000423，实扣 $0.0008385）。
+                ...(spend.quotedUsd !== null && !hasMedia ? { worst_case_cost_usd: spend.quotedUsd } : {}),
               },
               content: [{
                 type: "text",

@@ -82,6 +82,9 @@ const ERROR_CODES = {
   budget_exceeded: ["quota", false],
   // 状态查询被 400 拒绝：说明任务 ID 不对，和任务自己的参数无关，任务可能还在跑（CLI 同码同类）。
   prediction_status_rejected: ["wait", false],
+  // 调了这次会话没注册的工具（SDK 回「Tool x not found」）：客户端拿着旧的工具列表或旧卡片在调，
+  // 不是上游出错。单独一个码，看板上不和 upstream_failure 混在一起（11-25 ChatGPT 任务工具、11-26 旧卡片）。
+  tool_not_found: ["invalid_request", false],
 } as const satisfies Record<string, readonly [string, boolean]>;
 
 export type ToolErrorCode = keyof typeof ERROR_CODES;
@@ -302,6 +305,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 // SDK（McpServer）把入参校验失败包成 isError 结果，文案固定以这句开头。
 const SDK_INPUT_VALIDATION = "Input validation error";
+/** SDK 对没注册（或停用）的工具回的错：「MCP error -32602: Tool atlas_x not found」。 */
+const SDK_TOOL_NOT_FOUND = /\bTool \S+ (?:not found|disabled)$/;
 const JSON_RPC_INVALID_PARAMS = -32602;
 
 export class ToolCallTelemetry {
@@ -344,9 +349,11 @@ export class ToolCallTelemetry {
     this.responseIsError = result.isError === true;
     if (this.responseIsError) {
       const first = Array.isArray(result.content) ? asRecord(result.content[0]) : undefined;
-      this.responseFallback =
-        typeof first?.text === "string" && first.text.startsWith(SDK_INPUT_VALIDATION)
-          ? "invalid_param"
+      const text = typeof first?.text === "string" ? first.text : "";
+      this.responseFallback = text.startsWith(SDK_INPUT_VALIDATION)
+        ? "invalid_param"
+        : SDK_TOOL_NOT_FOUND.test(text)
+          ? "tool_not_found"
           : "upstream_failure";
     }
   }

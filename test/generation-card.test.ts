@@ -105,6 +105,13 @@ before(async () => {
   fake = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const match = url.pathname.match(/^\/api\/v1\/model\/prediction\/([^/]+)$/);
+    // 上游对这两个任务的状态查询直接回 400 / 404（11-23～24 生产 prediction_status_rejected）。
+    if (req.method === "GET" && match && (match[1] === "status-rejected" || match[1] === "status-gone")) {
+      const rejected = match[1] === "status-rejected";
+      res.writeHead(rejected ? 400 : 404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: rejected ? 400 : 404, msg: rejected ? "invalid request id" : "record not found" }));
+      return;
+    }
     if (req.method === "GET" && match) {
       predictionQueries.push(url.search);
       res.writeHead(200, { "content-type": "application/json" });
@@ -593,4 +600,39 @@ test("11-16 ChatGPT 回归 S12：卡片已显示结果时，查结果的文字�
     }
   }
   restore();
+});
+
+test("刷新工具：任务状态读不了（上游 400/404）时回卡片认得出的固定说法，卡片连着 3 次就停刷", async () => {
+  // 11-23～24 生产 v2.10.4：6 个任务、4 个用户的卡片对上游 400 的任务刷了 92 次，卡片认不出原文，一直退避重试。
+  const { permanentPollError } = await import("../ui/generation-card/card.js");
+  const restore = withEnv({ MCP_UI_CARDS: "1" });
+  const { client, close } = await connect({ rendersCards: true });
+  try {
+    for (const [id, code] of [["status-rejected", 400], ["status-gone", 404]] as const) {
+      const result = await client.callTool({ name: "atlas_card_status", arguments: { prediction_id: id } });
+      assert.equal(result.isError, true, id);
+      const text = (result.content as Array<{ text?: string }>)[0]?.text ?? "";
+      assert.match(text, new RegExp(`^Error: Prediction not found or its status can't be read \\(Atlas Cloud returned HTTP ${code} for ${id}\\)`));
+      assert.equal(permanentPollError(text), true, `卡片应认出 ${id} 是再刷也没用的错`);
+    }
+    // 正常任务不受影响。
+    const done = await client.callTool({ name: "atlas_card_status", arguments: { prediction_id: "done" } });
+    assert.notEqual(done.isError, true);
+  } finally {
+    await close();
+    restore();
+  }
+});
+
+test("unreadablePredictionText：只认 400/404/410/422，限流、鉴权、5xx 和网络错误照旧", async () => {
+  const { unreadablePredictionText } = await import("../src/apps/generation-card.js");
+  const { ApiRequestError } = await import("../src/services/api-client.js");
+  for (const code of [400, 404, 410, 422]) {
+    assert.ok(unreadablePredictionText("p1", new ApiRequestError("x", code)), String(code));
+  }
+  for (const code of [401, 403, 408, 429, 500, 502, 503]) {
+    assert.equal(unreadablePredictionText("p1", new ApiRequestError("x", code)), undefined, String(code));
+  }
+  assert.equal(unreadablePredictionText("p1", new ApiRequestError("x")), undefined);
+  assert.equal(unreadablePredictionText("p1", new TypeError("fetch failed")), undefined);
 });

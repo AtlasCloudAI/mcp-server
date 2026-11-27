@@ -405,11 +405,24 @@ export class ToolCallTelemetry {
   }
 }
 
-function current(): ToolCallTelemetry | undefined {
-  return getRequestContext()?.toolCall;
+/** 本地（stdio）版的埋点记录（src/telemetry），由它启动时登记；托管版不登记。 */
+export interface LocalToolCallSink {
+  annotate(fields: ToolCallFields): void;
+  recordError(error: ToolCallError): void;
 }
 
-/** 给当前工具调用回填字段；不在托管 HTTP 请求里（stdio、测试）时什么也不做。 */
+let localSink: (() => LocalToolCallSink | undefined) | undefined;
+
+/** 本地埋点开着时登记取「当前这次工具调用」的函数，生成流程回填的报价、确认字段就进 mcp_local_tool_call。 */
+export function setLocalToolCallSink(getter: (() => LocalToolCallSink | undefined) | undefined): void {
+  localSink = getter;
+}
+
+function current(): LocalToolCallSink | undefined {
+  return getRequestContext()?.toolCall ?? localSink?.();
+}
+
+/** 给当前工具调用回填字段；托管请求进 mcp_tool_call，本地埋点开着时进 mcp_local_tool_call，都不是时什么也不做。 */
 export function annotateToolCall(fields: ToolCallFields): void {
   current()?.annotate(fields);
 }

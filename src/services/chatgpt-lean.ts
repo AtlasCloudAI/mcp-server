@@ -52,4 +52,10 @@ export function usesPublishedTools(clientId: string | undefined): boolean {
 export interface ToolTextOptions {
   /** ChatGPT 精简版：不写工作流、默认路由链路和「发现 → 取参数 → 生成」的明说链路。 */
   lean?: boolean;
+  /**
+   * 本地 npm 版（stdio）：保留 1.x 用户在用的老参数（list_models 的 kind/query、list_predictions 的
+   * limit/status/prediction_id、quick_generate 的 video_url、chat 的 extra_params）。托管版不列，
+   * 远程工具定义不变。
+   */
+  legacyParams?: boolean;
 }

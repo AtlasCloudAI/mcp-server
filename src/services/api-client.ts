@@ -16,6 +16,20 @@ import {
 } from "../constants.js";
 import type { UploadResponse } from "../types.js";
 import { getRequestContext } from "./request-context.js";
+import { clientHeaderValue } from "../telemetry/identity.js";
+import { clientState, noteAccount, noteAuthedSuccess } from "../telemetry/state.js";
+import {
+  annotateToolCall as annotateLocalToolCall,
+  currentToolCall as currentLocalToolCall,
+  errorCodeForHttpStatus,
+  errorCodeForMessage,
+  normalizeGenerationStatus,
+  recordToolCallError as recordLocalToolCallError,
+  sanitizeModel,
+  taskHash,
+  telemetryNumber,
+  type ToolCallError as LocalToolCallError,
+} from "../telemetry/tool-call.js";
 
 // Auto-detect proxy env vars for Node.js fetch
 function getProxyDispatcher(): Dispatcher | undefined {
@@ -122,6 +136,21 @@ export function disableEnvironmentApiKey(): void {
   environmentKeyAllowed = false;
 }
 
+// The local (stdio) server sends these with every request that carries the
+// user's API key, so Atlas can tell usage that came through this MCP server
+// from other API-key traffic (X-Source-From) and which MCP client it was
+// (X-Atlas-MCP-Client, stored as task_context.mcp_client). They are labels
+// only: the API key still decides who is billed. The remote server never sends
+// them: its traffic is attributed by the OAuth client instead, and the remote
+// entry point turns this off together with the environment key.
+const LOCAL_SOURCE_HEADERS: Readonly<Record<string, string>> = { "X-Source-From": "atlas-mcp" };
+
+export function localSourceHeaders(): Record<string, string> {
+  if (!environmentKeyAllowed) return {};
+  const client = clientHeaderValue(clientState.name, clientState.version);
+  return client ? { ...LOCAL_SOURCE_HEADERS, "X-Atlas-MCP-Client": client } : { ...LOCAL_SOURCE_HEADERS };
+}
+
 export function getApiKey(): string {
   const key =
     getRequestContext()?.atlasApiKey ?? (environmentKeyAllowed ? process.env.ATLASCLOUD_API_KEY : undefined);
@@ -149,6 +178,89 @@ function isRetryable(error: unknown): boolean {
     if (error.message.includes("fetch")) return true;
   }
   return false;
+}
+
+// --- local telemetry hooks ---------------------------------------------------
+// Fill in the local (stdio) server's tool-call record (src/telemetry): route,
+// retries, latency, and what a response says about the task or the account.
+// Outside a local tool call (the hosted server, startup prefetch) they do
+// nothing, and none of them can change what a request returns or throws.
+
+const ID_SEGMENT = /^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{3,}|[A-Za-z0-9_-]{24,})$/i;
+
+/** "GET api /model/prediction/:id": base, path with IDs replaced, no query. */
+function routeOf(baseUrl: string, endpoint: string, method: string): string {
+  const base = baseUrl === LLM_API_BASE ? "llm" : baseUrl === PUBLIC_API_BASE ? "public" : "api";
+  const path = (endpoint.split("?")[0] ?? "")
+    .split("/")
+    .map((segment) => (segment && ID_SEGMENT.test(segment) ? ":id" : segment))
+    .join("/")
+    .slice(0, 80);
+  // LLM paths embed the model name (Gemini: /models/<model>:generateContent).
+  const normalized = base === "llm" ? path.replace(/\/models\/[^/]+(:[A-Za-z]+)?$/, "/models/:model$1") : path;
+  return `${method} ${base} ${normalized.startsWith("/") ? normalized : `/${normalized}`}`;
+}
+
+function classifyApiError(error: unknown, route: string): LocalToolCallError {
+  if (error instanceof ApiRequestError) {
+    const status = error.statusCode;
+    const byMessage = errorCodeForMessage(error.message);
+    if (byMessage) return { code: byMessage, ...(status ? { httpStatus: status } : {}) };
+    if (status === 404 && route.includes("/model/prediction/")) return { code: "prediction_not_found", httpStatus: 404 };
+    if (status) return { code: errorCodeForHttpStatus(status), httpStatus: status };
+    return { code: "network_error" };
+  }
+  if (error instanceof Error && error.name === "AbortError") return { code: "timeout", cause: "request_timeout" };
+  return { code: "network_error" };
+}
+
+const CHARGE_STATUSES = new Set(["charged", "partially_charged", "pending", "not_charged", "refunded"]);
+
+/** Read the parts of a response that describe the task, the account or the result size. */
+function observeLocalResponse(route: string, payload: unknown): void {
+  if (!currentLocalToolCall() && !route.endsWith(" /balance")) return;
+  if (!payload || typeof payload !== "object") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = payload as Record<string, any>;
+  if (route.endsWith(" /balance")) {
+    noteAccount(body.account?.id);
+    return;
+  }
+  if (/ api \/model\/(generate|prediction)/.test(route)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (body.data && typeof body.data === "object" ? body.data : body) as Record<string, any>;
+    const outputs = Array.isArray(data.outputs) ? data.outputs : Array.isArray(data.output) ? data.output : undefined;
+    const nsfw = Array.isArray(data.has_nsfw_contents) ? data.has_nsfw_contents : undefined;
+    const price = telemetryNumber(data.price);
+    const charge = typeof data.charge_status === "string" && CHARGE_STATUSES.has(data.charge_status) ? data.charge_status : undefined;
+    annotateLocalToolCall({
+      execution_mode: route.startsWith("POST") ? "submit" : "get",
+      task_hash: taskHash(data.id),
+      model: sanitizeModel(data.model),
+      generation_status: normalizeGenerationStatus(data.status),
+      price_usd: price,
+      charge_status: charge,
+      charged_usd:
+        charge === "not_charged" || charge === "refunded"
+          ? 0
+          : charge === "charged" || charge === "partially_charged"
+            ? price
+            : undefined,
+      output_count: outputs ? outputs.length : undefined,
+      nsfw_blocked: nsfw && nsfw.length > 0 && nsfw.every(Boolean) && (!outputs || outputs.length === 0) ? true : undefined,
+      task_latency_ms: telemetryNumber(data.latency_ms) || telemetryNumber(data.executionTime),
+    });
+    return;
+  }
+  if (route.endsWith(" /model/history")) {
+    const items = body.data?.items;
+    annotateLocalToolCall({ execution_mode: "list", result_rows: Array.isArray(items) ? items.length : undefined });
+    return;
+  }
+  if (/ public \/model-(usage|costs)$/.test(route)) {
+    const rows = Array.isArray(body.data) ? body.data : Array.isArray(body.items) ? body.items : body.data?.items;
+    annotateLocalToolCall({ execution_mode: "read", result_rows: Array.isArray(rows) ? rows.length : undefined });
+  }
 }
 
 // Sleep with exponential backoff
@@ -196,6 +308,10 @@ export async function request<T>(
   if (requireAuth) {
     finalHeaders["Authorization"] = `Bearer ${getApiKey()}`;
   }
+  if (finalHeaders["Authorization"]) Object.assign(finalHeaders, localSourceHeaders());
+
+  const route = routeOf(baseUrl, endpoint, method);
+  const authed = Boolean(finalHeaders["Authorization"]);
 
   // POST requests should not retry - they may create billable tasks (image/video generation)
   const effectiveMaxRetries = method === "POST" ? 0 : maxRetries;
@@ -209,6 +325,8 @@ export async function request<T>(
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    const attemptStarted = performance.now();
+    let attemptStatus: number | undefined;
 
     try {
       const response = await fetcher(url, {
@@ -218,6 +336,7 @@ export async function request<T>(
         signal: controller.signal,
         ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
       });
+      attemptStatus = response.status;
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
@@ -259,6 +378,8 @@ export async function request<T>(
           );
           throw new ApiRequestError("Atlas Cloud returned an unreadable response", 502);
         }
+        observeLocalResponse(route, value);
+        if (authed) noteAuthedSuccess();
         if (responseSchema) {
           const parsed = responseSchema.safeParse(value);
           if (!parsed.success) {
@@ -280,6 +401,7 @@ export async function request<T>(
         return value as T;
       }
       const value = await response.text();
+      if (authed) noteAuthedSuccess();
       if (responseSchema) {
         throw new ApiRequestError(
           "Atlas Cloud returned a non-JSON response where JSON was required",
@@ -292,6 +414,7 @@ export async function request<T>(
 
       // Non-retryable errors throw immediately
       if (error instanceof ApiRequestError && !isRetryable(error)) {
+        recordLocalToolCallError(classifyApiError(error, route));
         throw error;
       }
 
@@ -302,12 +425,22 @@ export async function request<T>(
         continue;
       }
 
+      recordLocalToolCallError(classifyApiError(lastError, route));
       throw lastError;
     } finally {
       clearTimeout(timer);
+      currentLocalToolCall()?.recordApi({
+        route,
+        durationMs: performance.now() - attemptStarted,
+        attempt,
+        ...(attemptStatus !== undefined
+          ? { status: attemptStatus }
+          : { failure: controller.signal.aborted ? "timeout" : "network" }),
+      });
     }
   }
 
+  recordLocalToolCallError(classifyApiError(lastError, route));
   throw lastError;
 }
 
@@ -344,20 +477,41 @@ export function publicApi<T>(
 }
 
 // Upload a local file to Atlas Cloud, returns a download URL
+/** Coarse kind of an upload for telemetry (image / video / audio / model), never its name. */
+function uploadKindOf(fileName: string): string {
+  const ext = fileName.toLowerCase().split(".").pop() ?? "";
+  if (["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "heic"].includes(ext)) return "image";
+  if (["mp4", "mov", "webm", "mkv", "avi", "m4v"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "aac", "ogg", "flac", "opus"].includes(ext)) return "audio";
+  if (["glb", "gltf"].includes(ext)) return "model";
+  return "unknown";
+}
+
+/**
+ * A local upload refused before anything was sent (path, folder, size, file type). It carries a
+ * 4xx status so the idempotency layer reports it as rejected, word for word — without one it was
+ * treated as "sent without an answer": the message was cut to 120 characters and followed by
+ * "it may already have gone through" (11-27 Jia R3).
+ */
+function rejectedUpload(message: string, status = 400): ApiRequestError {
+  return new ApiRequestError(message, status);
+}
+
 export async function uploadMedia(filePath: string): Promise<UploadResponse> {
+  annotateLocalToolCall({ execution_mode: "upload", stage: "upload" });
   if (!isAbsolute(filePath)) {
-    throw new ApiRequestError("Upload path must be absolute");
+    throw rejectedUpload("Upload path must be absolute");
   }
   const fileInfo = await lstat(filePath);
   if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
-    throw new ApiRequestError("Upload path must be a regular file, not a link or directory");
+    throw rejectedUpload("Upload path must be a regular file, not a link or directory");
   }
   const maxUploadBytes = Number(process.env.ATLASCLOUD_MAX_UPLOAD_BYTES ?? 209715200);
   if (!Number.isSafeInteger(maxUploadBytes) || maxUploadBytes <= 0) {
-    throw new ApiRequestError("ATLASCLOUD_MAX_UPLOAD_BYTES is invalid");
+    throw rejectedUpload("ATLASCLOUD_MAX_UPLOAD_BYTES is invalid");
   }
   if (fileInfo.size > maxUploadBytes) {
-    throw new ApiRequestError(`Upload exceeds the ${maxUploadBytes}-byte limit`);
+    throw rejectedUpload(`Upload exceeds the ${maxUploadBytes}-byte limit`, 413);
   }
   const resolvedFile = await realpath(filePath);
   const configuredRoots = (process.env.ATLASCLOUD_UPLOAD_ROOTS ?? process.cwd())
@@ -366,28 +520,36 @@ export async function uploadMedia(filePath: string): Promise<UploadResponse> {
     .filter((root) => root !== "")
     .map((root) => resolve(root));
   if (configuredRoots.length === 0) {
-    throw new ApiRequestError("ATLASCLOUD_UPLOAD_ROOTS has no usable paths");
+    throw rejectedUpload("ATLASCLOUD_UPLOAD_ROOTS has no usable paths");
   }
   const allowed = configuredRoots.some((root) => {
     const rel = relative(root, resolvedFile);
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   });
   if (!allowed) {
-    throw new ApiRequestError("Upload path is outside ATLASCLOUD_UPLOAD_ROOTS");
+    // 11-26 Jia：原来只写「outside ATLASCLOUD_UPLOAD_ROOTS」，模型转述成「你在配置里设的限制」，用户以为自己配错了。
+    const where = configuredRoots.join(", ");
+    throw rejectedUpload(
+      process.env.ATLASCLOUD_UPLOAD_ROOTS === undefined
+        ? `This file is outside the folder this MCP server may upload from (${where}, the folder the MCP client started it in). ` +
+            "Move or copy the file into that folder and try again, or add its folder to ATLASCLOUD_UPLOAD_ROOTS (comma-separated) in the server's env."
+        : `This file is outside the folders set in ATLASCLOUD_UPLOAD_ROOTS (${where}). Move or copy it into one of them, or add its folder to that setting.`
+    );
   }
   // 只收媒体文件。上传后的地址是公开的，而默认根目录就是当前工作目录（多半是项目目录）：
   // 不挡的话，被注入的 agent 一句话就能把 .env、私钥发布成公网链接（11-16 安全审查 M3）。
   const fileName = basename(resolvedFile);
   if (fileName.startsWith(".") || !uploadExtensionAllowed(fileName)) {
-    throw new ApiRequestError(
+    throw rejectedUpload(
       "Only image, video, audio and GLB files can be uploaded (jpg, png, webp, gif, mp4, mov, webm, mp3, wav, m4a, aac, ogg, flac, glb)"
     );
   }
   const apiKey = getApiKey();
   const fileBuffer = await readFile(resolvedFile);
   if (!looksLikeMedia(fileBuffer)) {
-    throw new ApiRequestError(UNRECOGNISED_MEDIA_MESSAGE);
+    throw rejectedUpload(UNRECOGNISED_MEDIA_MESSAGE);
   }
+  annotateLocalToolCall({ upload_bytes: fileBuffer.byteLength, upload_kind: uploadKindOf(fileName) });
   return uploadMediaBuffer(fileBuffer, fileName, apiKey);
 }
 
@@ -417,17 +579,21 @@ export async function uploadMediaBuffer(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+  const started = performance.now();
+  let status: number | undefined;
 
   try {
     const response = await fetcher(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        ...localSourceHeaders(),
       },
       body: formData,
       signal: controller.signal,
       ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
     });
+    status = response.status;
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
@@ -444,9 +610,19 @@ export async function uploadMediaBuffer(
     if (!parsed.success) {
       throw new ApiRequestError("Atlas Cloud returned a malformed upload response", 502);
     }
+    noteAuthedSuccess();
     return parsed.data as UploadResponse;
+  } catch (error) {
+    recordLocalToolCallError(classifyApiError(error, "POST api /model/uploadMedia"));
+    throw error;
   } finally {
     clearTimeout(timer);
+    currentLocalToolCall()?.recordApi({
+      route: "POST api /model/uploadMedia",
+      durationMs: performance.now() - started,
+      attempt: 0,
+      ...(status !== undefined ? { status } : { failure: controller.signal.aborted ? "timeout" : "network" }),
+    });
   }
 }
 
@@ -544,6 +720,7 @@ export async function uploadStreamToAssetLibrary(
       method: "POST",
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
+        ...localSourceHeaders(),
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
         Accept: "application/json",
       },

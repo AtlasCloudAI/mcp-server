@@ -32,6 +32,8 @@ const QUOTE_FIRST_TOOLS = new Set([
   "atlas_quick_generate",
 ]);
 
+const LOCAL_OPTIONAL_KEY_TOOLS = new Set<string>(["atlas_chat", "atlas_upload_media"]);
+
 test("stdio exposes all 19 tools with exact annotations and output schemas", async () => {
   const server = createAtlasCloudServer("stdio");
   const client = new Client({ name: "contract-test", version: "1.0.0" });
@@ -55,7 +57,9 @@ test("stdio exposes all 19 tools with exact annotations and output schemas", asy
       assert.deepEqual(tool.annotations, TOOL_POLICIES[name].annotations);
       // 先报价的生成工具：报价那次可以不传幂等键，服务端生成并在报价里返回（验收问题 58），
       // 但参数里仍要有这个字段。其余写操作照旧必填。
-      if (QUOTE_FIRST_TOOLS.has(name)) {
+      // 本地 npm 版兼容 1.x：atlas_chat、atlas_upload_media 在 1.x 没有这个参数，不给时服务端生成
+      // （chat 的报价里会返回）。托管版照旧必填（test/local-legacy-params-1124.test.ts 核对）。
+      if (QUOTE_FIRST_TOOLS.has(name) || LOCAL_OPTIONAL_KEY_TOOLS.has(name)) {
         assert.ok("idempotency_key" in (tool.inputSchema.properties ?? {}), `${name} must accept idempotency_key`);
       } else if (!TOOL_POLICIES[name].annotations.readOnlyHint) {
         assert.ok(

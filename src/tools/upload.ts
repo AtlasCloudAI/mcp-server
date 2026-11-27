@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uploadMedia } from "../services/api-client.js";
@@ -32,7 +33,8 @@ Returns:
 Examples:
   - file_path="/Users/me/photos/cat.jpg" -> uploads and returns a URL like "https://atlas-img.oss-accelerate-overseas.aliyuncs.com/media/xxx.jpg"`,
       inputSchema: {
-        idempotency_key: idempotencyKeySchema,
+        // npm 1.x 只传 file_path：不给就每次新生成一个（重试同一次上传时再带上同一个）。
+        idempotency_key: idempotencyKeySchema.optional(),
         file_path: z
           .string()
           .min(1)
@@ -46,7 +48,8 @@ Examples:
       },
       annotations: toolAnnotations("atlas_upload_media"),
     },
-    async ({ idempotency_key, file_path }) => {
+    async ({ idempotency_key: givenKey, file_path }) => {
+      const idempotency_key = givenKey ?? randomUUID();
       try {
         const result = await executeIdempotently(
           "atlas_upload_media",

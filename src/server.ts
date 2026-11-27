@@ -25,10 +25,15 @@ import { SERVER_VERSION } from "./version.js";
 import { passesChatAttachmentLinks, rendersCards } from "./services/client-profile.js";
 import { usesLeanDescriptions } from "./services/chatgpt-lean.js";
 import { registerCardUploadPartTool } from "./tools/card-upload.js";
+import { installLegacyDryRun } from "./legacy-params.js";
 import { TASK_TOOL_NAMES, usesTaskTools } from "./services/chatgpt-task-tools.js";
 import { registerChatGptTaskTools } from "./tools/chatgpt-task.js";
 
 export type ServerProfile = "stdio" | "remote";
+
+/** 卡片专用的那句总说明；本地版遇到不显示卡片的客户端时从 initialize 结果里去掉（stdio-cards.ts）。 */
+export const CANCEL_QUOTE_INSTRUCTION =
+  "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. ";
 
 export interface ServerClient {
   /** OAuth client_id of the remote client; decides which client-specific tools to list. */
@@ -43,9 +48,15 @@ export interface ServerClient {
 const SERVER_ICON_URL =
   "https://raw.githubusercontent.com/AtlasCloudAI/atlas-cloud-plugin/v0.6.0/plugins/atlas-cloud/assets/app-icon.svg";
 
+export interface ServerHooks {
+  /** Runs on the new server before any tool registers (the local telemetry wraps registerTool here). */
+  beforeTools?: (server: McpServer) => void;
+}
+
 export function createAtlasCloudServer(
   profile: ServerProfile = "stdio",
-  client: ServerClient = {}
+  client: ServerClient = {},
+  hooks: ServerHooks = {}
 ): McpServer {
   // ChatGPT 拿精简版描述（开关 MCP_CHATGPT_LEAN_DESCRIPTIONS，见 services/chatgpt-lean.ts）。
   const lean = profile === "remote" && usesLeanDescriptions(client.clientId);
@@ -75,21 +86,25 @@ export function createAtlasCloudServer(
         "Words such as continue, stuck, retry, try again, or keep going never authorize a new quote or another generation submission. After submission, poll the returned prediction_id instead of calling a generation tool again. " +
         "Never invent a model ID or submit if its live schema cannot be loaded and validated. " +
         (generationCardEnabled() && (profile === "stdio" || (rendersCards(client.clientId) && !client.noCards))
-          ? "When the user declines a quote or changes a quoted request, withdraw the old quote with atlas_cancel_quote (reason declined or replaced) so its card can't submit it. "
+          ? CANCEL_QUOTE_INSTRUCTION
           : "") +
         "These tools already carry the user's Atlas credentials and there is no API key to use, so do not call the Atlas REST API directly with curl.",
     }
   );
 
+  hooks.beforeTools?.(server);
+  // 本地 npm 版保留 1.x 的老参数（dry_run、list_models 的 kind/query 等），托管版工具定义不变。
+  const legacyParams = profile === "stdio";
+  if (legacyParams) installLegacyDryRun(server);
   registerDocsTools(server);
-  registerModelTools(server, { lean });
+  registerModelTools(server, { lean, legacyParams });
   registerImageTools(server, { lean });
   registerVideoTools(server, { lean });
   registerAudioTools(server);
-  registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote });
-  registerQuickGenerateTools(server, { lean });
+  registerLLMTools(server, { includeChat: profile === "stdio" || TOOL_POLICIES.atlas_chat.remote, legacyParams });
+  registerQuickGenerateTools(server, { lean, legacyParams });
   registerAccountTools(server);
-  registerPredictionTools(server);
+  registerPredictionTools(server, { legacyParams });
   registerAssetTools(server);
   // 两种形态都注册：stdio 下它只会告诉调用方去用 atlas_upload_media。
   // 保持「stdio 暴露全部工具」这条契约不变，契约测试就不用为它开特例。

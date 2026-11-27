@@ -126,7 +126,8 @@ export function buildQuickGenerateParams(
   prompt: string,
   imageUrl?: string,
   audioUrl?: string,
-  extraParams?: Record<string, unknown>
+  extraParams?: Record<string, unknown>,
+  videoUrl?: string
 ): Record<string, unknown> {
   const components = asRecord(schema.components);
   const schemas = asRecord(components?.schemas);
@@ -200,6 +201,26 @@ export function buildQuickGenerateParams(
     }
   }
 
+  // Set video URL if provided (video-to-video, video editing, lipsync onto an existing clip).
+  // Only the local server's tool takes video_url (kept from npm 1.x).
+  if (videoUrl) {
+    const videoField = Object.keys(properties).find((key) => {
+      const property = asRecord(properties[key]);
+      return (
+        key === "video_url" ||
+        key === "video" ||
+        key === "input_video" ||
+        key === "source_video" ||
+        key === "reference_video" ||
+        schemaDescriptionIncludes(property, "video url") ||
+        schemaDescriptionIncludes(property, "input video")
+      );
+    });
+    if (videoField) {
+      params[videoField] = asRecord(properties[videoField])?.type === "array" ? [videoUrl] : videoUrl;
+    }
+  }
+
   // Fill required fields with defaults if not already set
   for (const key of required) {
     if (params[key] !== undefined) continue;
@@ -243,7 +264,8 @@ ${options.lean ? `  - model_keyword (string, optional): An exact model ID or a d
   - prompt (string, required): Text description of what to generate (for TTS, the text to synthesize; for music, the song description)
   - image_url (string, optional): Source image URL for image-to-video, image editing, image-to-3D, or talking-avatar models
   - audio_url (string, optional): Source audio URL for lipsync / talking-avatar video models (the speech the character should say) or speech-to-text models
-  - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
+${options.legacyParams ? `  - video_url (string, optional): Source video URL for video-to-video, video editing or lipsync onto an existing clip
+` : ""}  - extra_params (object, optional): Additional model-specific parameters to override defaults (e.g., {"duration": 10, "aspect_ratio": "16:9"}). Only include parameters the model's schema accepts.
 
 Returns:
   A prediction ID to check the result with atlas_get_prediction.`,
@@ -291,22 +313,34 @@ Returns:
           .describe(
             "Additional model-specific parameters to override defaults. Only include parameters the model's schema accepts."
           ),
+        ...(options.legacyParams
+          ? {
+              video_url: z
+                .string()
+                .url()
+                .refine((value) => new URL(value).protocol === "https:", "video_url must use HTTPS")
+                .optional()
+                .describe("Source video URL for video-to-video, video editing or lipsync onto an existing clip"),
+            }
+          : {}),
       },
       outputSchema: generationOutputSchema,
       annotations: toolAnnotations("atlas_quick_generate"),
       ...generationToolCardMeta(),
     },
-    withGenerationCard(server, "atlas_quick_generate", async ({
-      idempotency_key,
-      confirmation_token,
-      confirmed,
-      model_keyword,
-      type,
-      prompt,
-      image_url,
-      audio_url,
-      extra_params,
-    }) => {
+    withGenerationCard(server, "atlas_quick_generate", async (args) => {
+      const {
+        idempotency_key,
+        confirmation_token,
+        confirmed,
+        model_keyword,
+        type,
+        prompt,
+        image_url,
+        audio_url,
+        extra_params,
+      } = args;
+      const { video_url } = args as { video_url?: string };
       try {
         // Step 1: Resolve model
         annotateToolCall({ stage: "prepare" });
@@ -354,7 +388,8 @@ Returns:
             prompt,
             image_url,
             audio_url,
-            extra_params
+            extra_params,
+            video_url
           ),
           routeDefaultParams(foundModel.model)
         );
